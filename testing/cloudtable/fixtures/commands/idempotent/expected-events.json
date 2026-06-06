@@ -1,0 +1,10 @@
+[
+  {
+    "commandId": "cmd_idempotent_001",
+    "commandType": "record.create",
+    "eventId": "evt_0001",
+    "eventType": "scaffold.command.accepted",
+    "tableId": "tbl_tasks",
+    "workspaceId": "ws_demo"
+  }
+]

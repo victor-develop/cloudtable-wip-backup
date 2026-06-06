@@ -1,0 +1,25 @@
+{
+  "receipts": [
+    {
+      "idempotencyKey": "idem_conflict_001",
+      "payloadHash": "stored-payload-hash",
+      "result": {
+        "accepted": true,
+        "diagnostics": [],
+        "events": [],
+        "permission": {
+          "allowed": true,
+          "reasons": []
+        },
+        "replayProjection": {
+          "acceptedCommandIds": [],
+          "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+          "receiptCount": 0,
+          "receipts": []
+        },
+        "sideEffects": [],
+        "status": "accepted"
+      }
+    }
+  ]
+}

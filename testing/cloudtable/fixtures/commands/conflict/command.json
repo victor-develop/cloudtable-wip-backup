@@ -1,0 +1,16 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_alice"
+  },
+  "commandId": "cmd_conflict_001",
+  "commandType": "record.update",
+  "idempotencyKey": "idem_conflict_001",
+  "payload": {
+    "recordId": "rec_001",
+    "title": "Conflicting retry"
+  },
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

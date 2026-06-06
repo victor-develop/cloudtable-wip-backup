@@ -1,0 +1,173 @@
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type JsonSchema = {
+  type: string;
+  description?: string;
+  items?: JsonSchema;
+  properties?: Record<string, JsonSchema>;
+  default?: JsonValue;
+};
+
+export type FieldTypeCapabilities = {
+  scalar: boolean;
+  multiValue: boolean;
+  reference: boolean;
+  computed: boolean;
+  userEditable: boolean;
+  supportsUniqueConstraint: boolean;
+  supportsRequiredConstraint: boolean;
+  supportsDefaultValue: boolean;
+  supportsFiltering: boolean;
+  supportsSorting: boolean;
+  supportsGrouping: boolean;
+  supportsSearch: boolean;
+  supportsWorkflowTrigger: boolean;
+  supportsAgentMutation: boolean;
+};
+
+export type NormalizeWarning = {
+  code: string;
+  message: string;
+};
+
+export type NormalizedCellValue = {
+  valueType: string;
+  version: number;
+  raw: JsonValue | null;
+  isEmpty: boolean;
+  tokens?: readonly string[];
+  refs?: readonly string[];
+  meta?: Record<string, JsonValue>;
+};
+
+export type NormalizeResult = {
+  value: NormalizedCellValue | null;
+  warnings: readonly NormalizeWarning[];
+};
+
+export type ValidationResult = {
+  valid: boolean;
+  errors: readonly string[];
+};
+
+export type FieldIndexValue = {
+  textValue?: string | null;
+  numberValue?: string | null;
+  boolValue?: boolean | null;
+  datetimeValue?: string | null;
+  referenceValue?: string | null;
+  displayValue: string;
+  searchText: string;
+  valueHash: string;
+};
+
+export type FieldPermissionBehavior = {
+  readRedaction: "none" | "display_only" | "full";
+  allowsMutation: boolean;
+  allowsWorkflowTrigger: boolean;
+  supportsValueVisibilityRules: boolean;
+};
+
+export type NormalizeContext = {
+  fieldType: string;
+};
+
+export type FieldSchemaContext = {
+  fieldType: string;
+};
+
+export type CellValidationContext = {
+  fieldType: string;
+};
+
+export type DefaultValueContext = {
+  fieldType: string;
+};
+
+export type DisplayContext = {
+  fieldType: string;
+};
+
+export type IndexContext = {
+  fieldType: string;
+};
+
+export type SearchContext = {
+  fieldType: string;
+};
+
+export type OperatorContext = {
+  fieldType: string;
+};
+
+export type SortContext = {
+  fieldType: string;
+};
+
+export type PermissionContext = {
+  fieldType: string;
+};
+
+export type FieldTypeFixture =
+  | {
+      id: string;
+      kind: "normalize";
+      input: unknown;
+      expected: {
+        value: NormalizedCellValue | null;
+        warnings?: readonly NormalizeWarning[];
+        display: string;
+        searchText: string;
+        index: FieldIndexValue;
+      };
+    }
+  | {
+      id: string;
+      kind: "operators";
+      expectedConditionOperators: readonly string[];
+      expectedSortModes: readonly string[];
+    }
+  | {
+      id: string;
+      kind: "permission";
+      expected: FieldPermissionBehavior;
+    };
+
+export type FieldTypeDefinition = {
+  type: string;
+  version: number;
+  capabilities: FieldTypeCapabilities;
+  configSchema: JsonSchema;
+  valueSchema: JsonSchema;
+  defaultConfig: JsonValue;
+  supportedConditionOperators: readonly string[];
+  supportedSortModes: readonly string[];
+  normalize(input: unknown, context: NormalizeContext): NormalizeResult;
+  validateConfig(config: unknown, context: FieldSchemaContext): ValidationResult;
+  validateValue(value: NormalizedCellValue | null, context: CellValidationContext): ValidationResult;
+  applyDefault(context: DefaultValueContext): NormalizedCellValue | null;
+  toDisplay(value: NormalizedCellValue | null, context: DisplayContext): string;
+  toIndex(value: NormalizedCellValue | null, context: IndexContext): FieldIndexValue;
+  toSearchText(value: NormalizedCellValue | null, context: SearchContext): string;
+  getSupportedConditionOperators(context: OperatorContext): readonly string[];
+  getSupportedSortModes(context: SortContext): readonly string[];
+  getPermissionBehavior(context: PermissionContext): FieldPermissionBehavior;
+  fixtures: readonly FieldTypeFixture[];
+};
+
+export type FieldTypeRegistry = {
+  get(type: string): FieldTypeDefinition | undefined;
+  has(type: string): boolean;
+  list(): readonly FieldTypeDefinition[];
+  require(type: string): FieldTypeDefinition;
+};
+
+export type CreateFieldTypeRegistryInput = {
+  fieldTypes?: readonly FieldTypeDefinition[];
+};

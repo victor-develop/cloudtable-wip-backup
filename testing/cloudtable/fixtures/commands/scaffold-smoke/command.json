@@ -1,0 +1,14 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_scaffold"
+  },
+  "commandId": "cmd_scaffold_001",
+  "commandType": "scaffold.smoke",
+  "idempotencyKey": "idem_scaffold_001",
+  "payload": {
+    "check": "fixture-shape"
+  },
+  "scope": "workspace",
+  "workspaceId": "ws_scaffold"
+}

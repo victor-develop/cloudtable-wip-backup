@@ -1,0 +1,12 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_alice"
+  },
+  "commandId": "cmd_invalid_001",
+  "commandType": "record.create",
+  "idempotencyKey": "idem_invalid_001",
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

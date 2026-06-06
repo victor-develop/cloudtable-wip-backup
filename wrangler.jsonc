@@ -1,0 +1,77 @@
+{
+  "name": "cloudtable-platform",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-06",
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cloudtable",
+      "database_id": "replace-in-cloudflare"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WORKSPACE_CONTROL_DO",
+        "class_name": "WorkspaceControlDurableObject"
+      },
+      {
+        "name": "TABLE_COORDINATOR_DO",
+        "class_name": "TableCoordinatorDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "WorkspaceControlDurableObject",
+        "TableCoordinatorDurableObject"
+      ]
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "EVENT_FANOUT_QUEUE",
+        "queue": "cloudtable-event-fanout"
+      },
+      {
+        "binding": "WORKFLOW_DISPATCH_QUEUE",
+        "queue": "cloudtable-workflow-dispatch"
+      },
+      {
+        "binding": "PROJECTION_MAINTENANCE_QUEUE",
+        "queue": "cloudtable-projection-maintenance"
+      },
+      {
+        "binding": "DEAD_LETTER_REPROCESSOR_QUEUE",
+        "queue": "cloudtable-dead-letter-reprocessor"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "cloudtable-event-fanout"
+      },
+      {
+        "queue": "cloudtable-workflow-dispatch"
+      },
+      {
+        "queue": "cloudtable-projection-maintenance"
+      },
+      {
+        "queue": "cloudtable-dead-letter-reprocessor"
+      }
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS_BUCKET",
+      "bucket_name": "cloudtable-artifacts"
+    }
+  ]
+}
+

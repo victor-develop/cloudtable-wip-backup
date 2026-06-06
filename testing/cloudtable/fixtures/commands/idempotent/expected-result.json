@@ -1,0 +1,7 @@
+{
+  "accepted": true,
+  "diagnostics": [
+    "idempotent_replay"
+  ],
+  "status": "accepted"
+}

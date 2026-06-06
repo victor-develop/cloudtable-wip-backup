@@ -1,0 +1,33 @@
+{
+  "name": "cloudtable-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "cf:types": "wrangler types",
+    "dev": "wrangler dev",
+    "d1:migrate:local": "wrangler d1 migrations apply cloudtable --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply cloudtable --remote",
+    "test:command-golden": "vitest run testing/cloudtable/suites/command-golden",
+    "test:command-harness": "npm run test:command-golden",
+    "test:agent-tools": "vitest run testing/cloudtable/suites/agent-tools",
+    "test:replay": "vitest run testing/cloudtable/suites/replay",
+    "test:permissions": "vitest run testing/cloudtable/suites/permissions",
+    "test:runtime": "vitest run testing/cloudtable/suites/runtime",
+    "test:workflows": "vitest run testing/cloudtable/suites/workflows",
+    "test:views": "vitest run testing/cloudtable/suites/views",
+    "test:semantic": "npm run test:command-golden && npm run test:replay && npm run test:permissions && npm run test:agent-tools && npm run test:runtime && npm run test:workflows && npm run test:views",
+    "test:nightly-cloudflare": "vitest run testing/cloudtable/suites/smoke/scaffold.spec.ts",
+    "test:smoke": "npm run test:nightly-cloudflare",
+    "test:all": "npm run test:semantic && npm run test:nightly-cloudflare",
+    "test": "npm run test:semantic",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.1",
+    "@cloudflare/workers-types": "^4.20260605.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.19.1"
+  }
+}

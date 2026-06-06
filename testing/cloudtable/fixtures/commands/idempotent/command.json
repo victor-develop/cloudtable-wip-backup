@@ -1,0 +1,16 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_alice"
+  },
+  "commandId": "cmd_idempotent_001",
+  "commandType": "record.create",
+  "idempotencyKey": "idem_idempotent_001",
+  "payload": {
+    "recordId": "rec_001",
+    "title": "Same retry"
+  },
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}
