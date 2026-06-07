@@ -35,6 +35,15 @@ type RecordProjectionRow = {
   record_key: string;
 };
 
+type FieldIndexEntryRow = {
+  field_id: string;
+  index_value_bool: number | null;
+  index_value_datetime: string | null;
+  index_value_number: number | null;
+  index_value_text: string | null;
+  record_id: string;
+};
+
 type ParsedViewSchema = {
   filterFieldIds: string[];
   filters: ViewFilterDefinition[];
@@ -117,13 +126,21 @@ type ViewRecordQuery = {
 };
 
 type MaterializedViewRow = {
-  comparisonInputs: PermissionProjectionInput[];
   filterInputs: PermissionProjectionInput[];
   groupBucketKey: string;
   groupLabel: string;
+  indexedValues: Map<string, IndexedFieldValue>;
   recordId: string;
   recordKey: string;
   row: ViewQueryRowResult;
+  sortInputs: PermissionProjectionInput[];
+};
+
+type IndexedFieldValue = {
+  boolValue: boolean | null;
+  datetimeValue: string | null;
+  numberValue: number | null;
+  textValue: string | null;
 };
 
 function parseViewSchema(raw: string): ParsedViewSchema {
@@ -280,6 +297,194 @@ function compareSortValues(
     default:
       return comparison > 0 ? 1 : -1;
   }
+}
+
+function compareIndexedSortValues(
+  left: IndexedFieldValue | null,
+  right: IndexedFieldValue | null,
+  mode: string
+): number {
+  const leftEmpty =
+    left == null ||
+    (left.numberValue == null &&
+      left.boolValue == null &&
+      left.datetimeValue == null &&
+      (left.textValue == null || left.textValue === ""));
+  const rightEmpty =
+    right == null ||
+    (right.numberValue == null &&
+      right.boolValue == null &&
+      right.datetimeValue == null &&
+      (right.textValue == null || right.textValue === ""));
+
+  if (leftEmpty || rightEmpty) {
+    if (leftEmpty && rightEmpty) {
+      return 0;
+    }
+
+    return leftEmpty ? 1 : -1;
+  }
+
+  let comparison = 0;
+  if (left.numberValue != null && right.numberValue != null) {
+    comparison = left.numberValue - right.numberValue;
+  } else if (left.boolValue != null && right.boolValue != null) {
+    comparison = left.boolValue === right.boolValue ? 0 : left.boolValue ? 1 : -1;
+  } else if (left.datetimeValue != null && right.datetimeValue != null) {
+    comparison =
+      left.datetimeValue === right.datetimeValue
+        ? 0
+        : left.datetimeValue < right.datetimeValue
+          ? -1
+          : 1;
+  } else {
+    const leftText = (left.textValue ?? "").toLowerCase();
+    const rightText = (right.textValue ?? "").toLowerCase();
+    comparison = leftText === rightText ? 0 : leftText < rightText ? -1 : 1;
+    if (comparison === 0) {
+      comparison =
+        left.textValue === right.textValue
+          ? 0
+          : (left.textValue ?? "") < (right.textValue ?? "")
+            ? -1
+            : 1;
+    }
+  }
+
+  if (comparison === 0) {
+    return 0;
+  }
+
+  switch (mode) {
+    case "descending":
+    case "true_first":
+      return comparison > 0 ? -1 : 1;
+    case "ascending":
+    case "false_first":
+    default:
+      return comparison > 0 ? 1 : -1;
+  }
+}
+
+function indexedValueForField(
+  field: FieldRow,
+  indexValue: IndexedFieldValue | null,
+  projectedValue: unknown
+): unknown {
+  if (indexValue == null) {
+    return projectedValue;
+  }
+
+  switch (field.field_type) {
+    case "number.decimal":
+      return indexValue.numberValue ?? projectedValue;
+    case "boolean.checkbox":
+      return indexValue.boolValue ?? projectedValue;
+    case "date.datetime":
+    case "date.date":
+      return indexValue.datetimeValue ?? indexValue.textValue ?? projectedValue;
+    default:
+      return (
+        indexValue.textValue ??
+        indexValue.datetimeValue ??
+        indexValue.numberValue ??
+        indexValue.boolValue ??
+        projectedValue
+      );
+  }
+}
+
+function compareMaterializedRowsBySorts(
+  input: {
+    fieldIndex: ReadonlyMap<string, FieldRow>;
+    fieldTypeRegistry: FieldTypeRegistry;
+    left: MaterializedViewRow;
+    right: MaterializedViewRow;
+    sorts: readonly ViewSortDefinition[];
+  }
+): number {
+  for (const sort of input.sorts) {
+    const field = input.fieldIndex.get(sort.fieldId);
+    if (!field) {
+      continue;
+    }
+
+    const leftIndexValue = input.left.indexedValues.get(sort.fieldId) ?? null;
+    const rightIndexValue = input.right.indexedValues.get(sort.fieldId) ?? null;
+    const comparison =
+      leftIndexValue != null || rightIndexValue != null
+        ? compareIndexedSortValues(leftIndexValue, rightIndexValue, sort.mode)
+        : compareSortValues(
+            input.fieldTypeRegistry,
+            field,
+            input.left.sortInputs.find((sortInput) => sortInput.fieldId === sort.fieldId)?.value ?? null,
+            input.right.sortInputs.find((sortInput) => sortInput.fieldId === sort.fieldId)?.value ?? null,
+            sort.mode
+          );
+
+    if (comparison !== 0) {
+      return comparison;
+    }
+  }
+
+  if (input.left.recordKey !== input.right.recordKey) {
+    return input.left.recordKey < input.right.recordKey ? -1 : 1;
+  }
+
+  if (input.left.recordId === input.right.recordId) {
+    return 0;
+  }
+
+  return input.left.recordId < input.right.recordId ? -1 : 1;
+}
+
+async function loadFieldIndexEntries(
+  db: D1Database,
+  input: {
+    fieldIds: readonly string[];
+    tableId: string;
+    workspaceId: string;
+  }
+): Promise<Map<string, Map<string, IndexedFieldValue>>> {
+  if (input.fieldIds.length === 0) {
+    return new Map();
+  }
+
+  const placeholders = input.fieldIds.map(() => "?").join(", ");
+  const rows = await db
+    .prepare(
+      `SELECT
+         record_id,
+         field_id,
+         index_value_text,
+         index_value_number,
+         index_value_datetime,
+         index_value_bool
+       FROM field_index_entries
+       WHERE workspace_id = ?
+         AND table_id = ?
+         AND field_id IN (${placeholders})`
+    )
+    .bind(input.workspaceId, input.tableId, ...input.fieldIds)
+    .all<FieldIndexEntryRow>();
+
+  const byRecordId = new Map<string, Map<string, IndexedFieldValue>>();
+  for (const row of rows.results ?? []) {
+    let recordFields = byRecordId.get(row.record_id);
+    if (!recordFields) {
+      recordFields = new Map();
+      byRecordId.set(row.record_id, recordFields);
+    }
+
+    recordFields.set(row.field_id, {
+      boolValue: row.index_value_bool == null ? null : Boolean(row.index_value_bool),
+      datetimeValue: row.index_value_datetime,
+      numberValue: row.index_value_number,
+      textValue: row.index_value_text
+    });
+  }
+
+  return byRecordId;
 }
 
 function evaluateFilterDefinition(
@@ -552,6 +757,17 @@ export async function readViewQuery(
     .prepare(recordQuery.sql)
     .bind(...recordQuery.bindings)
     .all<RecordProjectionRow>();
+  const indexedFieldValues = await loadFieldIndexEntries(db, {
+    fieldIds: Array.from(
+      new Set([
+        ...schema.filterFieldIds,
+        ...schema.sortFieldIds,
+        ...(schema.groupByFieldId ? [schema.groupByFieldId] : [])
+      ])
+    ),
+    tableId: input.tableId,
+    workspaceId: input.workspaceId
+  });
   const comparisonFields = Array.from(
     new Map(
       [
@@ -586,6 +802,7 @@ export async function readViewQuery(
     const projection = JSON.parse(row.projection_json) as {
       fields?: Record<string, unknown>;
     };
+    const recordIndexValues = indexedFieldValues.get(row.record_id) ?? new Map<string, IndexedFieldValue>();
     const selectedInputs: PermissionProjectionInput[] = selectedFields.map((field) => ({
       fieldConfig: JSON.parse(field.config_json),
       fieldId: field.id,
@@ -593,17 +810,27 @@ export async function readViewQuery(
       value: projection.fields?.[field.field_key] ?? null
     }));
     const projected = viewPlanner.projectRow(selectedInputs, snapshot);
-    const comparisonInputs: PermissionProjectionInput[] = comparisonFields.map((field) => ({
-      fieldConfig: JSON.parse(field.config_json),
-      fieldId: field.id,
-      fieldType: field.field_type,
-      value: projection.fields?.[field.field_key] ?? null
-    }));
     const filterInputs: PermissionProjectionInput[] = filterFields.map((field) => ({
       fieldConfig: JSON.parse(field.config_json),
       fieldId: field.id,
       fieldType: field.field_type,
-      value: projection.fields?.[field.field_key] ?? null
+      value:
+        indexedValueForField(
+          field,
+          recordIndexValues.get(field.id) ?? null,
+          projection.fields?.[field.field_key] ?? null
+        ) ?? null
+    }));
+    const sortInputs: PermissionProjectionInput[] = comparisonFields.map((field) => ({
+      fieldConfig: JSON.parse(field.config_json),
+      fieldId: field.id,
+      fieldType: field.field_type,
+      value:
+        indexedValueForField(
+          field,
+          recordIndexValues.get(field.id) ?? null,
+          projection.fields?.[field.field_key] ?? null
+        ) ?? null
     }));
     const groupField =
       schema.groupByFieldId != null ? fieldIndex.get(schema.groupByFieldId) ?? null : null;
@@ -627,10 +854,10 @@ export async function readViewQuery(
         : null;
 
     return {
-      comparisonInputs,
       filterInputs,
       groupBucketKey: groupIndexValue?.valueHash ?? "null",
       groupLabel: groupIndexValue?.displayValue ?? "",
+      indexedValues: recordIndexValues,
       recordId: row.record_id,
       recordKey: row.record_key,
       row: {
@@ -640,7 +867,8 @@ export async function readViewQuery(
         recordKey: row.record_key,
         redactedFieldIds: projected.redactedFieldIds,
         states: projected.states
-      }
+      },
+      sortInputs
     } satisfies MaterializedViewRow;
   });
   const filteredRows = materializedRows.filter((row) =>
@@ -654,35 +882,13 @@ export async function readViewQuery(
     })
   );
   const sortedMaterializedRows = [...filteredRows].sort((left, right) => {
-    for (const sort of schema.sorts) {
-      const field = fieldIndex.get(sort.fieldId);
-      if (!field) {
-        continue;
-      }
-
-      const leftValue = left.comparisonInputs.find((input) => input.fieldId === sort.fieldId)?.value ?? null;
-      const rightValue = right.comparisonInputs.find((input) => input.fieldId === sort.fieldId)?.value ?? null;
-      const comparison = compareSortValues(
-        fieldTypeRegistry,
-        field,
-        leftValue,
-        rightValue,
-        sort.mode
-      );
-      if (comparison !== 0) {
-        return comparison;
-      }
-    }
-
-    if (left.recordKey !== right.recordKey) {
-      return left.recordKey < right.recordKey ? -1 : 1;
-    }
-
-    if (left.recordId === right.recordId) {
-      return 0;
-    }
-
-    return left.recordId < right.recordId ? -1 : 1;
+    return compareMaterializedRowsBySorts({
+      fieldIndex,
+      fieldTypeRegistry,
+      left,
+      right,
+      sorts: schema.sorts
+    });
   });
   const rows = sortedMaterializedRows.map((row) => row.row);
 
@@ -710,20 +916,29 @@ export async function readViewQuery(
   }
 
   const sortedRows = [...filteredRows].sort((left, right) => {
-    const groupComparison = viewPlanner.compareRows(
-      left.comparisonInputs,
-      right.comparisonInputs,
-      [schema.groupByFieldId!]
-    );
+    const groupComparison = compareMaterializedRowsBySorts({
+      fieldIndex,
+      fieldTypeRegistry,
+      left,
+      right,
+      sorts: [
+        {
+          fieldId: schema.groupByFieldId!,
+          mode: "ascending"
+        }
+      ]
+    });
     if (groupComparison !== 0) {
       return groupComparison;
     }
 
-    const rowComparison = viewPlanner.compareRows(
-      left.comparisonInputs,
-      right.comparisonInputs,
-      schema.sortFieldIds
-    );
+    const rowComparison = compareMaterializedRowsBySorts({
+      fieldIndex,
+      fieldTypeRegistry,
+      left,
+      right,
+      sorts: schema.sorts
+    });
     if (rowComparison !== 0) {
       return rowComparison;
     }

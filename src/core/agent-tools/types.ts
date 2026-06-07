@@ -19,19 +19,24 @@ export type AgentToolFieldBinding =
 
 export type AgentToolId =
   | "inspectWorkspace"
+  | "readWorkflowHistory"
+  | "readWorkflowRunDetail"
   | "createTable"
   | "createField"
   | "createView"
   | "updateView"
   | "configureFieldPermission"
   | "proposeWorkflow"
+  | "publishWorkflow"
+  | "pauseWorkflow"
+  | "runWorkflow"
   | "dryRunCommand"
   | "executeCommand";
 
 export type AgentToolBinding =
   | {
       kind: "query-service";
-      service: "workspaceInspector";
+      service: "workspaceInspector" | "workflowHistoryReader" | "workflowRunReader";
     }
   | {
       kind: "command-builder";
@@ -65,8 +70,8 @@ export type AgentToolDefinition = {
 
 export type AgentToolCommandBase = {
   actor: CommandActor;
-  commandId: string;
-  idempotencyKey: string;
+  commandId?: string;
+  idempotencyKey?: string;
   permissionScopeHash?: string;
   permissionsVersion?: number;
   schemaEpoch?: number;
@@ -160,12 +165,39 @@ export type ProposeWorkflowToolInput = AgentToolCommandBase & {
   actionIds: string[];
 };
 
+export type PublishWorkflowToolInput = AgentToolCommandBase & {
+  tableId: string;
+  workflowId: string;
+};
+
+export type PauseWorkflowToolInput = AgentToolCommandBase & {
+  tableId: string;
+  workflowId: string;
+};
+
+export type RunWorkflowToolInput = AgentToolCommandBase & {
+  tableId: string;
+  workflowId: string;
+  input?: Record<string, unknown>;
+  manualInvocationId?: string;
+};
+
 export type DryRunCommandToolInput = {
   command: CommandEnvelope;
 };
 
 export type ExecuteCommandToolInput = {
   command: CommandEnvelope;
+};
+
+export type ReadWorkflowHistoryToolInput = {
+  workflowId: string;
+  workspaceId: string;
+};
+
+export type ReadWorkflowRunDetailToolInput = {
+  workflowRunId: string;
+  workspaceId: string;
 };
 
 export type WorkspaceInspection = {
@@ -206,6 +238,18 @@ export type WorkspaceInspector = {
   inspect(input: InspectWorkspaceToolInput): Promise<WorkspaceInspection> | WorkspaceInspection;
 };
 
+export type WorkflowHistoryReader = {
+  read(
+    input: ReadWorkflowHistoryToolInput
+  ): Promise<Record<string, unknown>> | Record<string, unknown>;
+};
+
+export type WorkflowRunReader = {
+  read(
+    input: ReadWorkflowRunDetailToolInput
+  ): Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
+};
+
 export type AgentToolAuditDiff = {
   action: "create" | "update" | "propose";
   after: unknown;
@@ -236,6 +280,14 @@ export type AgentToolInvocation =
       input: InspectWorkspaceToolInput;
     }
   | {
+      toolId: "readWorkflowHistory";
+      input: ReadWorkflowHistoryToolInput;
+    }
+  | {
+      toolId: "readWorkflowRunDetail";
+      input: ReadWorkflowRunDetailToolInput;
+    }
+  | {
       toolId: "createTable";
       input: CreateTableToolInput;
     }
@@ -260,6 +312,18 @@ export type AgentToolInvocation =
       input: ProposeWorkflowToolInput;
     }
   | {
+      toolId: "publishWorkflow";
+      input: PublishWorkflowToolInput;
+    }
+  | {
+      toolId: "pauseWorkflow";
+      input: PauseWorkflowToolInput;
+    }
+  | {
+      toolId: "runWorkflow";
+      input: RunWorkflowToolInput;
+    }
+  | {
       toolId: "dryRunCommand";
       input: DryRunCommandToolInput;
     }
@@ -272,6 +336,14 @@ export type AgentToolInvocationResult =
   | {
       kind: "workspace-inspection";
       workspace: WorkspaceInspection;
+    }
+  | {
+      kind: "workflow-history";
+      history: Record<string, unknown>;
+    }
+  | {
+      kind: "workflow-run-detail";
+      run: Record<string, unknown> | null;
     }
   | {
       kind: "command-draft";

@@ -7,6 +7,7 @@ import { createViewPlanner } from "../core/views/planner";
 import { createWorkflowOperatorRegistry } from "../core/workflows/operator-registry";
 import type { EffectivePermissionSnapshot } from "../core/permissions/types";
 import type { CloudTableEnv } from "./env";
+import { readWorkflowHistoryForRun, readWorkflowHistoryForWorkflow } from "./workflow-operations";
 import { createWorkspaceInspector } from "./workspace-inspector";
 
 export type CloudTableRuntime = {
@@ -36,10 +37,22 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
     fieldTypeRegistry,
     workflowOperatorRegistry
   );
+  const workflowHistoryReader = {
+    read(input: { workflowId: string; workspaceId: string }) {
+      return readWorkflowHistoryForWorkflow(env.DB, input.workspaceId, input.workflowId);
+    }
+  };
+  const workflowRunReader = {
+    read(input: { workflowRunId: string; workspaceId: string }) {
+      return readWorkflowHistoryForRun(env.DB, input.workspaceId, input.workflowRunId);
+    }
+  };
   const agentToolRegistry = createAgentToolRegistry({
     commandBus,
     permissionEngine,
     viewPlanner,
+    workflowHistoryReader,
+    workflowRunReader,
     workflowOperatorRegistry,
     workspaceInspector
   });
@@ -77,10 +90,22 @@ export function createRuntimeWithSnapshot(
     fieldTypeRegistry,
     workflowOperatorRegistry
   );
+  const workflowHistoryReader = {
+    read(input: { workflowId: string; workspaceId: string }) {
+      return readWorkflowHistoryForWorkflow(env.DB, input.workspaceId, input.workflowId);
+    }
+  };
+  const workflowRunReader = {
+    read(input: { workflowRunId: string; workspaceId: string }) {
+      return readWorkflowHistoryForRun(env.DB, input.workspaceId, input.workflowRunId);
+    }
+  };
   const agentToolRegistry = createAgentToolRegistry({
     commandBus,
     permissionEngine,
     viewPlanner,
+    workflowHistoryReader,
+    workflowRunReader,
     workflowOperatorRegistry,
     workspaceInspector
   });

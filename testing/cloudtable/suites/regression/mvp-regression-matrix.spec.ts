@@ -485,6 +485,28 @@ describe("cloudtable MVP regression matrix", () => {
         commandBus,
         permissionEngine,
         viewPlanner,
+        workflowHistoryReader: {
+          read() {
+            return {
+              runs: [
+                {
+                  id: "wfr_matrix_001",
+                  status: "dead_lettered"
+                }
+              ],
+              workflowId: "wf_matrix"
+            };
+          }
+        },
+        workflowRunReader: {
+          read() {
+            return {
+              id: "wfr_matrix_001",
+              status: "dead_lettered",
+              workflowId: "wf_matrix"
+            };
+          }
+        },
         workflowOperatorRegistry,
         workspaceInspector: {
           async inspect() {
@@ -520,6 +542,20 @@ describe("cloudtable MVP regression matrix", () => {
           workspaceId: "ws_demo"
         },
         toolId: "createField"
+      });
+      const workflowHistory = await agentToolRegistry.invoke({
+        input: {
+          workflowId: "wf_matrix",
+          workspaceId: "ws_demo"
+        },
+        toolId: "readWorkflowHistory"
+      });
+      const workflowRunDetail = await agentToolRegistry.invoke({
+        input: {
+          workflowRunId: "wfr_matrix_001",
+          workspaceId: "ws_demo"
+        },
+        toolId: "readWorkflowRunDetail"
       });
 
       matrix.push({
@@ -562,7 +598,9 @@ describe("cloudtable MVP regression matrix", () => {
             },
             registryFields,
             snapshot
-          )
+          ),
+          workflowHistory,
+          workflowRunDetail
         },
         category: "agent_tool_dry_runs",
         scenario: "agent_tool_preview_and_sanitization"

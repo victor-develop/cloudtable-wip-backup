@@ -541,6 +541,20 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
           "allowed": true,
           "hiddenFieldIds": [],
           "reason": null,
+          "toolId": "readWorkflowHistory",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "readWorkflowRunDetail",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
           "toolId": "createTable",
           "visibleFieldIds": []
         },
@@ -602,6 +616,27 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
             "title",
             "internal_note"
           ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "publishWorkflow",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "pauseWorkflow",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "runWorkflow",
+          "visibleFieldIds": []
         },
         {
           "allowed": true,
@@ -734,6 +769,26 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
               "recordId": "rec_1"
             }
           ]
+        }
+      },
+      "workflowHistory": {
+        "history": {
+          "runs": [
+            {
+              "id": "wfr_matrix_001",
+              "status": "dead_lettered"
+            }
+          ],
+          "workflowId": "wf_matrix"
+        },
+        "kind": "workflow-history"
+      },
+      "workflowRunDetail": {
+        "kind": "workflow-run-detail",
+        "run": {
+          "id": "wfr_matrix_001",
+          "status": "dead_lettered",
+          "workflowId": "wf_matrix"
         }
       }
     },

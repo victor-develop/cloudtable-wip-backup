@@ -93,7 +93,6 @@ function extractFieldEdits(
   snapshot?: EffectivePermissionSnapshot
 ): Array<PermissionFieldDescriptor & { value?: unknown }> {
   const payload = command.payload as Record<string, unknown>;
-
   if (Array.isArray(payload.fieldEdits)) {
     return payload.fieldEdits
       .filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null)
@@ -103,6 +102,22 @@ function extractFieldEdits(
         value: entry.value
       }))
       .filter((entry) => entry.fieldId !== "");
+  }
+
+  if (typeof payload.cells === "object" && payload.cells !== null && !Array.isArray(payload.cells)) {
+    return Object.entries(payload.cells as Record<string, unknown>)
+      .flatMap(([fieldId, value]) => {
+        const fieldType = snapshot?.fields[fieldId]?.fieldType;
+        return typeof fieldType === "string" && fieldType.length > 0
+          ? [
+              {
+                fieldId,
+                fieldType,
+                value
+              }
+            ]
+          : [];
+      });
   }
 
   if (typeof payload.patch === "object" && payload.patch !== null && !Array.isArray(payload.patch)) {

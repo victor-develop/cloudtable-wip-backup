@@ -73,6 +73,8 @@ function createRegistry(overrides?: {
   dryRunResult?: CommandResult;
   executeResult?: CommandResult;
   inspectedWorkspace?: WorkspaceInspection;
+  workflowHistoryResult?: Record<string, unknown>;
+  workflowRunResult?: Record<string, unknown> | null;
 }) {
   const permissionEngine = createPermissionEngine(fieldTypeRegistry, {
     snapshot
@@ -178,6 +180,25 @@ function createRegistry(overrides?: {
     commandBus,
     permissionEngine,
     viewPlanner: createViewPlanner(fieldTypeRegistry, permissionEngine),
+    workflowHistoryReader: {
+      read() {
+        return (overrides?.workflowHistoryResult ??
+          {
+            runs: [],
+            workflowId: "wf_demo"
+          }) as never;
+      }
+    },
+    workflowRunReader: {
+      read() {
+        return (overrides?.workflowRunResult ??
+          {
+            id: "wfr_demo",
+            status: "completed",
+            workflowId: "wf_demo"
+          }) as never;
+      }
+    },
     workflowOperatorRegistry,
     workspaceInspector: {
       inspect() {
@@ -392,12 +413,17 @@ describe("cloudtable agent tool registry", () => {
 
     expect(registry.list().map((tool) => tool.id)).toEqual([
       "inspectWorkspace",
+      "readWorkflowHistory",
+      "readWorkflowRunDetail",
       "createTable",
       "createField",
       "createView",
       "updateView",
       "configureFieldPermission",
       "proposeWorkflow",
+      "publishWorkflow",
+      "pauseWorkflow",
+      "runWorkflow",
       "dryRunCommand",
       "executeCommand"
     ]);
@@ -415,6 +441,20 @@ describe("cloudtable agent tool registry", () => {
         operation: "dry-run"
       },
       successorToolId: "executeCommand"
+    });
+    expect(registry.require("readWorkflowHistory")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "workflowHistoryReader"
+      },
+      scope: "workflow"
+    });
+    expect(registry.require("readWorkflowRunDetail")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "workflowRunReader"
+      },
+      scope: "workflow"
     });
   });
 
@@ -466,6 +506,61 @@ describe("cloudtable agent tool registry", () => {
         ],
         workflows: [],
         workspaceId: "ws_demo"
+      }
+    });
+  });
+
+  it("routes workflow observability reads through dedicated workflow services", async () => {
+    const registry = createRegistry({
+      workflowHistoryResult: {
+        runs: [
+          {
+            id: "wfr_demo_1",
+            status: "dead_lettered"
+          }
+        ],
+        workflowId: "wf_demo"
+      },
+      workflowRunResult: {
+        id: "wfr_demo_1",
+        status: "dead_lettered",
+        workflowId: "wf_demo"
+      }
+    });
+
+    const historyResult = await registry.invoke({
+      toolId: "readWorkflowHistory",
+      input: {
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+    const runResult = await registry.invoke({
+      toolId: "readWorkflowRunDetail",
+      input: {
+        workflowRunId: "wfr_demo_1",
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(historyResult).toEqual({
+      history: {
+        runs: [
+          {
+            id: "wfr_demo_1",
+            status: "dead_lettered"
+          }
+        ],
+        workflowId: "wf_demo"
+      },
+      kind: "workflow-history"
+    });
+    expect(runResult).toEqual({
+      kind: "workflow-run-detail",
+      run: {
+        id: "wfr_demo_1",
+        status: "dead_lettered",
+        workflowId: "wf_demo"
       }
     });
   });
@@ -567,6 +662,16 @@ describe("cloudtable agent tool registry", () => {
       commandBus,
       permissionEngine,
       viewPlanner: createViewPlanner(fieldTypeRegistry, permissionEngine),
+      workflowHistoryReader: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
+      workflowRunReader: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
       workflowOperatorRegistry,
       workspaceInspector: createWorkspaceInspector(
         db as unknown as D1Database,
@@ -786,6 +891,95 @@ describe("cloudtable agent tool registry", () => {
     });
   });
 
+  it("builds explicit workflow lifecycle commands on the audited path", async () => {
+    const registry = createRegistry();
+
+    const publishDraft = await registry.invoke({
+      toolId: "publishWorkflow",
+      input: {
+        ...baseCommandInput(),
+        tableId: "tbl_accounts",
+        workflowId: "wf_follow_up"
+      }
+    });
+    const pauseDraft = await registry.invoke({
+      toolId: "pauseWorkflow",
+      input: {
+        ...baseCommandInput(),
+        tableId: "tbl_accounts",
+        workflowId: "wf_follow_up"
+      }
+    });
+    const runDraft = await registry.invoke({
+      toolId: "runWorkflow",
+      input: {
+        ...baseCommandInput(),
+        input: {
+          source: "agent"
+        },
+        manualInvocationId: "manual_follow_up_1",
+        tableId: "tbl_accounts",
+        workflowId: "wf_follow_up"
+      }
+    });
+
+    expect(publishDraft).toMatchObject({
+      command: {
+        commandType: "workflow.publish",
+        payload: {
+          workflowId: "wf_follow_up"
+        },
+        scope: "workflow",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/workflows/wf_follow_up"
+        }
+      ],
+      kind: "command-draft"
+    });
+    expect(pauseDraft).toMatchObject({
+      command: {
+        commandType: "workflow.pause",
+        payload: {
+          workflowId: "wf_follow_up"
+        },
+        scope: "workflow",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/workflows/wf_follow_up"
+        }
+      ],
+      kind: "command-draft"
+    });
+    expect(runDraft).toMatchObject({
+      command: {
+        commandType: "workflow.manual",
+        payload: {
+          input: {
+            source: "agent"
+          },
+          manualInvocationId: "manual_follow_up_1",
+          workflowId: "wf_follow_up"
+        },
+        scope: "workflow",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "create",
+          path: "/workflows/wf_follow_up/runs/manual"
+        }
+      ],
+      kind: "command-draft"
+    });
+  });
+
   it("shares the command bus for dry-run and execution", async () => {
     const registry = createRegistry();
     const command: CommandEnvelope = {
@@ -864,7 +1058,6 @@ describe("cloudtable agent tool registry", () => {
       fields,
       snapshot
     );
-
     expect(sanitizedInput).toEqual({
       diagnostics: ["agent_hidden:customer_note"],
       hiddenFieldIds: ["customer_note"],

@@ -18,7 +18,7 @@ const snapshot: EffectivePermissionSnapshot = {
   policyRevision: 7,
   schemaEpoch: 3,
   scopeHash: "scope:table:tbl_tasks",
-  commandTypes: ["record.update", "record.read"],
+  commandTypes: ["record.create", "record.update", "record.read"],
   fields: {
     title: {
       fieldId: "title",
@@ -234,6 +234,22 @@ describe("cloudtable permission engine", () => {
         ]
       )
     );
+    const createDecision = permissionEngine.evaluateCommand(
+      buildCommand({
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        commandType: "record.create",
+        payload: {
+          cells: {
+            customer_note: "Attempted agent create write",
+            title: "Acme"
+          },
+          recordId: "rec_001"
+        }
+      })
+    );
 
     expect(staleDecision).toEqual({
       allowed: false,
@@ -245,6 +261,8 @@ describe("cloudtable permission engine", () => {
     expect(workflowDecision.reasons).toContain("workflow_hidden:internal_note");
     expect(agentDecision.allowed).toBe(false);
     expect(agentDecision.reasons).toContain("agent_hidden:customer_note");
+    expect(createDecision.allowed).toBe(false);
+    expect(createDecision.reasons).toContain("agent_hidden:customer_note");
   });
 
   it("filters agent tools against visible writable fields", () => {
@@ -267,6 +285,16 @@ describe("cloudtable permission engine", () => {
       commandBus,
       permissionEngine,
       viewPlanner,
+      workflowHistoryReader: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      workflowRunReader: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
       workflowOperatorRegistry: createWorkflowOperatorRegistry(),
       workspaceInspector: {
         inspect() {

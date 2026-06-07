@@ -15,6 +15,8 @@ import type {
   AgentToolInvocationResult,
   AgentToolRegistry,
   AgentToolSanitizationResult,
+  WorkflowHistoryReader,
+  WorkflowRunReader,
   WorkspaceInspector
 } from "./types";
 
@@ -23,6 +25,8 @@ type CreateAgentToolRegistryDeps = {
   commandBus: CommandBus;
   viewPlanner: ViewPlanner;
   workflowOperatorRegistry: WorkflowOperatorRegistry;
+  workflowHistoryReader: WorkflowHistoryReader;
+  workflowRunReader: WorkflowRunReader;
   workspaceInspector: WorkspaceInspector;
 };
 
@@ -86,6 +90,66 @@ const tools: AgentToolDefinition[] = [
     phase: "draft",
     requiresConfirmation: false,
     scope: "app"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "workflowHistoryReader"
+    },
+    description:
+      "Read workflow execution history through the same audited workflow-operations ingress used by direct runtime observers.",
+    fieldBinding: "none",
+    id: "readWorkflowHistory",
+    inputSchema: {
+      properties: {
+        workflowId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        history: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "workflow"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "workflowRunReader"
+    },
+    description:
+      "Read one workflow run detail through the same audited workflow-operations ingress used by direct runtime observers.",
+    fieldBinding: "none",
+    id: "readWorkflowRunDetail",
+    inputSchema: {
+      properties: {
+        workflowRunId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        run: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "workflow"
   },
   {
     binding: {
@@ -407,6 +471,142 @@ const tools: AgentToolDefinition[] = [
   },
   {
     binding: {
+      commandType: "workflow.publish",
+      kind: "command-builder",
+      scope: "workflow"
+    },
+    description: "Build an explicit workflow.publish command payload for a reviewed workflow draft.",
+    fieldBinding: "none",
+    id: "publishWorkflow",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workflowId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "workflow",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "workflow",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "workflow.pause",
+      kind: "command-builder",
+      scope: "workflow"
+    },
+    description: "Build an explicit workflow.pause command payload for a published workflow.",
+    fieldBinding: "none",
+    id: "pauseWorkflow",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workflowId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "workflow",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "workflow",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "workflow.manual",
+      kind: "command-builder",
+      scope: "workflow"
+    },
+    description: "Build an explicit workflow.manual command payload for a manual workflow run.",
+    fieldBinding: "none",
+    id: "runWorkflow",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        input: {
+          type: "object"
+        },
+        manualInvocationId: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workflowId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "workflow",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "workflow",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
       kind: "command-bus",
       operation: "dry-run"
     },
@@ -497,6 +697,8 @@ export function createAgentToolRegistry({
   commandBus,
   viewPlanner,
   workflowOperatorRegistry,
+  workflowHistoryReader,
+  workflowRunReader,
   workspaceInspector
 }: CreateAgentToolRegistryDeps): AgentToolRegistry {
   return {
@@ -522,6 +724,16 @@ export function createAgentToolRegistry({
           return {
             kind: "workspace-inspection",
             workspace: await Promise.resolve(workspaceInspector.inspect(invocation.input))
+          };
+        case "readWorkflowHistory":
+          return {
+            history: await Promise.resolve(workflowHistoryReader.read(invocation.input)),
+            kind: "workflow-history"
+          };
+        case "readWorkflowRunDetail":
+          return {
+            kind: "workflow-run-detail",
+            run: await Promise.resolve(workflowRunReader.read(invocation.input))
           };
         case "createTable": {
           const command = buildCommandEnvelope("table.create", "workspace", invocation.input, {
@@ -695,6 +907,43 @@ export function createAgentToolRegistry({
             diagnostics
           };
         }
+        case "publishWorkflow": {
+          const command = buildCommandEnvelope("workflow.publish", "workflow", invocation.input, {
+            workflowId: invocation.input.workflowId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "pauseWorkflow": {
+          const command = buildCommandEnvelope("workflow.pause", "workflow", invocation.input, {
+            workflowId: invocation.input.workflowId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "runWorkflow": {
+          const command = buildCommandEnvelope("workflow.manual", "workflow", invocation.input, {
+            input: invocation.input.input ?? {},
+            ...(invocation.input.manualInvocationId
+              ? { manualInvocationId: invocation.input.manualInvocationId }
+              : {}),
+            workflowId: invocation.input.workflowId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
         case "dryRunCommand": {
           const result = await commandBus.dryRun(invocation.input.command);
           return {
@@ -733,8 +982,8 @@ function buildCommandEnvelope(
   scope: CommandEnvelope["scope"],
   input: {
     actor: CommandEnvelope["actor"];
-    commandId: string;
-    idempotencyKey: string;
+    commandId?: string;
+    idempotencyKey?: string;
     permissionScopeHash?: string;
     permissionsVersion?: number;
     schemaEpoch?: number;
@@ -743,11 +992,16 @@ function buildCommandEnvelope(
   },
   payload: Record<string, unknown>
 ): CommandEnvelope {
+  const commandIdentitySuffix = crypto.randomUUID();
+
   return {
     actor: input.actor,
-    commandId: input.commandId,
+    commandId:
+      input.commandId ?? `cmd_${commandType.replaceAll(".", "_")}_${commandIdentitySuffix}`,
     commandType,
-    idempotencyKey: input.idempotencyKey,
+    idempotencyKey:
+      input.idempotencyKey ??
+      `idem_${commandType.replaceAll(".", "_")}_${commandIdentitySuffix}`,
     payload,
     permissionScopeHash: input.permissionScopeHash,
     permissionsVersion: input.permissionsVersion,
@@ -818,6 +1072,14 @@ function summarizeCommand(command: CommandEnvelope): AgentToolAuditDiff[] {
           action: "update",
           after: payload,
           path: `/workflows/${payload.workflowId}`
+        }
+      ];
+    case "workflow.manual":
+      return [
+        {
+          action: "create",
+          after: payload,
+          path: `/workflows/${payload.workflowId}/runs/manual`
         }
       ];
     default:

@@ -1602,6 +1602,179 @@ describe("cloudtable runtime ingress", () => {
     });
   });
 
+  it("returns workflow observability through named agent tools on the preview ingress", async () => {
+    const { db, env } = createEnv();
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [],
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "manual"
+        },
+        workflowId: "wf_history_agent"
+      },
+      name: "History Agent",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_history_agent",
+      workflowKey: "history-agent"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_history_agent",
+      workspaceId: "ws_1",
+      principalId: "ops_agent",
+      policyRevision: 31,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+    insertWorkflowRun(db, {
+      deadLetteredAt: "2026-06-06T00:12:00.000Z",
+      state: {
+        triggerEventId: "evt_workflow_trigger_agent_1"
+      },
+      status: "dead_lettered",
+      workflowId: "wf_history_agent",
+      workflowRunId: "wfr_history_agent_1"
+    });
+    insertWorkflowRunStep(db, {
+      inputPayload: {
+        fieldId: "fld_status",
+        recordId: "rec_missing",
+        tableId: "tbl_1",
+        value: "processed"
+      },
+      lastErrorCode: "record_not_found:rec_missing",
+      output: {
+        diagnostics: ["record_not_found:rec_missing"],
+        status: "rejected"
+      },
+      status: "dead_lettered",
+      stepId: "wfr_history_agent_1:step:0",
+      workflowRunId: "wfr_history_agent_1"
+    });
+    insertWorkflowDeadLetter(db, {
+      workflowRunId: "wfr_history_agent_1",
+      workflowStepId: "wfr_history_agent_1:step:0"
+    });
+
+    const directHistoryResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_history_agent/history?workspaceId=ws_1&principalId=ops_agent&permissionScopeHash=scope:table:tbl_1&policyRevision=31"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const directRunResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflow-runs/wfr_history_agent_1?workspaceId=ws_1&principalId=ops_agent&permissionScopeHash=scope:table:tbl_1&policyRevision=31"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const toolHistoryResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            workflowId: "wf_history_agent"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 31,
+          principalId: "ops_agent",
+          toolId: "readWorkflowHistory",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    const toolRunResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            workflowRunId: "wfr_history_agent_1"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 31,
+          principalId: "ops_agent",
+          toolId: "readWorkflowRunDetail",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(directHistoryResponse.status).toBe(200);
+    expect(directRunResponse.status).toBe(200);
+    expect(toolHistoryResponse.status).toBe(200);
+    expect(toolRunResponse.status).toBe(200);
+
+    const directHistoryBody = await directHistoryResponse.json();
+    const directRunBody = await directRunResponse.json();
+    const toolHistoryBody = (await toolHistoryResponse.json()) as {
+      input: {
+        workflowId: string;
+      };
+      output: {
+        history: Record<string, unknown>;
+        kind: string;
+      };
+      tool: {
+        id: string;
+        phase: string;
+        scope: string;
+      };
+    };
+    const toolRunBody = (await toolRunResponse.json()) as {
+      input: {
+        workflowRunId: string;
+      };
+      output: {
+        kind: string;
+        run: Record<string, unknown>;
+      };
+      tool: {
+        id: string;
+        phase: string;
+        scope: string;
+      };
+    };
+
+    expect(toolHistoryBody.tool).toMatchObject({
+      id: "readWorkflowHistory",
+      phase: "draft",
+      scope: "workflow"
+    });
+    expect(toolHistoryBody.input).toEqual({
+      workflowId: "wf_history_agent"
+    });
+    expect(toolHistoryBody.output.kind).toBe("workflow-history");
+    expect(toolHistoryBody.output.history).toEqual(directHistoryBody);
+
+    expect(toolRunBody.tool).toMatchObject({
+      id: "readWorkflowRunDetail",
+      phase: "draft",
+      scope: "workflow"
+    });
+    expect(toolRunBody.input).toEqual({
+      workflowRunId: "wfr_history_agent_1"
+    });
+    expect(toolRunBody.output.kind).toBe("workflow-run-detail");
+    expect(toolRunBody.output.run).toEqual(directRunBody);
+  });
+
   it("returns persisted workflow definition metadata through the worker read ingress", async () => {
     const { db, env } = createEnv();
     insertWorkflow(db, {
@@ -1829,6 +2002,63 @@ describe("cloudtable runtime ingress", () => {
       env,
       {} as ExecutionContext
     );
+    expect(response.status).toBe(403);
+    expect((await response.json()) as { error: string }).toMatchObject({
+      error: "forbidden"
+    });
+  });
+
+  it("denies workflow observability agent tools when the principal lacks workflow command access", async () => {
+    const { db, env } = createEnv();
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [],
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "manual"
+        },
+        workflowId: "wf_history_tool_denied"
+      },
+      name: "History Tool Denied",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_history_tool_denied",
+      workflowKey: "history-tool-denied"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_history_tool_denied",
+      workspaceId: "ws_1",
+      principalId: "usr_history_tool_denied",
+      policyRevision: 32,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["record.create"],
+      fields: {}
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            workflowId: "wf_history_tool_denied"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 32,
+          principalId: "usr_history_tool_denied",
+          toolId: "readWorkflowHistory",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
     expect(response.status).toBe(403);
     expect((await response.json()) as { error: string }).toMatchObject({
       error: "forbidden"
@@ -3588,7 +3818,7 @@ describe("cloudtable runtime ingress", () => {
     });
   });
 
-  it("returns policy-protected saved filters and still enforces them during view reads", async () => {
+  it("returns policy-protected saved filters and still enforces them from field indexes during view reads", async () => {
     const { db, env } = createEnv();
 
     insertField(db, {
@@ -3609,7 +3839,7 @@ describe("cloudtable runtime ingress", () => {
     insertRecordProjection(db, {
       fields: {
         title: "Visible active",
-        status: "active"
+        status: ""
       },
       recordId: "rec_1",
       recordKey: "record-1",
@@ -3618,11 +3848,23 @@ describe("cloudtable runtime ingress", () => {
     insertRecordProjection(db, {
       fields: {
         title: "Hidden inactive",
-        status: "blocked"
+        status: "active"
       },
       recordId: "rec_2",
       recordKey: "record-2",
       tableId: "tbl_1"
+    });
+    insertFieldIndexEntry(db, {
+      fieldId: "fld_status",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      textValue: "active"
+    });
+    insertFieldIndexEntry(db, {
+      fieldId: "fld_status",
+      recordId: "rec_2",
+      tableId: "tbl_1",
+      textValue: "blocked"
     });
     insertView(db, {
       filters: [
@@ -3894,6 +4136,213 @@ describe("cloudtable runtime ingress", () => {
       status: "accepted"
     });
     expect(body.outputDiagnostics).toEqual([]);
+  });
+
+  it("builds explicit workflow lifecycle drafts through the agent-tool preview ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [],
+        metadata: {
+          status: "draft"
+        },
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "manual"
+        },
+        workflowId: "wf_agent_preview"
+      },
+      name: "Agent Preview",
+      workflowId: "wf_agent_preview",
+      workflowKey: "agent-preview"
+    });
+
+    const publishResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            tableId: "tbl_1",
+            workflowId: "wf_agent_preview"
+          },
+          principalId: "agt_assist",
+          toolId: "publishWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    const pauseResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            tableId: "tbl_1",
+            workflowId: "wf_agent_preview"
+          },
+          principalId: "agt_assist",
+          toolId: "pauseWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    const runResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            input: {
+              trigger: "button"
+            },
+            manualInvocationId: "manual_agent_preview_1",
+            tableId: "tbl_1",
+            workflowId: "wf_agent_preview"
+          },
+          principalId: "agt_assist",
+          toolId: "runWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(publishResponse.status).toBe(200);
+    expect(pauseResponse.status).toBe(200);
+    expect(runResponse.status).toBe(200);
+
+    const publishBody = (await publishResponse.json()) as {
+      output: {
+        command: {
+          commandType: string;
+          payload: {
+            workflowId: string;
+          };
+          scope: string;
+          tableId: string;
+        };
+        diffs: Array<{ action: string; path: string }>;
+        kind: string;
+      };
+      tool: {
+        id: string;
+        successorToolId: string | null;
+      };
+    };
+    const pauseBody = (await pauseResponse.json()) as {
+      output: {
+        command: {
+          commandType: string;
+          payload: {
+            workflowId: string;
+          };
+          scope: string;
+          tableId: string;
+        };
+        diffs: Array<{ action: string; path: string }>;
+        kind: string;
+      };
+    };
+    const runBody = (await runResponse.json()) as {
+      output: {
+        command: {
+          commandType: string;
+          payload: {
+            input: Record<string, unknown>;
+            manualInvocationId: string;
+            workflowId: string;
+          };
+          scope: string;
+          tableId: string;
+        };
+        diffs: Array<{ action: string; path: string }>;
+        kind: string;
+      };
+      tool: {
+        id: string;
+        successorToolId: string | null;
+      };
+    };
+
+    expect(publishBody.tool).toMatchObject({
+      id: "publishWorkflow",
+      successorToolId: "dryRunCommand"
+    });
+    expect(publishBody.output).toMatchObject({
+      command: {
+        commandType: "workflow.publish",
+        payload: {
+          workflowId: "wf_agent_preview"
+        },
+        scope: "workflow",
+        tableId: "tbl_1"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/workflows/wf_agent_preview"
+        }
+      ],
+      kind: "command-draft"
+    });
+    expect(pauseBody.output).toMatchObject({
+      command: {
+        commandType: "workflow.pause",
+        payload: {
+          workflowId: "wf_agent_preview"
+        },
+        scope: "workflow",
+        tableId: "tbl_1"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/workflows/wf_agent_preview"
+        }
+      ],
+      kind: "command-draft"
+    });
+    expect(runBody.tool).toMatchObject({
+      id: "runWorkflow",
+      successorToolId: "dryRunCommand"
+    });
+    expect(runBody.output).toMatchObject({
+      command: {
+        commandType: "workflow.manual",
+        payload: {
+          input: {
+            trigger: "button"
+          },
+          manualInvocationId: "manual_agent_preview_1",
+          workflowId: "wf_agent_preview"
+        },
+        scope: "workflow",
+        tableId: "tbl_1"
+      },
+      diffs: [
+        {
+          action: "create",
+          path: "/workflows/wf_agent_preview/runs/manual"
+        }
+      ],
+      kind: "command-draft"
+    });
   });
 
   it("previews normalized commands through the worker ingress without committing or publishing", async () => {
@@ -4702,6 +5151,193 @@ describe("cloudtable runtime ingress", () => {
       ],
       status: "accepted"
     });
+  });
+
+  it("executes a named workflow manual wrapper through the audited agent-tool execute ingress", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue } = createEnv();
+
+    insertField(db, {
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "text.single_line",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        status: null
+      },
+      recordId: "rec_1",
+      recordKey: "record-1",
+      tableId: "tbl_1"
+    });
+    insertWorkflow(db, {
+      definition: {
+        actions: [
+          {
+            input: {
+              fieldId: "fld_status",
+              fieldType: "text.single_line",
+              recordId: "rec_1",
+              tableId: "tbl_1",
+              value: "manual"
+            },
+            operatorId: "set_cell"
+          }
+        ],
+        conditions: [],
+        principal: {
+          policyRevision: 7,
+          principalId: "wf_service",
+          schemaEpoch: 0,
+          scopeHash: "scope:wf:agent-execute"
+        },
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "manual"
+        },
+        workflowId: "wf_agent_execute"
+      },
+      name: "Agent Execute",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_agent_execute",
+      workflowKey: "agent-execute"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_agent_execute_manual",
+      workspaceId: "ws_1",
+      principalId: "agt_assist",
+      policyRevision: 41,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.manual"],
+      fields: {}
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_agent_execute_workflow",
+      workspaceId: "ws_1",
+      principalId: "wf_service",
+      policyRevision: 7,
+      schemaEpoch: 0,
+      scopeHash: "scope:wf:agent-execute",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_status: {
+          agent: false,
+          fieldId: "fld_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const preview = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            input: {
+              trigger: "button"
+            },
+            manualInvocationId: "manual_agent_execute_1",
+            tableId: "tbl_1",
+            workflowId: "wf_agent_execute"
+          },
+          principalId: "agt_assist",
+          toolId: "runWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(preview.status).toBe(200);
+    const previewBody = (await preview.json()) as {
+      output: {
+        command: CommandEnvelope;
+      };
+    };
+
+    const execute = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            command: previewBody.output.command
+          },
+          principalId: "agt_assist",
+          toolId: "executeCommand",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(execute.status).toBe(200);
+    const body = (await execute.json()) as {
+      output: {
+        command: {
+          actor: { mode: string; principalId: string };
+          commandId: string;
+          commandType: string;
+          idempotencyKey: string;
+          payload: {
+            input: Record<string, unknown>;
+            manualInvocationId: string;
+            workflowId: string;
+          };
+        };
+        kind: string;
+        result: {
+          accepted: boolean;
+          events: Array<{ commandType: string; eventType: string }>;
+          status: string;
+        };
+      };
+    };
+
+    expect(body.output.kind).toBe("command-execution");
+    expect(body.output.command).toMatchObject({
+      actor: {
+        mode: "agent",
+        principalId: "agt_assist"
+      },
+      commandType: "workflow.manual",
+      payload: {
+        input: {
+          trigger: "button"
+        },
+        manualInvocationId: "manual_agent_execute_1",
+        workflowId: "wf_agent_execute"
+      }
+    });
+    expect(body.output.command.commandId).toEqual(expect.stringMatching(/^cmd_workflow_manual_/));
+    expect(body.output.command.idempotencyKey).toEqual(
+      expect.stringMatching(/^idem_workflow_manual_/)
+    );
+    expect(body.output.result).toMatchObject({
+      accepted: true,
+      events: [
+        {
+          commandType: "workflow.manual",
+          eventType: "workflow.manual"
+        }
+      ],
+      status: "accepted"
+    });
+    expect(eventFanoutQueue.sent).toHaveLength(1);
+    expect(workflowDispatchQueue.sent).toEqual([]);
   });
 
   it("rejects stale explicit permission coordinates on the execution ingress", async () => {

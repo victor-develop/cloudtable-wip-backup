@@ -1,15 +1,20 @@
 import type {
+  AgentToolId,
+  AgentToolInvocation,
+  AgentToolInvocationResult,
   ConfigureFieldPermissionToolInput,
   CreateFieldToolInput,
   CreateTableToolInput,
   CreateViewToolInput,
   DryRunCommandToolInput,
   ExecuteCommandToolInput,
-  AgentToolId,
-  AgentToolInvocation,
-  AgentToolInvocationResult,
   InspectWorkspaceToolInput,
+  PauseWorkflowToolInput,
+  PublishWorkflowToolInput,
+  ReadWorkflowHistoryToolInput,
+  ReadWorkflowRunDetailToolInput,
   ProposeWorkflowToolInput,
+  RunWorkflowToolInput,
   UpdateViewToolInput
 } from "../core/agent-tools/types";
 import type { CommandEnvelope, CommandResult } from "../core/commands/types";
@@ -925,6 +930,22 @@ function buildAgentToolInvocation(
         } as InspectWorkspaceToolInput,
         toolId
       };
+    case "readWorkflowHistory":
+      return {
+        input: {
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId"),
+          workspaceId: context.workspaceId
+        } as ReadWorkflowHistoryToolInput,
+        toolId
+      };
+    case "readWorkflowRunDetail":
+      return {
+        input: {
+          workflowRunId: readRequiredAgentToolString(input.workflowRunId, "workflowRunId"),
+          workspaceId: context.workspaceId
+        } as ReadWorkflowRunDetailToolInput,
+        toolId
+      };
     case "createTable":
       return {
         input: {
@@ -971,6 +992,35 @@ function buildAgentToolInvocation(
           ...input,
           ...commandContext
         } as ProposeWorkflowToolInput,
+        toolId
+      };
+    case "publishWorkflow":
+      return {
+        input: {
+          ...commandContext,
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as PublishWorkflowToolInput,
+        toolId
+      };
+    case "pauseWorkflow":
+      return {
+        input: {
+          ...commandContext,
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as PauseWorkflowToolInput,
+        toolId
+      };
+    case "runWorkflow":
+      return {
+        input: {
+          ...commandContext,
+          input: readOptionalAgentToolObject(input.input) ?? undefined,
+          manualInvocationId: readOptionalAgentToolString(input.manualInvocationId) ?? undefined,
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as RunWorkflowToolInput,
         toolId
       };
     case "dryRunCommand":
@@ -1030,19 +1080,45 @@ async function handleAgentToolIngress(
   }
 
   const runtime = createRuntime(env);
-  const resolvedScope = resolveAgentToolScope(toolId as AgentToolId, workspaceId, input);
-  if (!resolvedScope.ok) {
+  const workflowObservabilityTool =
+    toolId === "readWorkflowHistory" || toolId === "readWorkflowRunDetail";
+  const workflowOperationsAccess = workflowObservabilityTool
+    ? await resolveWorkflowOperationsAccess(env, {
+        permissionScopeHash,
+        policyRevisionValue: policyRevision === null ? null : String(policyRevision),
+        principalId,
+        workflowId: toolId === "readWorkflowHistory" ? readNonEmptyString(input.workflowId) : null,
+        workflowRunId:
+          toolId === "readWorkflowRunDetail" ? readNonEmptyString(input.workflowRunId) : null,
+        workspaceId
+      })
+    : null;
+  if (workflowOperationsAccess && "response" in workflowOperationsAccess) {
+    return workflowOperationsAccess.response;
+  }
+
+  const resolvedScope =
+    workflowOperationsAccess === null
+      ? resolveAgentToolScope(toolId as AgentToolId, workspaceId, input)
+      : null;
+  if (resolvedScope && !resolvedScope.ok) {
     return badRequest(resolvedScope.message);
   }
 
-  const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
-    fieldTypeRegistry: runtime.fieldTypeRegistry,
-    permissionScopeHash,
-    policyRevision,
-    principalId,
-    scope: resolvedScope.scope,
-    workspaceId
-  });
+  const resolvedSnapshot =
+    workflowOperationsAccess?.snapshot != null
+      ? {
+          ok: true as const,
+          snapshot: workflowOperationsAccess.snapshot
+        }
+      : await resolvePermissionSnapshot(env.DB, {
+          fieldTypeRegistry: runtime.fieldTypeRegistry,
+          permissionScopeHash,
+          policyRevision,
+          principalId,
+          scope: resolvedScope!.scope,
+          workspaceId
+        });
 
   if (!resolvedSnapshot.ok) {
     return badRequest(resolvedSnapshot.message);
@@ -1110,12 +1186,15 @@ async function handleAgentToolIngress(
       ? await invokeReviewedExecutionTool(invocation.input.command, env, request.url)
       : await permissionedRuntime.agentToolRegistry.invoke(invocation);
   const serializedResult = serializeAgentToolResult(result);
-  const sanitizedOutput = permissionedRuntime.agentToolRegistry.sanitizeOutput(
-    tool.id,
-    serializedResult,
-    fields,
-    snapshot
-  );
+  const sanitizedOutput =
+    tool.id === "readWorkflowHistory" ||
+    tool.id === "readWorkflowRunDetail"
+      ? {
+          diagnostics: [] as string[],
+          hiddenFieldIds: [] as string[],
+          sanitized: serializedResult
+        }
+      : permissionedRuntime.agentToolRegistry.sanitizeOutput(tool.id, serializedResult, fields, snapshot);
 
   return json({
     access,
@@ -1208,6 +1287,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readRequiredAgentToolString(value: unknown, key: string): string {
+  const parsed = readNonEmptyString(value);
+  if (!parsed) {
+    throw new Error(`${key} is required for this agent tool.`);
+  }
+
+  return parsed;
+}
+
+function readOptionalAgentToolString(value: unknown): string | null {
+  return readNonEmptyString(value);
+}
+
+function readRequiredAgentToolObject(value: unknown, key: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`${key} must be an object for this agent tool.`);
+  }
+
+  return value;
+}
+
+function readOptionalAgentToolObject(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
 }
 
 function resolveAgentToolScope(
