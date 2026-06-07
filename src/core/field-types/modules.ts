@@ -48,6 +48,29 @@ type ModuleFixtureInput = {
   indexSample: (value: NormalizedCellValue | null) => FieldIndexValue;
 };
 
+type SelectOption = {
+  color?: string;
+  description?: string;
+  id: string;
+  label: string;
+  order: number;
+  semantic?: string;
+};
+
+type ParsedSelectConfig = {
+  hasOptions: boolean;
+  options: readonly SelectOption[];
+  optionsById: ReadonlyMap<string, SelectOption>;
+};
+
+const statusSemantics = [
+  "todo",
+  "in_progress",
+  "blocked",
+  "done",
+  "cancelled"
+] as const;
+
 function stableHash(value: JsonValue): string {
   return JSON.stringify(value);
 }
@@ -255,6 +278,441 @@ function buildReferenceIndex(value: NormalizedCellValue | null): FieldIndexValue
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseSelectConfig(config: unknown): ParsedSelectConfig {
+  if (!isRecord(config) || !Array.isArray(config.options)) {
+    return {
+      hasOptions: false,
+      options: [],
+      optionsById: new Map()
+    };
+  }
+
+  const options: SelectOption[] = [];
+  for (const [order, rawOption] of config.options.entries()) {
+    if (!isRecord(rawOption)) {
+      continue;
+    }
+
+    const id = coerceScalarText(rawOption.id);
+    const label = coerceScalarText(rawOption.label);
+    if (id === "" || label === "") {
+      continue;
+    }
+
+    const color = coerceScalarText(rawOption.color);
+    const description = coerceScalarText(rawOption.description);
+    const semantic = coerceScalarText(rawOption.semantic);
+    options.push({
+      color: color === "" ? undefined : color,
+      description: description === "" ? undefined : description,
+      id,
+      label,
+      order,
+      semantic: semantic === "" ? undefined : semantic
+    });
+  }
+
+  return {
+    hasOptions: options.length > 0,
+    options,
+    optionsById: new Map(options.map((option) => [option.id, option]))
+  };
+}
+
+function validateSelectConfig(
+  config: unknown,
+  options: {
+    requireSemantic: boolean;
+    type: string;
+  }
+): {
+  errors: string[];
+  valid: boolean;
+} {
+  if (!isRecord(config)) {
+    return {
+      valid: false,
+      errors: ["Field configuration must be an object."]
+    };
+  }
+
+  if (config.options === undefined) {
+    return {
+      valid: true,
+      errors: []
+    };
+  }
+
+  if (!Array.isArray(config.options)) {
+    return {
+      valid: false,
+      errors: ["Field configuration options must be an array."]
+    };
+  }
+
+  const errors: string[] = [];
+  const seenIds = new Set<string>();
+  for (const [index, rawOption] of config.options.entries()) {
+    if (!isRecord(rawOption)) {
+      errors.push(`Field option ${index} must be an object.`);
+      continue;
+    }
+
+    const id = coerceScalarText(rawOption.id);
+    const label = coerceScalarText(rawOption.label);
+    if (id === "") {
+      errors.push(`Field option ${index} is missing an id.`);
+    }
+    if (label === "") {
+      errors.push(`Field option ${index} is missing a label.`);
+    }
+    if (id !== "" && seenIds.has(id)) {
+      errors.push(`Field option ids must be unique: ${id}.`);
+    }
+    seenIds.add(id);
+
+    if (options.requireSemantic) {
+      const semantic = coerceScalarText(rawOption.semantic);
+      if (semantic === "") {
+        errors.push(`Status option ${id || index} is missing a semantic value.`);
+      } else if (!statusSemantics.includes(semantic as (typeof statusSemantics)[number])) {
+        errors.push(
+          `Status option ${id || index} has unsupported semantic: ${semantic}.`
+        );
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+function compareSelectIds(
+  left: string,
+  right: string,
+  config: ParsedSelectConfig
+): number {
+  const leftOrder = config.optionsById.get(left)?.order ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = config.optionsById.get(right)?.order ?? Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+
+  return left.localeCompare(right);
+}
+
+function optionSearchText(option: SelectOption): string {
+  return normalizeTextTokens(
+    [option.label, option.description ?? "", option.semantic ?? ""].join(" ")
+  ).join(" ");
+}
+
+function buildSelectMeta(option: SelectOption | undefined): Record<string, JsonValue> | undefined {
+  if (!option) {
+    return undefined;
+  }
+
+  return {
+    optionId: option.id,
+    optionLabel: option.label,
+    optionOrder: option.order,
+    semantic: option.semantic ?? null
+  };
+}
+
+function normalizeConfiguredSelectValue(type: string, input: unknown, config: unknown): NormalizeResult {
+  const raw = coerceScalarText(input);
+  const parsedConfig = parseSelectConfig(config);
+  const option = parsedConfig.optionsById.get(raw);
+
+  return {
+    value: buildNormalizedValue(type, raw, 1, {
+      meta: buildSelectMeta(option),
+      tokens:
+        option != null
+          ? optionSearchText(option).split(" ").filter((token) => token !== "")
+          : normalizeTextTokens(raw)
+    }),
+    warnings: []
+  };
+}
+
+function normalizeConfiguredMultiSelectValue(
+  type: string,
+  input: unknown,
+  config: unknown
+): NormalizeResult {
+  const parsedConfig = parseSelectConfig(config);
+  const values = Array.isArray(input) ? input : [input];
+  const raw = values
+    .map((value) => coerceScalarText(value))
+    .filter((value) => value !== "");
+  const canonical = Array.from(new Set(raw)).sort((left, right) =>
+    compareSelectIds(left, right, parsedConfig)
+  );
+
+  return {
+    value: buildNormalizedValue(type, canonical, 1, {
+      tokens: canonical.flatMap((value) => {
+        const option = parsedConfig.optionsById.get(value);
+        return option != null
+          ? optionSearchText(option).split(" ").filter((token) => token !== "")
+          : normalizeTextTokens(value);
+      })
+    }),
+    warnings:
+      raw.length === canonical.length
+        ? []
+        : [
+            {
+              code: "select.duplicate_option",
+              message: "Duplicate options were removed during normalization."
+            }
+          ]
+  };
+}
+
+function validateConfiguredSelectValue(
+  type: string,
+  value: NormalizedCellValue | null,
+  config: unknown,
+  options: {
+    multiValue: boolean;
+  }
+): {
+  errors: string[];
+  valid: boolean;
+} {
+  if (value == null) {
+    return {
+      valid: true,
+      errors: []
+    };
+  }
+
+  if (value.valueType !== type) {
+    return {
+      valid: false,
+      errors: [`Expected ${type} value, received ${value.valueType}.`]
+    };
+  }
+
+  if (options.multiValue && !Array.isArray(value.raw) && value.raw !== null) {
+    return {
+      valid: false,
+      errors: [`Expected ${type} value to be an array.`]
+    };
+  }
+
+  if (!options.multiValue && typeof value.raw !== "string" && value.raw !== null) {
+    return {
+      valid: false,
+      errors: [`Expected ${type} value to be a string.`]
+    };
+  }
+
+  const parsedConfig = parseSelectConfig(config);
+  if (!parsedConfig.hasOptions) {
+    return {
+      valid: true,
+      errors: []
+    };
+  }
+
+  const rawIds = options.multiValue
+    ? Array.isArray(value.raw)
+      ? value.raw.filter((entry): entry is string => typeof entry === "string")
+      : []
+    : typeof value.raw === "string"
+      ? value.raw === ""
+        ? []
+        : [value.raw]
+      : [];
+  const unknownIds = rawIds.filter((id) => !parsedConfig.optionsById.has(id));
+
+  return {
+    valid: unknownIds.length === 0,
+    errors: unknownIds.map((id) => `Unknown option id for ${type}: ${id}.`)
+  };
+}
+
+function buildConfiguredSelectIndex(
+  value: NormalizedCellValue | null,
+  config: unknown,
+  options: {
+    multiValue: boolean;
+    sortByOptionOrder: boolean;
+  }
+): FieldIndexValue {
+  const parsedConfig = parseSelectConfig(config);
+
+  if (options.multiValue) {
+    const rawValues = Array.isArray(value?.raw)
+      ? value.raw.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const labels = rawValues.map((id) => parsedConfig.optionsById.get(id)?.label ?? id);
+    const displayValue = labels.join(", ");
+    const searchText = rawValues
+      .flatMap((id) => {
+        const option = parsedConfig.optionsById.get(id);
+        return option != null
+          ? optionSearchText(option).split(" ").filter((token) => token !== "")
+          : normalizeTextTokens(id);
+      })
+      .join(" ");
+
+    return {
+      textValue: displayValue === "" ? null : displayValue,
+      displayValue,
+      searchText,
+      valueHash: stableHash(value?.raw ?? null)
+    };
+  }
+
+  const raw = typeof value?.raw === "string" ? value.raw : "";
+  const option = parsedConfig.optionsById.get(raw);
+  const displayValue = option?.label ?? raw;
+  const searchText =
+    option != null ? optionSearchText(option) : normalizeTextTokens(raw).join(" ");
+
+  return {
+    numberValue: options.sortByOptionOrder && option != null ? String(option.order) : undefined,
+    textValue: displayValue === "" ? null : displayValue,
+    displayValue,
+    searchText,
+    valueHash: stableHash(value?.raw ?? null)
+  };
+}
+
+function createSelectFieldType(input: {
+  defaultConfig: JsonValue;
+  multiValue: boolean;
+  sampleInput: unknown;
+  type: "select.single" | "select.multi" | "status.semantic";
+}): FieldTypeDefinition {
+  const supportedConditionOperators = input.multiValue
+    ? ["select_has_option", "is_empty", "is_not_empty"]
+    : ["equals", "not_equals", "is_empty", "is_not_empty"];
+  const supportedSortModes = ["ascending", "descending"];
+  const permissionBehavior = {
+    ...basePermissionBehavior
+  };
+  const sampleNormalized = input.multiValue
+    ? normalizeConfiguredMultiSelectValue(input.type, input.sampleInput, input.defaultConfig)
+    : normalizeConfiguredSelectValue(input.type, input.sampleInput, input.defaultConfig);
+  const sampleIndex = buildConfiguredSelectIndex(sampleNormalized.value, input.defaultConfig, {
+    multiValue: input.multiValue,
+    sortByOptionOrder: !input.multiValue
+  });
+
+  return {
+    type: input.type,
+    version: 1,
+    capabilities: {
+      ...baseCapabilities,
+      multiValue: input.multiValue,
+      scalar: !input.multiValue,
+      supportsGrouping: input.type !== "select.multi"
+    },
+    configSchema: {
+      type: "object",
+      description:
+        input.type === "status.semantic"
+          ? "Status option configuration with semantic states."
+          : "Select option configuration."
+    },
+    valueSchema: input.multiValue
+      ? {
+          type: "array",
+          description: "Configured multi-select option ids."
+        }
+      : {
+          type: "string",
+          description: "Configured select option id."
+        },
+    defaultConfig: input.defaultConfig,
+    supportedConditionOperators,
+    supportedSortModes,
+    normalize(rawInput, context) {
+      return input.multiValue
+        ? normalizeConfiguredMultiSelectValue(input.type, rawInput, context.fieldConfig)
+        : normalizeConfiguredSelectValue(input.type, rawInput, context.fieldConfig);
+    },
+    validateConfig(config) {
+      return validateSelectConfig(config, {
+        requireSemantic: input.type === "status.semantic",
+        type: input.type
+      });
+    },
+    validateValue(value, context) {
+      return validateConfiguredSelectValue(input.type, value, context.fieldConfig, {
+        multiValue: input.multiValue
+      });
+    },
+    applyDefault() {
+      return null;
+    },
+    toDisplay(value, context) {
+      return buildConfiguredSelectIndex(value, context.fieldConfig, {
+        multiValue: input.multiValue,
+        sortByOptionOrder: !input.multiValue
+      }).displayValue;
+    },
+    toIndex(value, context) {
+      return buildConfiguredSelectIndex(value, context.fieldConfig, {
+        multiValue: input.multiValue,
+        sortByOptionOrder: !input.multiValue
+      });
+    },
+    toSearchText(value, context) {
+      return buildConfiguredSelectIndex(value, context.fieldConfig, {
+        multiValue: input.multiValue,
+        sortByOptionOrder: !input.multiValue
+      }).searchText;
+    },
+    getSupportedConditionOperators() {
+      return supportedConditionOperators;
+    },
+    getSupportedSortModes() {
+      return supportedSortModes;
+    },
+    getPermissionBehavior() {
+      return permissionBehavior;
+    },
+    fixtures: [
+      {
+        id: `${input.type}.normalize.sample`,
+        kind: "normalize",
+        input: input.sampleInput,
+        expected: {
+          value: sampleNormalized.value,
+          warnings: sampleNormalized.warnings,
+          display: sampleIndex.displayValue,
+          searchText: sampleIndex.searchText,
+          index: sampleIndex
+        }
+      },
+      {
+        id: `${input.type}.operators.sample`,
+        kind: "operators",
+        expectedConditionOperators: supportedConditionOperators,
+        expectedSortModes: supportedSortModes
+      },
+      {
+        id: `${input.type}.permission.sample`,
+        kind: "permission",
+        expected: permissionBehavior
+      }
+    ]
+  };
+}
+
 function normalizeTextValue(type: string, input: unknown): NormalizeResult {
   const raw = coerceScalarText(input);
 
@@ -411,35 +869,29 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
     normalizeSample: (input) => normalizeBooleanValue("boolean.checkbox", input),
     indexSample: buildBooleanIndex
   }),
-  defineFieldType({
+  createSelectFieldType({
     type: "select.single",
     sampleInput: "ready",
-    normalizeSample: (input) => normalizeScalarSelectValue("select.single", input),
-    indexSample: buildTextIndex
+    defaultConfig: {
+      options: [
+        { id: "backlog", label: "Backlog" },
+        { id: "ready", label: "Ready" },
+        { id: "done", label: "Done" }
+      ]
+    },
+    multiValue: false
   }),
-  defineFieldType({
+  createSelectFieldType({
     type: "select.multi",
-    capabilities: {
-      scalar: false,
-      multiValue: true
-    },
-    valueSchema: {
-      type: "array",
-      description: "Multi-select option ids."
-    },
-    supportedConditionOperators: ["select_has_option", "is_empty", "is_not_empty"],
     sampleInput: ["beta", "alpha", "alpha"],
-    normalizeSample: (input) => normalizeMultiSelectValue("select.multi", input),
-    indexSample(value) {
-      const raw = Array.isArray(value?.raw) ? value.raw.join(",") : "";
-
-      return {
-        textValue: raw === "" ? null : raw,
-        displayValue: raw.replaceAll(",", ", "),
-        searchText: raw.toLowerCase().replaceAll(",", " "),
-        valueHash: stableHash(value?.raw ?? null)
-      };
-    }
+    defaultConfig: {
+      options: [
+        { id: "alpha", label: "Alpha" },
+        { id: "beta", label: "Beta" },
+        { id: "gamma", label: "Gamma" }
+      ]
+    },
+    multiValue: true
   }),
   defineFieldType({
     type: "date.date",
@@ -493,10 +945,17 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
     normalizeSample: (input) => normalizeOpaqueValue("computed.readonly", input),
     indexSample: buildTextIndex
   }),
-  defineFieldType({
+  createSelectFieldType({
     type: "status.semantic",
-    sampleInput: "green",
-    normalizeSample: (input) => normalizeScalarSelectValue("status.semantic", input),
-    indexSample: buildTextIndex
+    sampleInput: "in_progress",
+    defaultConfig: {
+      options: [
+        { id: "todo", label: "Todo", semantic: "todo" },
+        { id: "in_progress", label: "In Progress", semantic: "in_progress" },
+        { id: "blocked", label: "Blocked", semantic: "blocked" },
+        { id: "done", label: "Done", semantic: "done" }
+      ]
+    },
+    multiValue: false
   })
 ];

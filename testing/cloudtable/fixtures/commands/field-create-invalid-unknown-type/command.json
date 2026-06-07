@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_field_invalid_001",
+  "commandType": "field.create",
+  "idempotencyKey": "idem_field_invalid_001",
+  "payload": {
+    "fieldId": "fld_unknown",
+    "fieldKey": "unknown",
+    "fieldType": "text.unregistered",
+    "label": "Unknown"
+  },
+  "scope": "workspace",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

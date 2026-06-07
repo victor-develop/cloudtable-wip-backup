@@ -1,0 +1,6 @@
+{
+  "allowed": false,
+  "reasons": [
+    "field_read_only:fld_status"
+  ]
+}

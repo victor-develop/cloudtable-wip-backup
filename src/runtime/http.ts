@@ -34,6 +34,28 @@ export function badRequest(message: string, details?: unknown): Response {
   );
 }
 
+export function forbidden(message: string, details?: unknown): Response {
+  return json(
+    {
+      error: "forbidden",
+      message,
+      details: details ?? null
+    },
+    { status: 403 }
+  );
+}
+
+export function conflict(message: string, details?: unknown): Response {
+  return json(
+    {
+      error: "conflict",
+      message,
+      details: details ?? null
+    },
+    { status: 409 }
+  );
+}
+
 export function notFound(message: string): Response {
   return json(
     {

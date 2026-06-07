@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "wf_pipeline",
+    "aggregateType": "workflow",
+    "commandId": "cmd_workflow_pause_001",
+    "commandType": "workflow.pause",
+    "eventId": "evt_0001",
+    "eventType": "workflow.paused",
+    "tableId": null,
+    "workspaceId": "ws_demo"
+  }
+]

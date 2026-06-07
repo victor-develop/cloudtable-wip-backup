@@ -5,7 +5,9 @@ import { createFieldTypeRegistry } from "../core/field-types/registry";
 import { createPermissionEngine } from "../core/permissions/engine";
 import { createViewPlanner } from "../core/views/planner";
 import { createWorkflowOperatorRegistry } from "../core/workflows/operator-registry";
+import type { EffectivePermissionSnapshot } from "../core/permissions/types";
 import type { CloudTableEnv } from "./env";
+import { createWorkspaceInspector } from "./workspace-inspector";
 
 export type CloudTableRuntime = {
   commandBus: ReturnType<typeof createCommandBus>;
@@ -21,7 +23,7 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
   const fieldTypeRegistry = createFieldTypeRegistry();
   const workflowOperatorRegistry = createWorkflowOperatorRegistry();
   const permissionEngine = createPermissionEngine(fieldTypeRegistry);
-  const eventLedger = createEventLedger(env.DB);
+  const eventLedger = createEventLedger(env.DB, fieldTypeRegistry);
   const commandBus = createCommandBus({
     eventLedger,
     fieldTypeRegistry,
@@ -29,7 +31,18 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
     workflowOperatorRegistry
   });
   const viewPlanner = createViewPlanner(fieldTypeRegistry, permissionEngine);
-  const agentToolRegistry = createAgentToolRegistry(permissionEngine, commandBus);
+  const workspaceInspector = createWorkspaceInspector(
+    env.DB,
+    fieldTypeRegistry,
+    workflowOperatorRegistry
+  );
+  const agentToolRegistry = createAgentToolRegistry({
+    commandBus,
+    permissionEngine,
+    viewPlanner,
+    workflowOperatorRegistry,
+    workspaceInspector
+  });
 
   return {
     agentToolRegistry,
@@ -42,3 +55,43 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
   };
 }
 
+export function createRuntimeWithSnapshot(
+  env: CloudTableEnv,
+  snapshot?: EffectivePermissionSnapshot
+): CloudTableRuntime {
+  const fieldTypeRegistry = createFieldTypeRegistry();
+  const workflowOperatorRegistry = createWorkflowOperatorRegistry();
+  const permissionEngine = createPermissionEngine(fieldTypeRegistry, {
+    snapshot
+  });
+  const eventLedger = createEventLedger(env.DB, fieldTypeRegistry);
+  const commandBus = createCommandBus({
+    eventLedger,
+    fieldTypeRegistry,
+    permissionEngine,
+    workflowOperatorRegistry
+  });
+  const viewPlanner = createViewPlanner(fieldTypeRegistry, permissionEngine);
+  const workspaceInspector = createWorkspaceInspector(
+    env.DB,
+    fieldTypeRegistry,
+    workflowOperatorRegistry
+  );
+  const agentToolRegistry = createAgentToolRegistry({
+    commandBus,
+    permissionEngine,
+    viewPlanner,
+    workflowOperatorRegistry,
+    workspaceInspector
+  });
+
+  return {
+    agentToolRegistry,
+    commandBus,
+    eventLedger,
+    fieldTypeRegistry,
+    permissionEngine,
+    viewPlanner,
+    workflowOperatorRegistry
+  };
+}

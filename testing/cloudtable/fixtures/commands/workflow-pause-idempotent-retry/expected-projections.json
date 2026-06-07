@@ -1,0 +1,12 @@
+{
+  "acceptedCommandIds": [],
+  "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+  "receiptCount": 1,
+  "receipts": [
+    {
+      "idempotencyKey": "idem_workflow_pause_001",
+      "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"user\",\n    \"principalId\": \"usr_builder\"\n  },\n  \"commandType\": \"workflow.pause\",\n  \"payload\": {\n    \"workflowId\": \"wf_pipeline\"\n  },\n  \"scope\": \"workflow\",\n  \"workspaceId\": \"ws_demo\"\n}",
+      "status": "accepted"
+    }
+  ]
+}

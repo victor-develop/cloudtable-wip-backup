@@ -89,7 +89,9 @@ export class TableCoordinatorDurableObject {
 
     const eventId = result.events[0]?.eventId;
     const published =
-      result.accepted && eventId
+      result.accepted &&
+      eventId &&
+      !result.diagnostics.includes("idempotent_replay")
         ? await publishOutboxEntries(
             this.env,
             await repository.listOutboxEntriesForEvent(eventId)

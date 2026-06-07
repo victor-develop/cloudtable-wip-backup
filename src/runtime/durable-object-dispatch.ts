@@ -1,55 +1,208 @@
 import type { CommandEnvelope, CommandScope } from "../core/commands/types";
 import type { CloudTableEnv } from "./env";
 
+export type CommandRouteMatch = {
+  commandType: string;
+  params: Record<string, string>;
+  scope: CommandScope;
+  tableId?: string;
+};
+
 type DispatchTarget = {
   namespace: DurableObjectNamespace;
   objectName: string;
   pathname: string;
 };
 
-export function scopeForRoute(
-  pathname: string
-): { scope: CommandScope; tableId?: string } | null {
-  const segments = pathname.split("/").filter(Boolean);
-
-  if (segments[0] !== "v1") {
-    return null;
+export function matchCommandRoute(
+  pathname: string,
+  method = "POST"
+): CommandRouteMatch | null {
+  if (pathname === "/v1/apps" || pathname === "/v1/bases") {
+    return {
+      commandType: "base.create",
+      params: {},
+      scope: "workspace"
+    };
   }
 
-  if (
-    pathname === "/v1/workspaces" ||
-    pathname === "/v1/apps" ||
-    pathname === "/v1/tables" ||
-    pathname === "/v1/views" ||
-    pathname === "/v1/workflows"
-  ) {
-    return { scope: "workspace" };
+  if (pathname === "/v1/tables") {
+    return {
+      commandType: "table.create",
+      params: {},
+      scope: "workspace"
+    };
   }
 
-  if (segments[1] !== "tables") {
-    return null;
+  const baseTableMatch = pathname.match(/^\/v1\/bases\/([^/]+)\/tables$/);
+  if (baseTableMatch) {
+    return {
+      commandType: "table.create",
+      params: {
+        baseId: baseTableMatch[1]
+      },
+      scope: "workspace"
+    };
   }
 
-  const tableId = segments[2];
-  if (!tableId) {
-    return null;
+  const fieldMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/fields$/);
+  if (fieldMatch) {
+    return {
+      commandType: "field.create",
+      params: {
+        tableId: fieldMatch[1]
+      },
+      scope: "workspace",
+      tableId: fieldMatch[1]
+    };
   }
 
-  const suffix = segments.slice(3);
-  const fieldRoute =
-    suffix[0] === "fields" && (suffix.length === 1 || suffix.length === 2);
-  const recordRoute =
-    suffix[0] === "records" &&
-    (suffix.length === 1 ||
-      suffix.length === 2 ||
-      (suffix.length === 1 && pathname.endsWith(":bulkPatch")));
-
-  if (fieldRoute) {
-    return { scope: "workspace", tableId };
+  const fieldUpdateMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/fields\/([^/]+)$/);
+  if (fieldUpdateMatch && (method === "PATCH" || method === "PUT")) {
+    return {
+      commandType: "field.update",
+      params: {
+        fieldId: fieldUpdateMatch[2],
+        tableId: fieldUpdateMatch[1]
+      },
+      scope: "workspace",
+      tableId: fieldUpdateMatch[1]
+    };
   }
 
-  if (recordRoute || pathname === `/v1/tables/${tableId}/records:bulkPatch`) {
-    return { scope: "table", tableId };
+  const fieldPermissionMatch = pathname.match(
+    /^\/v1\/tables\/([^/]+)\/fields\/([^/]+)\/permissions\/([^/]+)$/
+  );
+  if (fieldPermissionMatch && (method === "PUT" || method === "PATCH")) {
+    return {
+      commandType: "field.permission.configure",
+      params: {
+        fieldId: fieldPermissionMatch[2],
+        principalId: fieldPermissionMatch[3],
+        tableId: fieldPermissionMatch[1]
+      },
+      scope: "workspace",
+      tableId: fieldPermissionMatch[1]
+    };
+  }
+
+  const recordCollectionMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/records$/);
+  if (recordCollectionMatch) {
+    return {
+      commandType: "record.create",
+      params: {
+        tableId: recordCollectionMatch[1]
+      },
+      scope: "table",
+      tableId: recordCollectionMatch[1]
+    };
+  }
+
+  const recordMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/records\/([^/]+)$/);
+  if (recordMatch && (method === "PATCH" || method === "PUT" || method === "DELETE")) {
+    return {
+      commandType: method === "DELETE" ? "record.archive" : "record.update",
+      params: {
+        recordId: recordMatch[2],
+        tableId: recordMatch[1]
+      },
+      scope: "table",
+      tableId: recordMatch[1]
+    };
+  }
+
+  const viewCollectionMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/views$/);
+  if (viewCollectionMatch) {
+    return {
+      commandType: "view.create",
+      params: {
+        tableId: viewCollectionMatch[1]
+      },
+      scope: "workspace",
+      tableId: viewCollectionMatch[1]
+    };
+  }
+
+  const viewMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/views\/([^/]+)$/);
+  if (viewMatch && (method === "PATCH" || method === "PUT")) {
+    return {
+      commandType: "view.update",
+      params: {
+        tableId: viewMatch[1],
+        viewId: viewMatch[2]
+      },
+      scope: "workspace",
+      tableId: viewMatch[1]
+    };
+  }
+
+  if (pathname === "/v1/workflows") {
+    return {
+      commandType: "workflow.create",
+      params: {},
+      scope: "workflow"
+    };
+  }
+
+  const tableWorkflowMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/workflows$/);
+  if (tableWorkflowMatch) {
+    return {
+      commandType: "workflow.create",
+      params: {
+        tableId: tableWorkflowMatch[1]
+      },
+      scope: "workflow",
+      tableId: tableWorkflowMatch[1]
+    };
+  }
+
+  const workflowPublishMatch = pathname.match(/^\/v1\/workflows\/([^/]+)\/publish$/);
+  if (workflowPublishMatch && (method === "POST" || method === "PUT")) {
+    return {
+      commandType: "workflow.publish",
+      params: {
+        workflowId: workflowPublishMatch[1]
+      },
+      scope: "workflow"
+    };
+  }
+
+  const workflowPauseMatch = pathname.match(/^\/v1\/workflows\/([^/]+)\/pause$/);
+  if (workflowPauseMatch && (method === "POST" || method === "PUT")) {
+    return {
+      commandType: "workflow.pause",
+      params: {
+        workflowId: workflowPauseMatch[1]
+      },
+      scope: "workflow"
+    };
+  }
+
+  const workflowExecuteMatch = pathname.match(/^\/v1\/workflows\/([^/]+)\/execute$/);
+  if (workflowExecuteMatch && (method === "POST" || method === "PUT")) {
+    return {
+      commandType: "workflow.manual",
+      params: {
+        workflowId: workflowExecuteMatch[1]
+      },
+      scope: "workflow"
+    };
+  }
+
+  const cellMatch = pathname.match(
+    /^\/v1\/tables\/([^/]+)\/records\/([^/]+)\/cells\/([^/]+)$/
+  );
+  if (cellMatch) {
+    return {
+      commandType: "cell.set",
+      params: {
+        fieldId: cellMatch[3],
+        recordId: cellMatch[2],
+        tableId: cellMatch[1]
+      },
+      scope: "table",
+      tableId: cellMatch[1]
+    };
   }
 
   return null;

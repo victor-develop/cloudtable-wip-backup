@@ -44,6 +44,10 @@
         "queue": "cloudtable-workflow-dispatch"
       },
       {
+        "binding": "WORKFLOW_STEP_QUEUE",
+        "queue": "cloudtable-workflow-step"
+      },
+      {
         "binding": "PROJECTION_MAINTENANCE_QUEUE",
         "queue": "cloudtable-projection-maintenance"
       },
@@ -60,6 +64,9 @@
         "queue": "cloudtable-workflow-dispatch"
       },
       {
+        "queue": "cloudtable-workflow-step"
+      },
+      {
         "queue": "cloudtable-projection-maintenance"
       },
       {
@@ -74,4 +81,3 @@
     }
   ]
 }
-

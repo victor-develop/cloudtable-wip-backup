@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_alice"
+  },
+  "commandId": "cmd_record_update_001",
+  "commandType": "record.update",
+  "idempotencyKey": "idem_record_update_001",
+  "payload": {
+    "patch": {
+      "title": "Workflow patched title"
+    },
+    "recordId": "rec_001"
+  },
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

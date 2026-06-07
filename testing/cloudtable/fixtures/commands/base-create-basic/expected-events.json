@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "base_ops",
+    "aggregateType": "base",
+    "commandId": "cmd_base_create_001",
+    "commandType": "base.create",
+    "eventId": "evt_0001",
+    "eventType": "base.created",
+    "tableId": null,
+    "workspaceId": "ws_demo"
+  }
+]

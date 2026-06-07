@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "rec_001:fld_status",
+    "aggregateType": "cell",
+    "commandId": "cmd_cell_set_001",
+    "commandType": "cell.set",
+    "eventId": "evt_0001",
+    "eventType": "cell.set",
+    "tableId": "tbl_tasks",
+    "workspaceId": "ws_demo"
+  }
+]

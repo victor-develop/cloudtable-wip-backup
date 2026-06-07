@@ -76,6 +76,7 @@ export type FieldPermissionBehavior = {
 
 export type NormalizeContext = {
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type FieldSchemaContext = {
@@ -84,34 +85,42 @@ export type FieldSchemaContext = {
 
 export type CellValidationContext = {
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type DefaultValueContext = {
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type DisplayContext = {
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type IndexContext = {
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type SearchContext = {
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type OperatorContext = {
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type SortContext = {
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type PermissionContext = {
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type FieldTypeFixture =

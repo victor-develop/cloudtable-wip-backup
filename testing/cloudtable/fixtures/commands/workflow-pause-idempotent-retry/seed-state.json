@@ -1,0 +1,50 @@
+{
+  "receipts": [
+    {
+      "idempotencyKey": "idem_workflow_pause_001",
+      "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"user\",\n    \"principalId\": \"usr_builder\"\n  },\n  \"commandType\": \"workflow.pause\",\n  \"payload\": {\n    \"workflowId\": \"wf_pipeline\"\n  },\n  \"scope\": \"workflow\",\n  \"workspaceId\": \"ws_demo\"\n}",
+      "result": {
+        "accepted": true,
+        "diagnostics": [],
+        "events": [
+          {
+            "aggregateId": "wf_pipeline",
+            "aggregateType": "workflow",
+            "commandId": "cmd_workflow_pause_001",
+            "commandType": "workflow.pause",
+            "eventId": "evt_0001",
+            "eventType": "workflow.paused",
+            "tableId": null,
+            "workspaceId": "ws_demo"
+          }
+        ],
+        "permission": {
+          "allowed": true,
+          "reasons": []
+        },
+        "replayProjection": {
+          "acceptedCommandIds": [
+            "cmd_workflow_pause_001"
+          ],
+          "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+          "receiptCount": 1,
+          "receipts": [
+            {
+              "idempotencyKey": "idem_workflow_pause_001",
+              "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"user\",\n    \"principalId\": \"usr_builder\"\n  },\n  \"commandType\": \"workflow.pause\",\n  \"payload\": {\n    \"workflowId\": \"wf_pipeline\"\n  },\n  \"scope\": \"workflow\",\n  \"workspaceId\": \"ws_demo\"\n}",
+              "status": "accepted"
+            }
+          ]
+        },
+        "sideEffects": [
+          {
+            "eventId": "evt_0001",
+            "queue": "event-fanout",
+            "reason": "workflow_paused_fanout"
+          }
+        ],
+        "status": "accepted"
+      }
+    }
+  ]
+}

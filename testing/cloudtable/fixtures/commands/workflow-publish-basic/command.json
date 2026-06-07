@@ -1,0 +1,14 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_workflow_publish_001",
+  "commandType": "workflow.publish",
+  "idempotencyKey": "idem_workflow_publish_001",
+  "payload": {
+    "workflowId": "wf_pipeline"
+  },
+  "scope": "workflow",
+  "workspaceId": "ws_demo"
+}

@@ -46,6 +46,7 @@ function coerceText(value: unknown): string {
 }
 
 function createActionCommand(
+  scope: "workspace" | "table" | "workflow" | "agent-tool",
   commandType: string,
   input: Record<string, unknown>,
   context: WorkflowActionExecutionContext
@@ -54,7 +55,7 @@ function createActionCommand(
     commandId: context.commandId,
     workspaceId: context.workspaceId,
     tableId: context.tableId,
-    scope: "workflow" as const,
+    scope,
     commandType,
     actor: context.actor,
     permissionsVersion: context.permissionsVersion,
@@ -132,7 +133,8 @@ function defineAction(
   id: string,
   commandType: string,
   requiredCapabilities: readonly WorkflowOperatorCapability[],
-  fixturePayload: Record<string, unknown>
+  fixturePayload: Record<string, unknown>,
+  commandScope: "workspace" | "table" | "workflow" | "agent-tool" = "workflow"
 ): WorkflowActionDefinition {
   return {
     id,
@@ -152,8 +154,9 @@ function defineAction(
     idempotencyMode: "command_idempotency_key",
     timeoutClass: commandType === "workflow.webhook.enqueue" ? "network" : "standard",
     retryClass: commandType === "workflow.webhook.enqueue" ? "network" : "standard",
+    commandScope,
     createCommand(input, context) {
-      return createActionCommand(commandType, input, context);
+      return createActionCommand(commandScope, commandType, input, context);
     },
     fixtureContract: [
       {
@@ -435,7 +438,7 @@ const conditionOperators: readonly WorkflowConditionDefinition[] = [
 export const mvpWorkflowOperators: readonly WorkflowOperatorDefinition[] = [
   defineTrigger("record_created", ["record.created"]),
   defineTrigger("record_updated", ["record.updated"]),
-  defineTrigger("field_changed", ["record.updated"]),
+  defineTrigger("field_changed", ["cell.set"]),
   defineTrigger("scheduled", ["workflow.scheduled"]),
   defineTrigger("manual", ["workflow.manual"]),
   ...conditionOperators,
@@ -443,16 +446,23 @@ export const mvpWorkflowOperators: readonly WorkflowOperatorDefinition[] = [
     record: {
       title: "Alpha"
     }
-  }),
+  }, "table"),
+  defineAction("set_cell", "cell.set", ["records.write"], {
+    fieldId: "fld_title",
+    fieldType: "text.single_line",
+    recordId: "rec_001",
+    tableId: "tbl_tasks",
+    value: "Bravo"
+  }, "table"),
   defineAction("update_record", "record.update", ["records.write"], {
     recordId: "rec_001",
     patch: {
       title: "Bravo"
     }
-  }),
+  }, "table"),
   defineAction("archive_record", "record.archive", ["records.write"], {
     recordId: "rec_001"
-  }),
+  }, "table"),
   defineAction("send_webhook", "workflow.webhook.enqueue", ["webhooks.deliver"], {
     destination: "https://example.test/hooks/cloudtable",
     body: {

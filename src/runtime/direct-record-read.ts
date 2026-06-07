@@ -15,6 +15,12 @@ type RecordRow = {
   last_event_id: string | null;
 };
 
+type RecordFieldRow = {
+  field_key: string;
+  field_type: string;
+  id: string;
+};
+
 export async function readRecordDetail(
   db: D1Database,
   workspaceId: string,
@@ -35,7 +41,7 @@ export async function readRecordDetail(
          archived_at,
          last_event_id
        FROM records
-       WHERE workspace_id = ? AND table_id = ? AND id = ?`
+       WHERE workspace_id = ? AND table_id = ? AND id = ? AND archived_at IS NULL`
     )
     .bind(workspaceId, tableId, recordId)
     .first<RecordRow>();
@@ -61,4 +67,22 @@ export async function readRecordDetail(
     projection: projection ?? null,
     record
   };
+}
+
+export async function readRecordFields(
+  db: D1Database,
+  workspaceId: string,
+  tableId: string
+): Promise<RecordFieldRow[]> {
+  const rows = await db
+    .prepare(
+      `SELECT id, field_key, field_type
+       FROM fields
+       WHERE workspace_id = ? AND table_id = ? AND archived_at IS NULL
+       ORDER BY field_key ASC, id ASC`
+    )
+    .bind(workspaceId, tableId)
+    .all<RecordFieldRow>();
+
+  return rows.results ?? [];
 }

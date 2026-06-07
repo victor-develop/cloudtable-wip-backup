@@ -1,13 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import type { CommandEnvelope, CommandResult } from "../../../../src/core/commands/types";
-import { executeWorkflowAction, evaluateWorkflowCondition } from "../../../../src/core/workflows/execution";
+import { createCommandBus } from "../../../../src/core/commands/command-bus";
+import type { CommandEnvelope } from "../../../../src/core/commands/types";
+import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
+import {
+  evaluateWorkflowCondition,
+  executeWorkflowDefinition,
+  matchWorkflowTrigger
+} from "../../../../src/core/workflows/execution";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
 import type {
-  WorkflowActionDefinition,
-  WorkflowActionExecutor,
-  WorkflowConditionDefinition
+  WorkflowConditionDefinition,
+  WorkflowDefinition,
+  WorkflowExecutionScope,
+  WorkflowTriggerDefinition
 } from "../../../../src/core/workflows/types";
+import { InMemoryEventLedger } from "../../harness/runtime/in-memory-event-ledger";
 
 function requireCondition(id: string): WorkflowConditionDefinition {
   const definition = createWorkflowOperatorRegistry().require(id);
@@ -19,14 +27,145 @@ function requireCondition(id: string): WorkflowConditionDefinition {
   return definition;
 }
 
-function requireAction(id: string): WorkflowActionDefinition {
+function requireTrigger(id: string): WorkflowTriggerDefinition {
   const definition = createWorkflowOperatorRegistry().require(id);
 
-  if (definition.kind !== "action") {
-    throw new Error(`Expected action operator for ${id}`);
+  if (definition.kind !== "trigger") {
+    throw new Error(`Expected trigger operator for ${id}`);
   }
 
   return definition;
+}
+
+function createScope(
+  overrides: Partial<WorkflowExecutionScope> = {}
+): WorkflowExecutionScope {
+  const cell = {
+    fieldId: "fld_status",
+    fieldType: "text.single_line",
+    recordId: "rec_source_1",
+    tableId: "tbl_source",
+    value: "approved"
+  };
+
+  return {
+    cell,
+    event: {
+      commandId: "cmd_source_1",
+      commandType: "cell.set",
+      createdAt: "2026-06-07T00:00:00.000Z",
+      eventId: "evt_source_1",
+      eventType: "cell.set",
+      metadata: {
+        actor: {
+          mode: "user",
+          principalId: "usr_alice"
+        },
+        permissionScopeHash: "scope_hash",
+        permissionsVersion: 7,
+        schemaEpoch: 3,
+        scope: "table"
+      },
+      payload: {
+        fieldId: "fld_status",
+        fieldType: "text.single_line",
+        recordId: "rec_source_1",
+        value: "approved"
+      },
+      tableId: "tbl_source",
+      workspaceId: "ws_001"
+    },
+    relatedTables: {
+      destination: {
+        row: {
+          fields: {
+            owner_status: {
+              fieldId: "fld_owner_status",
+              fieldType: "text.single_line",
+              value: "pending"
+            }
+          },
+          recordId: "rec_dest_1"
+        },
+        tableId: "tbl_dest"
+      }
+    },
+    row: {
+      fields: {
+        status: cell
+      },
+      recordId: "rec_source_1"
+    },
+    table: {
+      fields: {
+        status: {
+          fieldId: "fld_status",
+          fieldType: "text.single_line",
+          value: "approved"
+        }
+      },
+      row: {
+        fields: {
+          status: cell
+        },
+        recordId: "rec_source_1"
+      },
+      tableId: "tbl_source"
+    },
+    workflow: {
+      triggerEventId: "evt_source_1",
+      workflowId: "wf_sync_status",
+      workflowRunId: "run_001"
+    },
+    ...overrides
+  };
+}
+
+function createWorkflowDefinition(): WorkflowDefinition {
+  return {
+    actions: [
+      {
+        input: {
+          fieldId: {
+            path: "relatedTables.destination.row.fields.owner_status.fieldId"
+          },
+          fieldType: {
+            path: "relatedTables.destination.row.fields.owner_status.fieldType"
+          },
+          recordId: {
+            path: "relatedTables.destination.row.recordId"
+          },
+          tableId: {
+            path: "relatedTables.destination.tableId"
+          },
+          value: {
+            path: "cell.value"
+          }
+        },
+        operatorId: "set_cell"
+      }
+    ],
+    conditions: [
+      {
+        input: {
+          left: {
+            path: "cell.value"
+          },
+          right: "approved"
+        },
+        operatorId: "equals"
+      }
+    ],
+    trigger: {
+      match: {
+        fieldId: "fld_status",
+        fromWorkflow: false,
+        tableId: "tbl_source"
+      },
+      operatorId: "field_changed"
+    },
+    workflowId: "wf_sync_status"
+  };
 }
 
 describe("workflow operator registry", () => {
@@ -58,147 +197,335 @@ describe("workflow operator registry", () => {
     ).toBe(false);
   });
 
-  it("routes workflow actions through the normal command envelope", async () => {
-    const action = requireAction("update_record");
-    const seenCommands: CommandEnvelope[] = [];
-    const executor: WorkflowActionExecutor = {
-      async execute(command): Promise<CommandResult> {
-        seenCommands.push(command);
+  it("matches field-change triggers against the stabilized cell event contract", () => {
+    const definition = createWorkflowDefinition();
 
-        return {
-          accepted: true,
-          diagnostics: [],
-          events: [],
-          permission: {
+    expect(
+      matchWorkflowTrigger(requireTrigger("field_changed"), definition.trigger, createScope())
+    ).toBe(true);
+    expect(
+      matchWorkflowTrigger(
+        requireTrigger("field_changed"),
+        definition.trigger,
+        createScope({
+          event: {
+            ...createScope().event,
+            payload: {
+              ...createScope().event.payload,
+              fieldId: "fld_other"
+            }
+          }
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("executes cross-table cell updates through the normal command bus", async () => {
+    const workflowOperatorRegistry = createWorkflowOperatorRegistry();
+    const seenCommands: CommandEnvelope[] = [];
+    const commandBus = createCommandBus({
+      eventLedger: new InMemoryEventLedger("2026-06-07T00:00:00.000Z"),
+      fieldTypeRegistry: createFieldTypeRegistry(),
+      permissionEngine: {
+        describeField() {
+          return {
+            allowsMutation: true,
+            allowsWorkflowTrigger: true,
+            readRedaction: "none" as const,
+            supportsValueVisibilityRules: false
+          };
+        },
+        evaluateCommand() {
+          return {
             allowed: true,
             reasons: []
-          },
-          replayProjection: {
-            acceptedCommandIds: [command.commandId],
-            lastLogicalTime: "2026-06-06T00:00:00.000Z",
-            receiptCount: 1,
-            receipts: []
-          },
-          sideEffects: [],
-          status: "accepted"
-        };
+          };
+        },
+        evaluateFieldAccess(field) {
+          return {
+            allowed: true,
+            fieldId: field.fieldId,
+            fieldType: field.fieldType,
+            readState: "visible" as const,
+            reasons: [],
+            writeAllowed: true
+          };
+        },
+        filterAgentTools(tools) {
+          return tools.map((tool) => ({
+            allowed: true,
+            hiddenFieldIds: [],
+            reason: null,
+            toolId: tool.id,
+            visibleFieldIds: []
+          }));
+        },
+        listSurfaces() {
+          return [];
+        },
+        projectFields() {
+          return {
+            diagnostics: [],
+            fields: {},
+            hiddenFieldIds: [],
+            redactedFieldIds: [],
+            states: {}
+          };
+        },
+        resolveAgentToolFieldVisibility() {
+          return {
+            hiddenFieldIds: [],
+            visibleFieldIds: [],
+            writableFieldIds: []
+          };
+        }
+      },
+      workflowOperatorRegistry
+    });
+    const executor = {
+      async execute(command: CommandEnvelope) {
+        seenCommands.push(command);
+        return commandBus.execute(command);
       }
     };
 
-    const result = await executeWorkflowAction(
-      action,
-      {
-        recordId: "rec_001",
-        patch: {
-          title: "Updated title"
-        }
-      },
-      {
-        actor: {
-          principalId: "wf_service",
-          mode: "workflow"
-        },
-        commandId: "cmd_0001",
-        idempotencyKey: "wf-step-0001",
-        payload: {
-          workflowRunId: "run_001",
-          workflowStepId: "step_001"
-        },
-        permissionsVersion: 7,
-        permissionScopeHash: "scope_hash",
-        schemaEpoch: 3,
-        tableId: "tbl_001",
-        workspaceId: "ws_001"
-      },
+    const result = await executeWorkflowDefinition(
+      createWorkflowDefinition(),
+      createScope(),
+      workflowOperatorRegistry,
       executor
     );
 
-    expect(result.status).toBe("accepted");
+    expect(result.matchedTrigger).toBe(true);
+    if (!result.matchedTrigger) {
+      throw new Error("workflow should have matched");
+    }
+
+    expect(result.conditionResults).toEqual([
+      {
+        operatorId: "equals",
+        passed: true,
+        resolvedInput: {
+          left: "approved",
+          right: "approved"
+        }
+      }
+    ]);
     expect(seenCommands).toEqual([
       {
         actor: {
-          principalId: "wf_service",
-          mode: "workflow"
+          mode: "workflow",
+          principalId: "wf_sync_status"
         },
-        commandId: "cmd_0001",
-        commandType: "record.update",
-        idempotencyKey: "wf-step-0001",
+        commandId: "run_001:action:0",
+        commandType: "cell.set",
+        idempotencyKey: "run_001:action:0",
         payload: {
+          fieldId: "fld_owner_status",
+          fieldType: "text.single_line",
+          recordId: "rec_dest_1",
+          tableId: "tbl_dest",
+          triggerEventId: "evt_source_1",
+          value: "approved",
+          workflowId: "wf_sync_status",
           workflowRunId: "run_001",
-          workflowStepId: "step_001",
-          recordId: "rec_001",
-          patch: {
-            title: "Updated title"
-          }
+          workflowStepId: "wf_sync_status:action:0"
         },
         permissionScopeHash: "scope_hash",
         permissionsVersion: 7,
         schemaEpoch: 3,
-        scope: "workflow",
-        tableId: "tbl_001",
+        scope: "table",
+        tableId: "tbl_dest",
         workspaceId: "ws_001"
       }
     ]);
+    expect(result.executedActions).toHaveLength(1);
+    expect(result.executedActions[0]?.result.status).toBe("accepted");
+    expect(result.executedActions[0]?.result.events[0]?.eventType).toBe("cell.set");
   });
 
-  it("preserves permission rejection from the command path", async () => {
-    const action = requireAction("archive_record");
-    const executor: WorkflowActionExecutor = {
-      async execute(): Promise<CommandResult> {
-        return {
-          accepted: false,
-          diagnostics: ["permission_denied"],
-          events: [],
-          permission: {
-            allowed: false,
-            reasons: ["workflow principal cannot archive this record"]
-          },
-          replayProjection: {
-            acceptedCommandIds: [],
-            lastLogicalTime: "2026-06-06T00:00:00.000Z",
-            receiptCount: 0,
-            receipts: []
-          },
-          sideEffects: [],
-          status: "rejected"
-        };
+  it("skips execution when conditions fail", async () => {
+    const registry = createWorkflowOperatorRegistry();
+    const executor = {
+      async execute() {
+        throw new Error("executor should not run when conditions fail");
       }
     };
 
-    const result = await executeWorkflowAction(
-      action,
-      {
-        recordId: "rec_001"
-      },
-      {
-        actor: {
-          principalId: "wf_service",
-          mode: "workflow"
-        },
-        commandId: "cmd_0002",
-        idempotencyKey: "wf-step-0002",
-        payload: {},
-        workspaceId: "ws_001"
-      },
+    const result = await executeWorkflowDefinition(
+      createWorkflowDefinition(),
+      createScope({
+        cell: {
+          fieldId: "fld_status",
+          fieldType: "text.single_line",
+          recordId: "rec_source_1",
+          tableId: "tbl_source",
+          value: "pending"
+        }
+      }),
+      registry,
       executor
     );
 
-    expect(result).toEqual({
-      accepted: false,
-      diagnostics: ["permission_denied"],
-      events: [],
-      permission: {
-        allowed: false,
-        reasons: ["workflow principal cannot archive this record"]
-      },
-      replayProjection: {
-        acceptedCommandIds: [],
-        lastLogicalTime: "2026-06-06T00:00:00.000Z",
-        receiptCount: 0,
-        receipts: []
-      },
-      sideEffects: [],
-      status: "rejected"
+    expect(result).toMatchObject({
+      matchedTrigger: true,
+      skippedReason: "conditions_failed",
+      workflowId: "wf_sync_status"
     });
+  });
+
+  it("guards against same-workflow same-cell loops and preserves command idempotency on replay", async () => {
+    const registry = createWorkflowOperatorRegistry();
+    const ledger = new InMemoryEventLedger("2026-06-07T00:00:00.000Z");
+    const commandBus = createCommandBus({
+      eventLedger: ledger,
+      fieldTypeRegistry: createFieldTypeRegistry(),
+      permissionEngine: {
+        describeField() {
+          return {
+            allowsMutation: true,
+            allowsWorkflowTrigger: true,
+            readRedaction: "none" as const,
+            supportsValueVisibilityRules: false
+          };
+        },
+        evaluateCommand() {
+          return {
+            allowed: true,
+            reasons: []
+          };
+        },
+        evaluateFieldAccess(field) {
+          return {
+            allowed: true,
+            fieldId: field.fieldId,
+            fieldType: field.fieldType,
+            readState: "visible" as const,
+            reasons: [],
+            writeAllowed: true
+          };
+        },
+        filterAgentTools(tools) {
+          return tools.map((tool) => ({
+            allowed: true,
+            hiddenFieldIds: [],
+            reason: null,
+            toolId: tool.id,
+            visibleFieldIds: []
+          }));
+        },
+        listSurfaces() {
+          return [];
+        },
+        projectFields() {
+          return {
+            diagnostics: [],
+            fields: {},
+            hiddenFieldIds: [],
+            redactedFieldIds: [],
+            states: {}
+          };
+        },
+        resolveAgentToolFieldVisibility() {
+          return {
+            hiddenFieldIds: [],
+            visibleFieldIds: [],
+            writableFieldIds: []
+          };
+        }
+      },
+      workflowOperatorRegistry: registry
+    });
+    const executor = {
+      async execute(command: CommandEnvelope) {
+        return commandBus.execute(command);
+      }
+    };
+
+    const firstRun = await executeWorkflowDefinition(
+      createWorkflowDefinition(),
+      createScope(),
+      registry,
+      executor
+    );
+    if (!firstRun.matchedTrigger) {
+      throw new Error("workflow should have matched on first run");
+    }
+
+    expect(firstRun.executedActions[0]?.result.diagnostics).toEqual([]);
+
+    const replayRun = await executeWorkflowDefinition(
+      createWorkflowDefinition(),
+      createScope(),
+      registry,
+      executor
+    );
+    if (!replayRun.matchedTrigger) {
+      throw new Error("workflow should have matched on replay");
+    }
+
+    expect(replayRun.executedActions[0]?.result.diagnostics).toEqual(["idempotent_replay"]);
+    expect(replayRun.executedActions[0]?.result.replayProjection.receiptCount).toBe(1);
+
+    const loopGuardRun = await executeWorkflowDefinition(
+      {
+        ...createWorkflowDefinition(),
+        actions: [
+          {
+            input: {
+              fieldId: {
+                path: "cell.fieldId"
+              },
+              fieldType: {
+                path: "cell.fieldType"
+              },
+              recordId: {
+                path: "cell.recordId"
+              },
+              tableId: {
+                path: "cell.tableId"
+              },
+              value: {
+                path: "cell.value"
+              }
+            },
+            operatorId: "set_cell"
+          }
+        ],
+        trigger: {
+          match: {
+            fieldId: "fld_status",
+            tableId: "tbl_source"
+          },
+          operatorId: "field_changed"
+        }
+      },
+      createScope({
+        event: {
+          ...createScope().event,
+          metadata: {
+            actor: {
+              mode: "workflow",
+              principalId: "wf_sync_status"
+            },
+            triggerEventId: "evt_source_1",
+            workflowId: "wf_sync_status"
+          }
+        }
+      }),
+      registry,
+      executor
+    );
+    if (!loopGuardRun.matchedTrigger) {
+      throw new Error("workflow should have matched loop-guard event");
+    }
+
+    expect(loopGuardRun.executedActions[0]).toMatchObject({
+      operatorId: "set_cell",
+      skipped: "loop_guard"
+    });
+    expect(loopGuardRun.executedActions[0]?.result.diagnostics).toEqual([
+      "workflow_loop_guard"
+    ]);
   });
 });

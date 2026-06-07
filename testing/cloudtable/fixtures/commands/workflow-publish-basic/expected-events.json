@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "wf_pipeline",
+    "aggregateType": "workflow",
+    "commandId": "cmd_workflow_publish_001",
+    "commandType": "workflow.publish",
+    "eventId": "evt_0001",
+    "eventType": "workflow.published",
+    "tableId": null,
+    "workspaceId": "ws_demo"
+  }
+]

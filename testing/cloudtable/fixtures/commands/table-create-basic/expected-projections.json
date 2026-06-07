@@ -1,0 +1,14 @@
+{
+  "acceptedCommandIds": [
+    "cmd_table_create_001"
+  ],
+  "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+  "receiptCount": 1,
+  "receipts": [
+    {
+      "idempotencyKey": "idem_table_create_001",
+      "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"user\",\n    \"principalId\": \"usr_builder\"\n  },\n  \"commandType\": \"table.create\",\n  \"payload\": {\n    \"baseId\": \"base_ops\",\n    \"name\": \"Tasks\",\n    \"slug\": \"tasks\",\n    \"tableId\": \"tbl_tasks\"\n  },\n  \"scope\": \"workspace\",\n  \"workspaceId\": \"ws_demo\"\n}",
+      "status": "accepted"
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+import type { JsonValue } from "../field-types/types";
 import type { CommandEnvelope } from "../commands/types";
 import type { FieldPermissionBehavior } from "../field-types/types";
 import type { AgentToolDefinition } from "../agent-tools/types";
@@ -19,6 +20,7 @@ export type FieldReadState = "visible" | "redacted" | "hidden";
 export type PermissionFieldDescriptor = {
   fieldId: string;
   fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type PermissionFieldAccess = PermissionFieldDescriptor & {

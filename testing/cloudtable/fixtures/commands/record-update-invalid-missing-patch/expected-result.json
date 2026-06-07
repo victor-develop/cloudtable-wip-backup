@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "payload_patch_must_be_object"
+  ],
+  "status": "rejected"
+}

@@ -1,0 +1,50 @@
+{
+  "receipts": [
+    {
+      "idempotencyKey": "idem_cell_conflict_001",
+      "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"user\",\n    \"principalId\": \"usr_alice\"\n  },\n  \"commandType\": \"cell.set\",\n  \"payload\": {\n    \"fieldId\": \"fld_status\",\n    \"recordId\": \"rec_001\",\n    \"value\": \"in_progress\"\n  },\n  \"scope\": \"table\",\n  \"tableId\": \"tbl_tasks\",\n  \"workspaceId\": \"ws_demo\"\n}",
+      "result": {
+        "accepted": true,
+        "diagnostics": [],
+        "events": [
+          {
+            "aggregateId": "rec_001:fld_status",
+            "aggregateType": "cell",
+            "commandId": "cmd_cell_conflict_001",
+            "commandType": "cell.set",
+            "eventId": "evt_0001",
+            "eventType": "cell.set",
+            "tableId": "tbl_tasks",
+            "workspaceId": "ws_demo"
+          }
+        ],
+        "permission": {
+          "allowed": true,
+          "reasons": []
+        },
+        "replayProjection": {
+          "acceptedCommandIds": [
+            "cmd_cell_conflict_001"
+          ],
+          "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+          "receiptCount": 1,
+          "receipts": [
+            {
+              "idempotencyKey": "idem_cell_conflict_001",
+              "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"user\",\n    \"principalId\": \"usr_alice\"\n  },\n  \"commandType\": \"cell.set\",\n  \"payload\": {\n    \"fieldId\": \"fld_status\",\n    \"recordId\": \"rec_001\",\n    \"value\": \"in_progress\"\n  },\n  \"scope\": \"table\",\n  \"tableId\": \"tbl_tasks\",\n  \"workspaceId\": \"ws_demo\"\n}",
+              "status": "accepted"
+            }
+          ]
+        },
+        "sideEffects": [
+          {
+            "eventId": "evt_0001",
+            "queue": "event-fanout",
+            "reason": "cell_set_fanout"
+          }
+        ],
+        "status": "accepted"
+      }
+    }
+  ]
+}

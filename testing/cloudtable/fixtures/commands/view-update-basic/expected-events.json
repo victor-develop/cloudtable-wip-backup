@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "view_open_tasks",
+    "aggregateType": "view",
+    "commandId": "cmd_view_update_001",
+    "commandType": "view.update",
+    "eventId": "evt_0001",
+    "eventType": "view.updated",
+    "tableId": "tbl_tasks",
+    "workspaceId": "ws_demo"
+  }
+]

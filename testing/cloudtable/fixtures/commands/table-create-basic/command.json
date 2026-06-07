@@ -1,0 +1,17 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_table_create_001",
+  "commandType": "table.create",
+  "idempotencyKey": "idem_table_create_001",
+  "payload": {
+    "baseId": "base_ops",
+    "name": "Tasks",
+    "slug": "tasks",
+    "tableId": "tbl_tasks"
+  },
+  "scope": "workspace",
+  "workspaceId": "ws_demo"
+}

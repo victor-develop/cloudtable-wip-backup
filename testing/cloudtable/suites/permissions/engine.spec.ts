@@ -6,6 +6,8 @@ import type { CommandEnvelope } from "../../../../src/core/commands/types";
 import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
 import { createPermissionEngine } from "../../../../src/core/permissions/engine";
 import type { EffectivePermissionSnapshot } from "../../../../src/core/permissions/types";
+import { createViewPlanner } from "../../../../src/core/views/planner";
+import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
 
 const registry = createFieldTypeRegistry();
 
@@ -249,7 +251,11 @@ describe("cloudtable permission engine", () => {
     const permissionEngine = createPermissionEngine(registry, {
       snapshot
     });
+    const viewPlanner = createViewPlanner(registry, permissionEngine);
     const commandBus = {
+      dryRun() {
+        throw new Error("not used in permission tests");
+      },
       execute() {
         throw new Error("not used in permission tests");
       },
@@ -257,7 +263,23 @@ describe("cloudtable permission engine", () => {
         throw new Error("not used in permission tests");
       }
     } as CommandBus;
-    const agentToolRegistry = createAgentToolRegistry(permissionEngine, commandBus);
+    const agentToolRegistry = createAgentToolRegistry({
+      commandBus,
+      permissionEngine,
+      viewPlanner,
+      workflowOperatorRegistry: createWorkflowOperatorRegistry(),
+      workspaceInspector: {
+        inspect() {
+          return {
+            apps: [],
+            tables: [],
+            views: [],
+            workflows: [],
+            workspaceId: snapshot.workspaceId
+          };
+        }
+      }
+    });
 
     const accessible = agentToolRegistry.listAccessible(
       [
@@ -273,22 +295,22 @@ describe("cloudtable permission engine", () => {
       snapshot
     );
 
-    const previewTool = accessible.find((tool) => tool.toolId === "bulk_update.preview");
-    const executeTool = accessible.find((tool) => tool.toolId === "bulk_update.execute");
+    const createViewTool = accessible.find((tool) => tool.toolId === "createView");
+    const executeTool = accessible.find((tool) => tool.toolId === "executeCommand");
 
-    expect(previewTool).toEqual({
+    expect(createViewTool).toEqual({
       allowed: true,
       hiddenFieldIds: ["customer_note"],
       reason: null,
-      toolId: "bulk_update.preview",
+      toolId: "createView",
       visibleFieldIds: ["health_score"]
     });
     expect(executeTool).toEqual({
-      allowed: false,
-      hiddenFieldIds: ["customer_note"],
-      reason: "agent_mutation_denied",
-      toolId: "bulk_update.execute",
-      visibleFieldIds: ["health_score"]
+      allowed: true,
+      hiddenFieldIds: [],
+      reason: null,
+      toolId: "executeCommand",
+      visibleFieldIds: []
     });
   });
 });

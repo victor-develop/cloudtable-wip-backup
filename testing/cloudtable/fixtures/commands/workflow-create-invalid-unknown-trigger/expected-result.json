@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "workflow_trigger_unknown:missing.trigger"
+  ],
+  "status": "rejected"
+}

@@ -1,0 +1,14 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_workflow_pause_001",
+  "commandType": "workflow.pause",
+  "idempotencyKey": "idem_workflow_pause_001",
+  "payload": {
+    "workflowId": "wf_pipeline"
+  },
+  "scope": "workflow",
+  "workspaceId": "ws_demo"
+}

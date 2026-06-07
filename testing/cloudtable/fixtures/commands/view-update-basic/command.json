@@ -1,0 +1,34 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_view_update_001",
+  "commandType": "view.update",
+  "idempotencyKey": "idem_view_update_001",
+  "payload": {
+    "filters": [
+      {
+        "fieldId": "fld_status",
+        "operatorId": "equals",
+        "value": "active"
+      }
+    ],
+    "groupByFieldId": "fld_status",
+    "sorts": [
+      {
+        "fieldId": "fld_status",
+        "mode": "descending"
+      }
+    ],
+    "viewId": "view_open_tasks",
+    "viewName": "Active Tasks",
+    "visibleFieldIds": [
+      "fld_title",
+      "fld_status"
+    ]
+  },
+  "scope": "workspace",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

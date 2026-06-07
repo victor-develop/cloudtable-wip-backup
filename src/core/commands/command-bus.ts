@@ -1,7 +1,9 @@
-import type { FieldTypeRegistry } from "../field-types/types";
+import type { EventLedger } from "../events/types";
+import type { FieldTypeRegistry, NormalizeResult } from "../field-types/types";
 import type { PermissionEngine } from "../permissions/types";
 import type { WorkflowOperatorRegistry } from "../workflows/types";
-import type { EventLedger } from "../events/types";
+import { validateDomainCommand } from "./domain";
+import { isCommandCommitError } from "./errors";
 import {
   buildAcceptedEvent,
   buildAcceptedSideEffects,
@@ -12,7 +14,6 @@ import {
   validateCommand
 } from "./transcript";
 import type { CommandEnvelope, CommandResult, IdempotencyReceipt } from "./types";
-import type { NormalizeResult } from "../field-types/types";
 
 type CommandBusDeps = {
   eventLedger: EventLedger;
@@ -24,9 +25,22 @@ type CommandBusDeps = {
 };
 
 export type CommandBus = {
+  dryRun(command: CommandEnvelope): Promise<CommandResult>;
   execute(command: CommandEnvelope): Promise<CommandResult>;
   normalizeFieldValue(fieldType: string, input: unknown): NormalizeResult;
 };
+
+type PreparedCommand =
+  | {
+      rejected: CommandResult;
+    }
+  | {
+      logicalTime: string;
+      matchedReceipt: IdempotencyReceipt | null;
+      payloadHash: string;
+      permissionDecision: CommandResult["permission"];
+      scopeKey: string;
+    };
 
 function createRejectedResult(
   diagnostics: string[],
@@ -54,47 +68,48 @@ export function createCommandBus(deps: CommandBusDeps): CommandBus {
         fieldType
       });
     },
+    async dryRun(command) {
+      const prepared = await prepareCommand(deps, command);
+      if ("rejected" in prepared) {
+        return prepared.rejected;
+      }
+
+      if (prepared.matchedReceipt) {
+        return {
+          ...cloneCommandResult(prepared.matchedReceipt.result),
+          diagnostics: ["idempotent_replay"],
+          permission: prepared.permissionDecision,
+          replayProjection: toReplayProjection(prepared.logicalTime, [
+            prepared.matchedReceipt
+          ])
+        };
+      }
+
+      return {
+        accepted: true,
+        diagnostics: ["dry_run"],
+        events: [],
+        permission: prepared.permissionDecision,
+        replayProjection: toReplayProjection(prepared.logicalTime, []),
+        sideEffects: [],
+        status: "accepted"
+      };
+    },
     async execute(command) {
-      const logicalTime = await Promise.resolve(
-        deps.now ? deps.now() : deps.eventLedger.now()
-      );
-      const scopeKey = scopeKeyForCommand(command);
-      const validationDiagnostics = validateCommand(command);
-
-      if (validationDiagnostics.length > 0) {
-        return {
-          ...createRejectedResult(validationDiagnostics, logicalTime),
-          permission: {
-            allowed: false,
-            reasons: []
-          }
-        };
+      const prepared = await prepareCommand(deps, command);
+      if ("rejected" in prepared) {
+        return prepared.rejected;
       }
 
-      const permissionDecision = deps.permissionEngine.evaluateCommand(command);
-      if (!permissionDecision.allowed) {
-        return {
-          ...createRejectedResult(permissionDecision.reasons, logicalTime),
-          permission: permissionDecision
-        };
-      }
-
-      const payloadHash = hashCommand(command);
-      const matchedReceipt = await deps.eventLedger.findReceipt(
-        scopeKey,
-        command.idempotencyKey
-      );
+      const {
+        logicalTime,
+        matchedReceipt,
+        payloadHash,
+        permissionDecision,
+        scopeKey
+      } = prepared;
 
       if (matchedReceipt) {
-        if (matchedReceipt.payloadHash !== payloadHash) {
-          return {
-            ...createRejectedResult(["idempotency_key_conflict"], logicalTime, [
-              matchedReceipt
-            ]),
-            permission: permissionDecision
-          };
-        }
-
         return {
           ...cloneCommandResult(matchedReceipt.result),
           diagnostics: ["idempotent_replay"],
@@ -111,31 +126,43 @@ export function createCommandBus(deps: CommandBusDeps): CommandBus {
         events: [event],
         permission: permissionDecision,
         replayProjection: toReplayProjection(logicalTime, []),
-        sideEffects: buildAcceptedSideEffects(eventId),
+        sideEffects: buildAcceptedSideEffects(command, eventId),
         status: "accepted"
       };
 
-      const committed = await deps.eventLedger.commitAcceptedCommand({
-        scopeKey,
-        command,
-        event: {
-          ...event,
-          payload: command.payload,
-          metadata: {
-            actor: command.actor,
-            permissionScopeHash: command.permissionScopeHash ?? null,
-            permissionsVersion: command.permissionsVersion ?? null,
-            schemaEpoch: command.schemaEpoch ?? null,
-            scope: command.scope
+      let committed;
+      try {
+        committed = await deps.eventLedger.commitAcceptedCommand({
+          scopeKey,
+          command,
+          event: {
+            ...event,
+            payload: command.payload,
+            metadata: {
+              actor: command.actor,
+              permissionScopeHash: command.permissionScopeHash ?? null,
+              permissionsVersion: command.permissionsVersion ?? null,
+              schemaEpoch: command.schemaEpoch ?? null,
+              scope: command.scope
+            },
+            createdAt: logicalTime
           },
-          createdAt: logicalTime
-        },
-        receipt: {
-          idempotencyKey: command.idempotencyKey,
-          payloadHash,
-          result
+          receipt: {
+            idempotencyKey: command.idempotencyKey,
+            payloadHash,
+            result
+          }
+        });
+      } catch (error) {
+        if (isCommandCommitError(error)) {
+          return {
+            ...createRejectedResult([error.diagnostic], logicalTime),
+            permission: permissionDecision
+          };
         }
-      });
+
+        throw error;
+      }
 
       return {
         ...result,
@@ -144,5 +171,70 @@ export function createCommandBus(deps: CommandBusDeps): CommandBus {
         ])
       };
     }
+  };
+}
+
+async function prepareCommand(
+  deps: CommandBusDeps,
+  command: CommandEnvelope
+): Promise<PreparedCommand> {
+  const logicalTime = await Promise.resolve(
+    deps.now ? deps.now() : deps.eventLedger.now()
+  );
+  const scopeKey = scopeKeyForCommand(command);
+  const validationDiagnostics = [
+      ...validateCommand(command),
+      ...validateDomainCommand(
+        command,
+        deps.fieldTypeRegistry,
+        deps.workflowOperatorRegistry
+      )
+    ];
+
+  if (validationDiagnostics.length > 0) {
+    return {
+      rejected: {
+        ...createRejectedResult(validationDiagnostics, logicalTime),
+        permission: {
+          allowed: false,
+          reasons: []
+        }
+      }
+    };
+  }
+
+  const permissionDecision = deps.permissionEngine.evaluateCommand(command);
+  if (!permissionDecision.allowed) {
+    return {
+      rejected: {
+        ...createRejectedResult(permissionDecision.reasons, logicalTime),
+        permission: permissionDecision
+      }
+    };
+  }
+
+  const payloadHash = hashCommand(command);
+  const matchedReceipt = await deps.eventLedger.findReceipt(
+    scopeKey,
+    command.idempotencyKey
+  );
+
+  if (matchedReceipt && matchedReceipt.payloadHash !== payloadHash) {
+    return {
+      rejected: {
+        ...createRejectedResult(["idempotency_key_conflict"], logicalTime, [
+          matchedReceipt
+        ]),
+        permission: permissionDecision
+      }
+    };
+  }
+
+  return {
+    logicalTime,
+    matchedReceipt,
+    payloadHash,
+    permissionDecision,
+    scopeKey
   };
 }

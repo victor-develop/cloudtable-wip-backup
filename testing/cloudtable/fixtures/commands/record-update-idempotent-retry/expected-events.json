@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "rec_retry_001",
+    "aggregateType": "record",
+    "commandId": "cmd_record_update_retry_001",
+    "commandType": "record.update",
+    "eventId": "evt_0001",
+    "eventType": "record.updated",
+    "tableId": "tbl_tasks",
+    "workspaceId": "ws_demo"
+  }
+]

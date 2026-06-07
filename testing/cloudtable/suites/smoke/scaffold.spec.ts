@@ -135,7 +135,7 @@ describe("cloudtable scaffold", () => {
     );
     expect(workflowOperators.filter((operator) => operator.kind === "trigger")).toHaveLength(5);
     expect(workflowOperators.filter((operator) => operator.kind === "condition")).toHaveLength(13);
-    expect(workflowOperators.filter((operator) => operator.kind === "action")).toHaveLength(6);
+    expect(workflowOperators.filter((operator) => operator.kind === "action")).toHaveLength(7);
     expect(createWorkflowOperatorRegistry().has("equals")).toBe(true);
     expect(() => createWorkflowOperatorRegistry().require("missing.workflow_operator")).toThrow(
       "Unknown workflow operator: missing.workflow_operator"
@@ -151,6 +151,7 @@ describe("cloudtable scaffold", () => {
       for (const fixture of fieldType.fixtures) {
         if (fixture.kind === "normalize") {
           const normalized = fieldType.normalize(fixture.input, {
+            fieldConfig: fieldType.defaultConfig,
             fieldType: fieldType.type
           });
 
@@ -158,17 +159,37 @@ describe("cloudtable scaffold", () => {
             value: fixture.expected.value,
             warnings: fixture.expected.warnings ?? []
           });
-          expect(fieldType.validateValue(normalized.value, { fieldType: fieldType.type })).toEqual({
+          expect(
+            fieldType.validateValue(normalized.value, {
+              fieldConfig: fieldType.defaultConfig,
+              fieldType: fieldType.type
+            })
+          ).toEqual({
             valid: true,
             errors: []
           });
-          expect(fieldType.toDisplay(normalized.value, { fieldType: fieldType.type })).toBe(
+          expect(
+            fieldType.toDisplay(normalized.value, {
+              fieldConfig: fieldType.defaultConfig,
+              fieldType: fieldType.type
+            })
+          ).toBe(
             fixture.expected.display
           );
-          expect(fieldType.toSearchText(normalized.value, { fieldType: fieldType.type })).toBe(
+          expect(
+            fieldType.toSearchText(normalized.value, {
+              fieldConfig: fieldType.defaultConfig,
+              fieldType: fieldType.type
+            })
+          ).toBe(
             fixture.expected.searchText
           );
-          expect(fieldType.toIndex(normalized.value, { fieldType: fieldType.type })).toEqual(
+          expect(
+            fieldType.toIndex(normalized.value, {
+              fieldConfig: fieldType.defaultConfig,
+              fieldType: fieldType.type
+            })
+          ).toEqual(
             fixture.expected.index
           );
         }

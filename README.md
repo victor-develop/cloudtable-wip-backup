@@ -7,7 +7,7 @@ The scaffold is intentionally narrow:
 - Cloudflare-native Worker, Durable Object, Queue, D1, and R2 wiring exists.
 - Core runtime boundaries are laid out for commands, event ledger, field types, permissions, workflows, views, and agent tools.
 - The first D1 migration reserves the canonical and rebuildable table families from the approved skeleton spec.
-- Deterministic testing directories and a smoke spec exist from the first commit.
+- Deterministic testing directories and a runnable runtime smoke suite exist from the first commit.
 
 ## Baseline Sources
 
@@ -73,6 +73,12 @@ Run deterministic semantic suites explicitly:
 npm run test:semantic
 ```
 
+Run the named MVP regression matrix only:
+
+```bash
+npm run test:regression
+```
+
 Run the narrow Cloudflare adapter smoke path:
 
 ```bash
@@ -91,3 +97,5 @@ npm run typecheck
 - Implement the D1 repository layer and transaction boundaries for event-first commits.
 - Add text-first replay, workflow, and view fixture corpora as product semantics get implemented.
 - Replace placeholder permission and workflow execution logic with real policy evaluation and transcript stages.
+
+The current deterministic semantic matrix is tracked in `testing/cloudtable/docs/mvp-regression-matrix.md`.

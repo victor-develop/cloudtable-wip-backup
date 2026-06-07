@@ -1,0 +1,16 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_base_create_001",
+  "commandType": "base.create",
+  "idempotencyKey": "idem_base_create_001",
+  "payload": {
+    "baseId": "base_ops",
+    "name": "Operations",
+    "slug": "operations"
+  },
+  "scope": "workspace",
+  "workspaceId": "ws_demo"
+}

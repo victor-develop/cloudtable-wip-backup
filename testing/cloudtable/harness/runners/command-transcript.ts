@@ -1,4 +1,12 @@
 import type { CommandEnvelope } from "../../../../src/core/commands/types";
+import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
+import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
+import { fanoutReasonForCommand, validateDomainCommand } from "../../../../src/core/commands/domain";
+import {
+  buildAcceptedEvent,
+  hashCommand,
+  validateCommand
+} from "../../../../src/core/commands/transcript";
 import { createDeterministicRuntime } from "../runtime/deterministic-runtime";
 import type {
   CommandFixture,
@@ -9,32 +17,14 @@ import type {
 } from "../fixtures/command-fixture";
 import { toCanonicalJson } from "../serializers/canonical-json";
 
+const fieldTypeRegistry = createFieldTypeRegistry();
+const workflowOperatorRegistry = createWorkflowOperatorRegistry();
+
 type ReceiptProjection = {
   acceptedCommandIds: string[];
   lastLogicalTime: string;
   receipts: SeedReceipt[];
 };
-
-const REQUIRED_COMMAND_FIELDS: Array<keyof CommandEnvelope> = [
-  "actor",
-  "commandId",
-  "commandType",
-  "idempotencyKey",
-  "payload",
-  "scope",
-  "workspaceId"
-];
-
-function hashCommand(command: CommandEnvelope): string {
-  return toCanonicalJson({
-    actor: command.actor,
-    commandType: command.commandType,
-    payload: command.payload,
-    scope: command.scope,
-    tableId: command.tableId,
-    workspaceId: command.workspaceId
-  }).trimEnd();
-}
 
 function toProjection(state: ReceiptProjection): CommandProjection {
   return {
@@ -49,36 +39,6 @@ function toProjection(state: ReceiptProjection): CommandProjection {
   };
 }
 
-function validateCommand(command: CommandEnvelope): string[] {
-  return REQUIRED_COMMAND_FIELDS.flatMap((field) => {
-    const value = command[field];
-    if (value === undefined || value === null) {
-      return [`missing_${field}`];
-    }
-
-    if (field === "payload" && (typeof value !== "object" || Array.isArray(value))) {
-      return ["payload_must_be_object"];
-    }
-
-    if (field === "actor") {
-      const actor = value as CommandEnvelope["actor"];
-      const diagnostics: string[] = [];
-
-      if (!actor.principalId) {
-        diagnostics.push("missing_actor_principalId");
-      }
-
-      if (!actor.mode) {
-        diagnostics.push("missing_actor_mode");
-      }
-
-      return diagnostics;
-    }
-
-    return [];
-  });
-}
-
 function buildAcceptedResult(
   command: CommandEnvelope,
   permission: PermissionExpectation,
@@ -86,26 +46,18 @@ function buildAcceptedResult(
 ): Omit<CommandTranscriptResult, "replayProjection"> {
   const runtime = createDeterministicRuntime(1);
   const eventId = runtime.nextId("evt");
+  const event = buildAcceptedEvent(command, eventId);
 
   return {
     accepted: true,
     diagnostics: [],
-    events: [
-      {
-        commandId: command.commandId,
-        commandType: command.commandType,
-        eventId,
-        eventType: "scaffold.command.accepted",
-        tableId: command.tableId ?? null,
-        workspaceId: command.workspaceId
-      }
-    ],
+    events: [event],
     permission,
     sideEffects: [
       {
         eventId,
         queue: "event-fanout",
-        reason: "placeholder"
+        reason: fanoutReasonForCommand(command)
       }
     ],
     status: "accepted"
@@ -159,7 +111,7 @@ function replayProjectionFromEvents(
           {
             eventId: events[0]?.eventId,
             queue: "event-fanout",
-            reason: "placeholder"
+            reason: fanoutReasonForCommand(command)
           }
         ],
         status: "accepted"
@@ -171,7 +123,14 @@ function replayProjectionFromEvents(
 }
 
 export function executeCommandFixture(fixture: CommandFixture): CommandTranscriptResult {
-  const diagnostics = validateCommand(fixture.command);
+  const diagnostics = [
+    ...validateCommand(fixture.command),
+    ...validateDomainCommand(
+      fixture.command,
+      fieldTypeRegistry,
+      workflowOperatorRegistry
+    )
+  ];
 
   if (diagnostics.length > 0) {
     return {

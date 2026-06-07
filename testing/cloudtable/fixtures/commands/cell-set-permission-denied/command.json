@@ -1,0 +1,17 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_viewer"
+  },
+  "commandId": "cmd_cell_denied_001",
+  "commandType": "cell.set",
+  "idempotencyKey": "idem_cell_denied_001",
+  "payload": {
+    "fieldId": "fld_status",
+    "recordId": "rec_001",
+    "value": "done"
+  },
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

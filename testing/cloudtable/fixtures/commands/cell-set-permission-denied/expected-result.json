@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "field_read_only:fld_status"
+  ],
+  "status": "rejected"
+}

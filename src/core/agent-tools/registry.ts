@@ -1,14 +1,34 @@
 import type { CommandBus } from "../commands/command-bus";
+import type { CommandEnvelope } from "../commands/types";
 import type {
   EffectivePermissionSnapshot,
   PermissionEngine,
   PermissionFieldDescriptor
 } from "../permissions/types";
+import type { ViewPlanner } from "../views/planner";
+import type { WorkflowActionDefinition, WorkflowOperatorRegistry } from "../workflows/types";
 import type {
+  AgentToolAuditDiff,
   AgentToolDefinition,
+  AgentToolId,
+  AgentToolInvocation,
+  AgentToolInvocationResult,
   AgentToolRegistry,
-  AgentToolSanitizationResult
+  AgentToolSanitizationResult,
+  WorkspaceInspector
 } from "./types";
+
+type CreateAgentToolRegistryDeps = {
+  permissionEngine: PermissionEngine;
+  commandBus: CommandBus;
+  viewPlanner: ViewPlanner;
+  workflowOperatorRegistry: WorkflowOperatorRegistry;
+  workspaceInspector: WorkspaceInspector;
+};
+
+const jsonBooleanSchema = {
+  type: "boolean"
+} as const;
 
 const jsonStringSchema = {
   type: "string"
@@ -23,18 +43,20 @@ const jsonFieldRefSchema = {
 
 const tools: AgentToolDefinition[] = [
   {
-    description: "Draft a table schema proposal from a natural-language brief.",
+    binding: {
+      kind: "query-service",
+      service: "workspaceInspector"
+    },
+    description: "Inspect the current workspace schema, view surface, workflow surface, and catalog.",
     fieldBinding: "none",
-    id: "schema.draft",
+    id: "inspectWorkspace",
     inputSchema: {
       properties: {
-        brief: {
-          description: "Natural-language table brief.",
-          type: "string"
+        include: {
+          items: jsonStringSchema,
+          type: "array"
         },
-        tableName: {
-          type: "string"
-        }
+        workspaceId: jsonStringSchema
       },
       type: "object"
     },
@@ -42,187 +64,22 @@ const tools: AgentToolDefinition[] = [
     mutationTarget: "none",
     outputSchema: {
       properties: {
-        fieldDrafts: {
-          items: jsonFieldRefSchema,
+        apps: {
           type: "array"
         },
-        notes: {
-          items: jsonStringSchema,
-          type: "array"
-        }
-      },
-      type: "object"
-    },
-    phase: "draft",
-    requiresConfirmation: false,
-    scope: "table"
-  },
-  {
-    description: "Preview the schema command plan required to create new fields.",
-    fieldBinding: "none",
-    id: "field.create.preview",
-    inputSchema: {
-      properties: {
-        fields: {
-          items: jsonFieldRefSchema,
-          type: "array"
-        }
-      },
-      type: "object"
-    },
-    mutating: false,
-    mutationTarget: "none",
-    outputSchema: {
-      properties: {
-        commandPlan: {
-          items: jsonStringSchema,
+        catalog: {
+          type: "object"
+        },
+        tables: {
           type: "array"
         },
-        proposedFieldIds: {
-          items: jsonStringSchema,
-          type: "array"
-        }
-      },
-      type: "object"
-    },
-    phase: "preview",
-    requiresConfirmation: true,
-    scope: "table",
-    successorToolId: "field.create.execute"
-  },
-  {
-    description: "Commit field creation commands after a reviewed preview.",
-    fieldBinding: "none",
-    id: "field.create.execute",
-    inputSchema: {
-      properties: {
-        fields: {
-          items: jsonFieldRefSchema,
+        views: {
           type: "array"
         },
-        previewToken: jsonStringSchema
-      },
-      type: "object"
-    },
-    mutating: true,
-    mutationTarget: "schema",
-    outputSchema: {
-      properties: {
-        eventIds: {
-          items: jsonStringSchema,
+        workflows: {
           type: "array"
         },
-        createdFieldIds: {
-          items: jsonStringSchema,
-          type: "array"
-        }
-      },
-      type: "object"
-    },
-    phase: "execute",
-    requiresConfirmation: true,
-    scope: "table"
-  },
-  {
-    description: "Draft role-focused view configurations from the visible schema surface.",
-    fieldBinding: "all-visible-fields",
-    id: "view.generate",
-    inputSchema: {
-      properties: {
-        roleName: jsonStringSchema,
-        visibleFieldIds: {
-          items: jsonStringSchema,
-          type: "array"
-        }
-      },
-      type: "object"
-    },
-    mutating: false,
-    mutationTarget: "none",
-    outputSchema: {
-      properties: {
-        filters: {
-          items: jsonFieldRefSchema,
-          type: "array"
-        },
-        groupByFieldId: jsonStringSchema,
-        sortFieldIds: {
-          items: jsonStringSchema,
-          type: "array"
-        },
-        visibleFieldIds: {
-          items: jsonStringSchema,
-          type: "array"
-        }
-      },
-      type: "object"
-    },
-    phase: "draft",
-    requiresConfirmation: false,
-    scope: "view"
-  },
-  {
-    description: "Draft a workflow trigger, conditions, and actions from a business rule.",
-    fieldBinding: "all-visible-fields",
-    id: "workflow.draft",
-    inputSchema: {
-      properties: {
-        businessRule: jsonStringSchema,
-        fieldIds: {
-          items: jsonStringSchema,
-          type: "array"
-        }
-      },
-      type: "object"
-    },
-    mutating: false,
-    mutationTarget: "none",
-    outputSchema: {
-      properties: {
-        actions: {
-          items: jsonFieldRefSchema,
-          type: "array"
-        },
-        conditions: {
-          items: jsonFieldRefSchema,
-          type: "array"
-        },
-        trigger: jsonFieldRefSchema
-      },
-      type: "object"
-    },
-    phase: "draft",
-    requiresConfirmation: false,
-    scope: "workflow"
-  },
-  {
-    description: "Explain why a principal can or cannot edit a visible field or view action.",
-    fieldBinding: "explicit-field-ids",
-    id: "permission.explain",
-    inputSchema: {
-      properties: {
-        fieldIds: {
-          items: jsonStringSchema,
-          type: "array"
-        },
-        principalId: jsonStringSchema
-      },
-      type: "object"
-    },
-    mutating: false,
-    mutationTarget: "none",
-    outputSchema: {
-      properties: {
-        explanations: {
-          items: {
-            properties: {
-              fieldId: jsonStringSchema,
-              reason: jsonStringSchema
-            },
-            type: "object"
-          },
-          type: "array"
-        }
+        workspaceId: jsonStringSchema
       },
       type: "object"
     },
@@ -231,45 +88,158 @@ const tools: AgentToolDefinition[] = [
     scope: "app"
   },
   {
-    description: "Preview a scoped bulk update against view-visible records and fields.",
-    fieldBinding: "explicit-field-ids",
-    id: "bulk_update.preview",
+    binding: {
+      commandType: "table.create",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit table.create command payload for a new app table.",
+    fieldBinding: "none",
+    id: "createTable",
     inputSchema: {
       properties: {
-        updates: {
-          items: {
-            properties: {
-              fieldId: jsonStringSchema,
-              value: {
-                type: "string"
-              }
-            },
-            type: "object"
-          },
-          type: "array"
+        appId: jsonStringSchema,
+        commandId: jsonStringSchema,
+        description: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
         },
-        viewId: jsonStringSchema
+        permissionScopeHash: jsonStringSchema,
+        primaryField: {
+          properties: {
+            fieldId: jsonStringSchema,
+            fieldType: jsonStringSchema,
+            name: jsonStringSchema,
+            required: jsonBooleanSchema
+          },
+          type: "object"
+        },
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        tableName: jsonStringSchema,
+        workspaceId: jsonStringSchema
       },
       type: "object"
     },
-    mutating: false,
-    mutationTarget: "none",
+    mutating: true,
+    mutationTarget: "schema",
     outputSchema: {
       properties: {
-        impactedFieldIds: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "table",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "field.create",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit field.create command payload for a table field.",
+    fieldBinding: "none",
+    id: "createField",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        config: {
+          type: "object"
+        },
+        fieldId: jsonStringSchema,
+        fieldType: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        name: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        required: jsonBooleanSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "schema",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "table",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "view.create",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit view.create command payload from visible field and grouping choices.",
+    fieldBinding: "explicit-field-ids",
+    id: "createView",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        filterFieldIds: {
           items: jsonStringSchema,
           type: "array"
         },
-        records: {
-          items: {
-            properties: {
-              fields: {
-                type: "object"
-              },
-              recordId: jsonStringSchema
-            },
-            type: "object"
-          },
+        groupByFieldId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        sortFieldIds: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        tableId: jsonStringSchema,
+        viewId: jsonStringSchema,
+        viewName: jsonStringSchema,
+        visibleFieldIds: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "view",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
           type: "array"
         }
       },
@@ -278,61 +248,232 @@ const tools: AgentToolDefinition[] = [
     phase: "preview",
     requiresConfirmation: true,
     scope: "view",
-    successorToolId: "bulk_update.execute"
+    successorToolId: "dryRunCommand"
   },
   {
-    description: "Commit a reviewed scoped bulk update with the caller's idempotency context.",
+    binding: {
+      commandType: "view.update",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit view.update command payload for an existing saved view.",
     fieldBinding: "explicit-field-ids",
-    id: "bulk_update.execute",
+    id: "updateView",
     inputSchema: {
       properties: {
-        previewToken: jsonStringSchema,
-        updates: {
-          items: {
-            properties: {
-              fieldId: jsonStringSchema,
-              value: {
-                type: "string"
-              }
-            },
-            type: "object"
-          },
+        commandId: jsonStringSchema,
+        filterFieldIds: {
+          items: jsonStringSchema,
           type: "array"
         },
-        viewId: jsonStringSchema
+        groupByFieldId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        sortFieldIds: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        tableId: jsonStringSchema,
+        viewId: jsonStringSchema,
+        viewName: jsonStringSchema,
+        visibleFieldIds: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        workspaceId: jsonStringSchema
       },
       type: "object"
     },
     mutating: true,
-    mutationTarget: "records",
+    mutationTarget: "view",
     outputSchema: {
       properties: {
-        eventIds: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "view",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "field.permission.configure",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit field.permission.configure command payload for one principal and field.",
+    fieldBinding: "explicit-field-ids",
+    id: "configureFieldPermission",
+    inputSchema: {
+      properties: {
+        agent: jsonBooleanSchema,
+        commandId: jsonStringSchema,
+        fieldId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        principalId: jsonStringSchema,
+        read: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workflow: jsonBooleanSchema,
+        workspaceId: jsonStringSchema,
+        write: jsonBooleanSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "permissions",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "app",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      kind: "proposal-service",
+      service: "workflowOperatorRegistry"
+    },
+    description: "Propose a workflow trigger and action plan using the registered workflow operators.",
+    fieldBinding: "explicit-field-ids",
+    id: "proposeWorkflow",
+    inputSchema: {
+      properties: {
+        actionIds: {
           items: jsonStringSchema,
           type: "array"
         },
-        impactedFieldIds: {
+        businessRule: jsonStringSchema,
+        fieldIds: {
           items: jsonStringSchema,
           type: "array"
         },
-        records: {
-          items: {
-            properties: {
-              fields: {
-                type: "object"
-              },
-              recordId: jsonStringSchema
-            },
-            type: "object"
-          },
+        name: jsonStringSchema,
+        tableId: jsonStringSchema,
+        triggerId: jsonStringSchema,
+        workflowId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        diagnostics: {
+          items: jsonStringSchema,
           type: "array"
+        },
+        diffs: {
+          type: "array"
+        },
+        proposal: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "workflow",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      kind: "command-bus",
+      operation: "dry-run"
+    },
+    description: "Dry-run an explicit command payload through the command bus for audit-ready diagnostics.",
+    fieldBinding: "none",
+    id: "dryRunCommand",
+    inputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        },
+        result: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: false,
+    scope: "app",
+    successorToolId: "executeCommand"
+  },
+  {
+    binding: {
+      kind: "command-bus",
+      operation: "execute"
+    },
+    description: "Execute a reviewed explicit command payload through the normal command bus.",
+    fieldBinding: "none",
+    id: "executeCommand",
+    inputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "command",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        result: {
+          type: "object"
         }
       },
       type: "object"
     },
     phase: "execute",
     requiresConfirmation: true,
-    scope: "view"
+    scope: "app"
   }
 ];
 
@@ -351,10 +492,13 @@ const singularFieldIdKeys = new Set([
   "targetFieldId"
 ]);
 
-export function createAgentToolRegistry(
-  permissionEngine: PermissionEngine,
-  _commandBus: CommandBus
-): AgentToolRegistry {
+export function createAgentToolRegistry({
+  permissionEngine,
+  commandBus,
+  viewPlanner,
+  workflowOperatorRegistry,
+  workspaceInspector
+}: CreateAgentToolRegistryDeps): AgentToolRegistry {
   return {
     list() {
       return [...tools];
@@ -370,6 +514,206 @@ export function createAgentToolRegistry(
 
       return tool;
     },
+    async invoke(invocation) {
+      this.require(invocation.toolId);
+
+      switch (invocation.toolId) {
+        case "inspectWorkspace":
+          return {
+            kind: "workspace-inspection",
+            workspace: await Promise.resolve(workspaceInspector.inspect(invocation.input))
+          };
+        case "createTable": {
+          const command = buildCommandEnvelope("table.create", "workspace", invocation.input, {
+            appId: invocation.input.appId,
+            description: invocation.input.description ?? null,
+            primaryField: invocation.input.primaryField,
+            tableId: invocation.input.tableId,
+            tableName: invocation.input.tableName
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "createField": {
+          const command = buildCommandEnvelope("field.create", "workspace", invocation.input, {
+            config: invocation.input.config ?? {},
+            fieldId: invocation.input.fieldId,
+            fieldType: invocation.input.fieldType,
+            name: invocation.input.name,
+            required: invocation.input.required ?? false,
+            tableId: invocation.input.tableId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "createView": {
+          const command = buildCommandEnvelope("view.create", "workspace", invocation.input, {
+            filterFieldIds: invocation.input.filterFieldIds ?? [],
+            filters: invocation.input.filters ?? [],
+            groupByFieldId: invocation.input.groupByFieldId ?? null,
+            planner: viewPlanner.describe(),
+            sortFieldIds: invocation.input.sortFieldIds ?? [],
+            sorts: invocation.input.sorts ?? [],
+            tableId: invocation.input.tableId,
+            viewId: invocation.input.viewId,
+            viewName: invocation.input.viewName,
+            visibleFieldIds: invocation.input.visibleFieldIds
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "updateView": {
+          const command = buildCommandEnvelope("view.update", "workspace", invocation.input, {
+            filterFieldIds: invocation.input.filterFieldIds ?? [],
+            filters: invocation.input.filters ?? [],
+            groupByFieldId: invocation.input.groupByFieldId ?? null,
+            planner: viewPlanner.describe(),
+            sortFieldIds: invocation.input.sortFieldIds ?? [],
+            sorts: invocation.input.sorts ?? [],
+            tableId: invocation.input.tableId,
+            viewId: invocation.input.viewId,
+            viewName: invocation.input.viewName,
+            visibleFieldIds: invocation.input.visibleFieldIds
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "configureFieldPermission": {
+          const command = buildCommandEnvelope(
+            "field.permission.configure",
+            "workspace",
+            invocation.input,
+            {
+              fieldId: invocation.input.fieldId,
+              policy: {
+                agent: invocation.input.agent,
+                read: invocation.input.read,
+                workflow: invocation.input.workflow,
+                write: invocation.input.write
+              },
+              principalId: invocation.input.principalId,
+              tableId: invocation.input.tableId
+            }
+          );
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "proposeWorkflow": {
+          const diagnostics: string[] = [];
+          const trigger = workflowOperatorRegistry.get(invocation.input.triggerId);
+          if (!trigger || trigger.kind !== "trigger") {
+            diagnostics.push(`unknown_trigger:${invocation.input.triggerId}`);
+          }
+
+          const actions = invocation.input.actionIds.flatMap((actionId) => {
+            const action = workflowOperatorRegistry.get(actionId);
+            if (!action || action.kind !== "action") {
+              diagnostics.push(`unknown_action:${actionId}`);
+              return [];
+            }
+
+            return [action];
+          });
+
+          const proposal = {
+            actions: actions.map(toWorkflowActionProposal),
+            businessRule: invocation.input.businessRule,
+            name: invocation.input.name,
+            tableId: invocation.input.tableId,
+            trigger: {
+              id: trigger?.id ?? invocation.input.triggerId,
+              kind: "trigger" as const
+            },
+            workflowId: invocation.input.workflowId
+          };
+          const command = buildCommandEnvelope("workflow.create", "workflow", invocation.input, {
+            definition: {
+              actions: actions.map((action) => ({
+                input: {},
+                operatorId: action.id
+              })),
+              conditions: [],
+              metadata: {
+                businessRule: invocation.input.businessRule,
+                name: invocation.input.name,
+                status: "draft",
+                tableId: invocation.input.tableId
+              },
+              principal: {
+                policyRevision: invocation.input.permissionsVersion,
+                principalId: invocation.input.actor.principalId,
+                schemaEpoch: invocation.input.schemaEpoch,
+                scopeHash: invocation.input.permissionScopeHash
+              },
+              trigger: {
+                match: {
+                  fieldIds: invocation.input.fieldIds ?? [],
+                  tableId: invocation.input.tableId
+                },
+                operatorId: invocation.input.triggerId
+              },
+              workflowId: invocation.input.workflowId
+            },
+            name: invocation.input.name,
+            tableId: invocation.input.tableId,
+            workflowId: invocation.input.workflowId,
+            workflowKey: invocation.input.workflowId.replace(/^wf_/, "").replaceAll("_", "-")
+          });
+
+          return {
+            kind: "workflow-proposal",
+            command,
+            proposal,
+            diffs: [
+              {
+                action: "propose",
+                after: proposal,
+                note: `Uses ${actions.length} workflow action operator(s).`,
+                path: `/workflows/${invocation.input.workflowId}`
+              }
+            ],
+            diagnostics
+          };
+        }
+        case "dryRunCommand": {
+          const result = await commandBus.dryRun(invocation.input.command);
+          return {
+            kind: "command-dry-run",
+            command: invocation.input.command,
+            diffs: summarizeCommand(invocation.input.command),
+            result
+          };
+        }
+        case "executeCommand": {
+          const result = await commandBus.execute(invocation.input.command);
+          return {
+            kind: "command-execution",
+            command: invocation.input.command,
+            result
+          };
+        }
+      }
+    },
     listAccessible(fields, snapshot) {
       return permissionEngine.filterAgentTools(tools, fields, snapshot);
     },
@@ -381,6 +725,117 @@ export function createAgentToolRegistry(
       this.require(toolId);
       return sanitizePayload(permissionEngine, payload, fields, snapshot);
     }
+  };
+}
+
+function buildCommandEnvelope(
+  commandType: string,
+  scope: CommandEnvelope["scope"],
+  input: {
+    actor: CommandEnvelope["actor"];
+    commandId: string;
+    idempotencyKey: string;
+    permissionScopeHash?: string;
+    permissionsVersion?: number;
+    schemaEpoch?: number;
+    tableId?: string;
+    workspaceId: string;
+  },
+  payload: Record<string, unknown>
+): CommandEnvelope {
+  return {
+    actor: input.actor,
+    commandId: input.commandId,
+    commandType,
+    idempotencyKey: input.idempotencyKey,
+    payload,
+    permissionScopeHash: input.permissionScopeHash,
+    permissionsVersion: input.permissionsVersion,
+    schemaEpoch: input.schemaEpoch,
+    scope,
+    tableId: input.tableId,
+    workspaceId: input.workspaceId
+  };
+}
+
+function summarizeCommand(command: CommandEnvelope): AgentToolAuditDiff[] {
+  const payload = command.payload as Record<string, unknown>;
+
+  switch (command.commandType) {
+    case "table.create":
+      return [
+        {
+          action: "create",
+          after: {
+            name: payload.tableName,
+            tableId: payload.tableId
+          },
+          path: `/apps/${payload.appId}/tables/${payload.tableId}`
+        },
+        {
+          action: "create",
+          after: payload.primaryField,
+          path: `/tables/${payload.tableId}/fields/${(payload.primaryField as Record<string, unknown>).fieldId}`
+        }
+      ];
+    case "field.create":
+      return [
+        {
+          action: "create",
+          after: payload,
+          path: `/tables/${payload.tableId}/fields/${payload.fieldId}`
+        }
+      ];
+    case "view.create":
+    case "view.update":
+      return [
+        {
+          action: command.commandType === "view.create" ? "create" : "update",
+          after: payload,
+          path: `/tables/${payload.tableId}/views/${payload.viewId}`
+        }
+      ];
+    case "field.permission.configure":
+      return [
+        {
+          action: "update",
+          after: payload,
+          path: `/tables/${payload.tableId}/fields/${payload.fieldId}/permissions/${payload.principalId}`
+        }
+      ];
+    case "workflow.create":
+      return [
+        {
+          action: "create",
+          after: payload,
+          path: `/workflows/${payload.workflowId}`
+        }
+      ];
+    case "workflow.publish":
+    case "workflow.pause":
+      return [
+        {
+          action: "update",
+          after: payload,
+          path: `/workflows/${payload.workflowId}`
+        }
+      ];
+    default:
+      return [
+        {
+          action: "propose",
+          after: payload,
+          path: `/commands/${command.commandType}`
+        }
+      ];
+  }
+}
+
+function toWorkflowActionProposal(action: WorkflowActionDefinition) {
+  return {
+    commandType: action.commandType,
+    id: action.id,
+    requiredCapabilities: action.requiredCapabilities
   };
 }
 

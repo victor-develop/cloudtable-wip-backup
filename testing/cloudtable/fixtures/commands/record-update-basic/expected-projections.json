@@ -1,0 +1,14 @@
+{
+  "acceptedCommandIds": [
+    "cmd_record_update_001"
+  ],
+  "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+  "receiptCount": 1,
+  "receipts": [
+    {
+      "idempotencyKey": "idem_record_update_001",
+      "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"user\",\n    \"principalId\": \"usr_alice\"\n  },\n  \"commandType\": \"record.update\",\n  \"payload\": {\n    \"patch\": {\n      \"title\": \"Workflow patched title\"\n    },\n    \"recordId\": \"rec_001\"\n  },\n  \"scope\": \"table\",\n  \"tableId\": \"tbl_tasks\",\n  \"workspaceId\": \"ws_demo\"\n}",
+      "status": "accepted"
+    }
+  ]
+}

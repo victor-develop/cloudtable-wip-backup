@@ -1,4 +1,10 @@
-import type { CommandActor, CommandEnvelope, CommandResult } from "../commands/types";
+import type {
+  CommandActor,
+  CommandEnvelope,
+  CommandResult,
+  CommandScope
+} from "../commands/types";
+import type { EventLedgerRecord } from "../events/types";
 import type { JsonSchema } from "../field-types/types";
 
 export type WorkflowOperatorKind = "trigger" | "condition" | "action";
@@ -38,6 +44,110 @@ export type WorkflowActionExecutionContext = {
 export type WorkflowActionExecutor = {
   execute(command: CommandEnvelope): Promise<CommandResult>;
 };
+
+export type WorkflowValueTemplate =
+  | unknown
+  | {
+      path: string;
+    };
+
+export type WorkflowFieldValue = {
+  fieldId: string;
+  fieldType?: string;
+  value: unknown;
+};
+
+export type WorkflowRowContext = {
+  recordId: string;
+  fields: Record<string, WorkflowFieldValue>;
+};
+
+export type WorkflowTableContext = {
+  tableId: string;
+  fields?: Record<string, WorkflowFieldValue>;
+  row?: WorkflowRowContext;
+};
+
+export type WorkflowCellContext = WorkflowFieldValue & {
+  recordId: string;
+  tableId: string;
+};
+
+export type WorkflowExecutionEvent = EventLedgerRecord;
+
+export type WorkflowExecutionScope = {
+  cell?: WorkflowCellContext;
+  event: WorkflowExecutionEvent;
+  relatedTables?: Record<string, WorkflowTableContext>;
+  row?: WorkflowRowContext;
+  table?: WorkflowTableContext;
+  workflow: {
+    triggerEventId: string;
+    workflowId: string;
+    workflowRunId: string;
+  };
+};
+
+export type WorkflowTriggerMatcher = {
+  eventTypes?: readonly string[];
+  fieldId?: string;
+  fromWorkflow?: boolean;
+  tableId?: string;
+};
+
+export type WorkflowTriggerBinding = {
+  operatorId: string;
+  match?: WorkflowTriggerMatcher;
+};
+
+export type WorkflowConditionBinding = {
+  input: WorkflowConditionInput;
+  operatorId: string;
+};
+
+export type WorkflowActionBinding = {
+  input: WorkflowActionInput;
+  operatorId: string;
+};
+
+export type WorkflowDefinition = {
+  actions: readonly WorkflowActionBinding[];
+  conditions: readonly WorkflowConditionBinding[];
+  principal?: {
+    policyRevision?: number;
+    principalId: string;
+    schemaEpoch?: number;
+    scopeHash?: string;
+  };
+  trigger: WorkflowTriggerBinding;
+  workflowId: string;
+};
+
+export type WorkflowConditionEvaluation = {
+  passed: boolean;
+  resolvedInput: WorkflowConditionInput;
+  operatorId: string;
+};
+
+export type WorkflowActionExecution = {
+  command: CommandEnvelope;
+  operatorId: string;
+  result: CommandResult;
+  skipped?: "loop_guard";
+};
+
+export type WorkflowExecutionResult =
+  | {
+      matchedTrigger: false;
+      workflowId: string;
+    }
+  | {
+      conditionResults: readonly WorkflowConditionEvaluation[];
+      matchedTrigger: true;
+      workflowId: string;
+      executedActions: readonly WorkflowActionExecution[];
+      skippedReason?: "conditions_failed";
+    };
 
 export type WorkflowOperatorFixture =
   | {
@@ -81,6 +191,7 @@ export type WorkflowConditionDefinition = WorkflowOperatorDefinitionBase & {
 export type WorkflowActionDefinition = WorkflowOperatorDefinitionBase & {
   kind: "action";
   commandType: string;
+  commandScope: CommandScope;
   createCommand(
     input: WorkflowActionInput,
     context: WorkflowActionExecutionContext

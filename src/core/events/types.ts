@@ -1,6 +1,8 @@
 import type { CommandEnvelope, IdempotencyReceipt } from "../commands/types";
 
 export type EventLedgerRecord = {
+  aggregateId?: string | null;
+  aggregateType?: string | null;
   eventId: string;
   workspaceId: string;
   tableId: string | null;

@@ -350,6 +350,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   workflow_id TEXT NOT NULL,
   workflow_version_id TEXT NOT NULL,
   trigger_event_id TEXT NOT NULL,
+  manual_invocation_id TEXT,
   principal_id TEXT NOT NULL,
   status TEXT NOT NULL,
   attempt_count INTEGER NOT NULL DEFAULT 0,
@@ -362,6 +363,10 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
   FOREIGN KEY (workflow_id) REFERENCES workflows (id),
   FOREIGN KEY (workflow_version_id) REFERENCES workflow_versions (id)
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_runs_manual_invocation
+  ON workflow_runs (workspace_id, workflow_id, manual_invocation_id)
+  WHERE manual_invocation_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS workflow_run_steps (
   id TEXT PRIMARY KEY,
@@ -408,4 +413,3 @@ CREATE TABLE IF NOT EXISTS workflow_dead_letters (
   FOREIGN KEY (workflow_run_id) REFERENCES workflow_runs (id),
   FOREIGN KEY (workspace_id) REFERENCES workspaces (id)
 );
-

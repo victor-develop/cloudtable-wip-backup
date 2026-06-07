@@ -1,0 +1,793 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`cloudtable MVP regression matrix > covers the deterministic MVP semantic seams with stable snapshots 1`] = `
+"[
+  {
+    "actual": {
+      "accepted": true,
+      "diagnostics": [],
+      "events": [
+        {
+          "aggregateId": "tbl_tasks",
+          "aggregateType": "table",
+          "commandId": "cmd_table_create_001",
+          "commandType": "table.create",
+          "eventId": "evt_0001",
+          "eventType": "table.created",
+          "tableId": null,
+          "workspaceId": "ws_demo"
+        }
+      ],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [
+          "cmd_table_create_001"
+        ],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 1,
+        "receipts": [
+          {
+            "idempotencyKey": "idem_table_create_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"table.create\\",\\n  \\"payload\\": {\\n    \\"appId\\": \\"app_ops\\",\\n    \\"baseId\\": \\"base_ops\\",\\n    \\"name\\": \\"Tasks\\",\\n    \\"slug\\": \\"tasks\\",\\n    \\"tableId\\": \\"tbl_tasks\\"\\n  },\\n  \\"scope\\": \\"workspace\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          }
+        ]
+      },
+      "sideEffects": [
+        {
+          "eventId": "evt_0001",
+          "queue": "event-fanout",
+          "reason": "table_created_fanout"
+        }
+      ],
+      "status": "accepted"
+    },
+    "category": "table_creation",
+    "receipts": [
+      {
+        "idempotencyKey": "idem_table_create_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"table.create\\",\\n  \\"payload\\": {\\n    \\"appId\\": \\"app_ops\\",\\n    \\"baseId\\": \\"base_ops\\",\\n    \\"name\\": \\"Tasks\\",\\n    \\"slug\\": \\"tasks\\",\\n    \\"tableId\\": \\"tbl_tasks\\"\\n  },\\n  \\"scope\\": \\"workspace\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "tbl_tasks",
+              "aggregateType": "table",
+              "commandId": "cmd_table_create_001",
+              "commandType": "table.create",
+              "eventId": "evt_0001",
+              "eventType": "table.created",
+              "tableId": null,
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "table_created_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      }
+    ],
+    "scenario": "table_create_basic"
+  },
+  {
+    "actual": {
+      "accepted": true,
+      "diagnostics": [],
+      "events": [
+        {
+          "aggregateId": "status",
+          "aggregateType": "field",
+          "commandId": "cmd_field_create_001",
+          "commandType": "field.create",
+          "eventId": "evt_0001",
+          "eventType": "field.created",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        }
+      ],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [
+          "cmd_field_create_001"
+        ],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 1,
+        "receipts": [
+          {
+            "idempotencyKey": "idem_field_create_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"field.create\\",\\n  \\"payload\\": {\\n    \\"fieldId\\": \\"status\\",\\n    \\"fieldKey\\": \\"status\\",\\n    \\"fieldType\\": \\"text.single_line\\",\\n    \\"label\\": \\"Status\\"\\n  },\\n  \\"scope\\": \\"workspace\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          }
+        ]
+      },
+      "sideEffects": [
+        {
+          "eventId": "evt_0001",
+          "queue": "event-fanout",
+          "reason": "field_created_fanout"
+        }
+      ],
+      "status": "accepted"
+    },
+    "category": "field_creation",
+    "receipts": [
+      {
+        "idempotencyKey": "idem_field_create_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"field.create\\",\\n  \\"payload\\": {\\n    \\"fieldId\\": \\"status\\",\\n    \\"fieldKey\\": \\"status\\",\\n    \\"fieldType\\": \\"text.single_line\\",\\n    \\"label\\": \\"Status\\"\\n  },\\n  \\"scope\\": \\"workspace\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "status",
+              "aggregateType": "field",
+              "commandId": "cmd_field_create_001",
+              "commandType": "field.create",
+              "eventId": "evt_0001",
+              "eventType": "field.created",
+              "tableId": "tbl_tasks",
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "field_created_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      }
+    ],
+    "scenario": "field_create_basic"
+  },
+  {
+    "actual": {
+      "accepted": true,
+      "diagnostics": [],
+      "events": [
+        {
+          "aggregateId": "rec_001:title",
+          "aggregateType": "cell",
+          "commandId": "cmd_cell_set_001",
+          "commandType": "cell.set",
+          "eventId": "evt_0001",
+          "eventType": "cell.set",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        }
+      ],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [
+          "cmd_cell_set_001"
+        ],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 1,
+        "receipts": [
+          {
+            "idempotencyKey": "idem_cell_set_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"cell.set\\",\\n  \\"payload\\": {\\n    \\"fieldId\\": \\"title\\",\\n    \\"recordId\\": \\"rec_001\\",\\n    \\"value\\": \\"Renewal committed\\"\\n  },\\n  \\"scope\\": \\"table\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          }
+        ]
+      },
+      "sideEffects": [
+        {
+          "eventId": "evt_0001",
+          "queue": "event-fanout",
+          "reason": "cell_set_fanout"
+        }
+      ],
+      "status": "accepted"
+    },
+    "category": "record_and_cell_writes",
+    "receipts": [
+      {
+        "idempotencyKey": "idem_cell_set_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"cell.set\\",\\n  \\"payload\\": {\\n    \\"fieldId\\": \\"title\\",\\n    \\"recordId\\": \\"rec_001\\",\\n    \\"value\\": \\"Renewal committed\\"\\n  },\\n  \\"scope\\": \\"table\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "rec_001:title",
+              "aggregateType": "cell",
+              "commandId": "cmd_cell_set_001",
+              "commandType": "cell.set",
+              "eventId": "evt_0001",
+              "eventType": "cell.set",
+              "tableId": "tbl_tasks",
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "cell_set_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      }
+    ],
+    "scenario": "cell_set_write"
+  },
+  {
+    "actual": {
+      "accepted": true,
+      "diagnostics": [],
+      "events": [
+        {
+          "aggregateId": "wf_follow_up",
+          "aggregateType": "workflow",
+          "commandId": "cmd_workflow_publish_001",
+          "commandType": "workflow.publish",
+          "eventId": "evt_0001",
+          "eventType": "workflow.published",
+          "tableId": null,
+          "workspaceId": "ws_demo"
+        }
+      ],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [
+          "cmd_workflow_publish_001"
+        ],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 1,
+        "receipts": [
+          {
+            "idempotencyKey": "idem_workflow_publish_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.publish\\",\\n  \\"payload\\": {\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          }
+        ]
+      },
+      "sideEffects": [
+        {
+          "eventId": "evt_0001",
+          "queue": "event-fanout",
+          "reason": "workflow_published_fanout"
+        }
+      ],
+      "status": "accepted"
+    },
+    "category": "workflow_lifecycle",
+    "receipts": [
+      {
+        "idempotencyKey": "idem_workflow_publish_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.publish\\",\\n  \\"payload\\": {\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "wf_follow_up",
+              "aggregateType": "workflow",
+              "commandId": "cmd_workflow_publish_001",
+              "commandType": "workflow.publish",
+              "eventId": "evt_0001",
+              "eventType": "workflow.published",
+              "tableId": null,
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "workflow_published_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      }
+    ],
+    "scenario": "workflow_publish_event"
+  },
+  {
+    "actual": {
+      "directRead": {
+        "diagnostics": [
+          "field_hidden:salary",
+          "field_read_only:salary",
+          "field_redacted:customer_note"
+        ],
+        "fields": {
+          "customer_note": "[redacted]",
+          "internal_note": "Only humans should see this in workflow steps",
+          "title": "Q3 Renewal"
+        },
+        "hiddenFieldIds": [
+          "salary"
+        ],
+        "redactedFieldIds": [
+          "customer_note"
+        ],
+        "states": {
+          "customer_note": "redacted",
+          "internal_note": "visible",
+          "salary": "hidden",
+          "title": "visible"
+        }
+      },
+      "viewRead": {
+        "diagnostics": [
+          "field_hidden:salary",
+          "field_read_only:salary",
+          "field_redacted:customer_note"
+        ],
+        "fields": {
+          "customer_note": "[redacted]",
+          "internal_note": "Only humans should see this in workflow steps",
+          "title": "Q3 Renewal"
+        },
+        "hiddenFieldIds": [
+          "salary"
+        ],
+        "redactedFieldIds": [
+          "customer_note"
+        ],
+        "states": {
+          "customer_note": "redacted",
+          "internal_note": "visible",
+          "salary": "hidden",
+          "title": "visible"
+        }
+      },
+      "workflowRead": {
+        "diagnostics": [
+          "workflow_hidden:salary",
+          "field_read_only:salary",
+          "workflow_redacted:customer_note",
+          "workflow_hidden:internal_note"
+        ],
+        "fields": {
+          "customer_note": "[redacted]",
+          "title": "Q3 Renewal"
+        },
+        "hiddenFieldIds": [
+          "salary",
+          "internal_note"
+        ],
+        "redactedFieldIds": [
+          "customer_note"
+        ],
+        "states": {
+          "customer_note": "redacted",
+          "internal_note": "hidden",
+          "salary": "hidden",
+          "title": "visible"
+        }
+      }
+    },
+    "category": "permissioned_reads",
+    "scenario": "permission_redaction_and_hidden_reads"
+  },
+  {
+    "actual": {
+      "field": {
+        "capabilities": {
+          "computed": false,
+          "multiValue": false,
+          "reference": false,
+          "scalar": true,
+          "supportsAgentMutation": true,
+          "supportsDefaultValue": true,
+          "supportsFiltering": true,
+          "supportsGrouping": true,
+          "supportsRequiredConstraint": true,
+          "supportsSearch": true,
+          "supportsSorting": true,
+          "supportsUniqueConstraint": true,
+          "supportsWorkflowTrigger": true,
+          "userEditable": true
+        },
+        "supportedConditionOperators": [
+          "equals",
+          "not_equals",
+          "is_empty",
+          "is_not_empty"
+        ],
+        "supportedSortModes": [
+          "ascending",
+          "descending"
+        ]
+      },
+      "planner": {
+        "consistencyModel": "view_eventual",
+        "dependsOn": [
+          "record_projection",
+          "field_index_entries",
+          "permission_engine"
+        ]
+      }
+    },
+    "category": "view_queries",
+    "scenario": "view_surface_capabilities"
+  },
+  {
+    "actual": {
+      "orderedRecordIds": [
+        "rec_001",
+        "rec_003"
+      ]
+    },
+    "category": "view_queries",
+    "scenario": "view_filter_and_sort_execution"
+  },
+  {
+    "actual": {
+      "result": {
+        "accepted": true,
+        "diagnostics": [],
+        "events": [],
+        "permission": {
+          "allowed": true,
+          "reasons": []
+        },
+        "replayProjection": {
+          "acceptedCommandIds": [
+            "cmd_workflow_001"
+          ],
+          "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+          "receiptCount": 1,
+          "receipts": []
+        },
+        "sideEffects": [],
+        "status": "accepted"
+      },
+      "seenCommands": [
+        {
+          "actor": {
+            "mode": "workflow",
+            "principalId": "wf_service"
+          },
+          "commandId": "cmd_workflow_001",
+          "commandType": "record.update",
+          "idempotencyKey": "wf-step-001",
+          "payload": {
+            "patch": {
+              "title": "Workflow patched title"
+            },
+            "recordId": "rec_001",
+            "workflowRunId": "run_001",
+            "workflowStepId": "step_001"
+          },
+          "permissionScopeHash": "scope:table:tbl_tasks",
+          "permissionsVersion": 7,
+          "schemaEpoch": 3,
+          "scope": "table",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        }
+      ]
+    },
+    "category": "workflow_execution",
+    "scenario": "workflow_action_routes_through_command_envelope"
+  },
+  {
+    "actual": {
+      "accessible": [
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "inspectWorkspace",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "createTable",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "createField",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "createView",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "updateView",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "configureFieldPermission",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "proposeWorkflow",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "dryRunCommand",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "executeCommand",
+          "visibleFieldIds": []
+        }
+      ],
+      "createFieldDraft": {
+        "command": {
+          "actor": {
+            "mode": "agent",
+            "principalId": "usr_alice"
+          },
+          "commandId": "cmd_agent_field_001",
+          "commandType": "field.create",
+          "idempotencyKey": "idem_agent_field_001",
+          "payload": {
+            "config": {},
+            "fieldId": "status",
+            "fieldType": "single_select",
+            "name": "Status",
+            "required": false,
+            "tableId": "tbl_tasks"
+          },
+          "permissionScopeHash": "scope:table:tbl_tasks",
+          "permissionsVersion": 7,
+          "schemaEpoch": 3,
+          "scope": "workspace",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        },
+        "diffs": [
+          {
+            "action": "create",
+            "after": {
+              "config": {},
+              "fieldId": "status",
+              "fieldType": "single_select",
+              "name": "Status",
+              "required": false,
+              "tableId": "tbl_tasks"
+            },
+            "path": "/tables/tbl_tasks/fields/status"
+          }
+        ],
+        "kind": "command-draft"
+      },
+      "dryRunTool": {
+        "binding": {
+          "kind": "command-bus",
+          "operation": "dry-run"
+        },
+        "description": "Dry-run an explicit command payload through the command bus for audit-ready diagnostics.",
+        "fieldBinding": "none",
+        "id": "dryRunCommand",
+        "inputSchema": {
+          "properties": {
+            "command": {
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "mutating": false,
+        "mutationTarget": "none",
+        "outputSchema": {
+          "properties": {
+            "command": {
+              "type": "object"
+            },
+            "diffs": {
+              "type": "array"
+            },
+            "result": {
+              "type": "object"
+            }
+          },
+          "type": "object"
+        },
+        "phase": "preview",
+        "requiresConfirmation": false,
+        "scope": "app",
+        "successorToolId": "executeCommand"
+      },
+      "sanitizedInput": {
+        "diagnostics": [
+          "agent_hidden:customer_note"
+        ],
+        "hiddenFieldIds": [
+          "customer_note"
+        ],
+        "sanitized": {
+          "fieldIds": [
+            "title"
+          ],
+          "updates": [
+            {
+              "fieldId": "title",
+              "value": "visible"
+            }
+          ],
+          "viewId": "view_open"
+        }
+      },
+      "sanitizedOutput": {
+        "diagnostics": [
+          "agent_hidden:customer_note"
+        ],
+        "hiddenFieldIds": [
+          "customer_note"
+        ],
+        "sanitized": {
+          "impactedFieldIds": [
+            "title"
+          ],
+          "records": [
+            {
+              "fields": {
+                "title": "Q3 Renewal"
+              },
+              "recordId": "rec_1"
+            }
+          ]
+        }
+      }
+    },
+    "category": "agent_tool_dry_runs",
+    "scenario": "agent_tool_preview_and_sanitization"
+  },
+  {
+    "actual": {
+      "receiptsByScope": {
+        "table": [],
+        "workflow": []
+      },
+      "table": {
+        "accepted": false,
+        "diagnostics": [
+          "unsupported_command_type:records.upsert"
+        ],
+        "events": [],
+        "permission": {
+          "allowed": false,
+          "reasons": []
+        },
+        "replayProjection": {
+          "acceptedCommandIds": [],
+          "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+          "receiptCount": 0,
+          "receipts": []
+        },
+        "sideEffects": [],
+        "status": "rejected"
+      },
+      "workflow": {
+        "accepted": false,
+        "diagnostics": [
+          "unsupported_command_type:records.upsert"
+        ],
+        "events": [],
+        "permission": {
+          "allowed": false,
+          "reasons": []
+        },
+        "replayProjection": {
+          "acceptedCommandIds": [],
+          "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+          "receiptCount": 0,
+          "receipts": []
+        },
+        "sideEffects": [],
+        "status": "rejected"
+      }
+    },
+    "category": "unsupported_command_rejection",
+    "scenario": "unsupported_commands_reject_without_receipts"
+  }
+]
+"
+`;

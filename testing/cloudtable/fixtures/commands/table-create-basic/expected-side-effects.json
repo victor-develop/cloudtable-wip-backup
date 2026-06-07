@@ -1,0 +1,7 @@
+[
+  {
+    "eventId": "evt_0001",
+    "queue": "event-fanout",
+    "reason": "table_created_fanout"
+  }
+]

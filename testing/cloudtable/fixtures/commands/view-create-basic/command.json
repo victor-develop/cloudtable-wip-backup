@@ -1,0 +1,26 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_view_create_001",
+  "commandType": "view.create",
+  "idempotencyKey": "idem_view_create_001",
+  "payload": {
+    "filterFieldIds": [
+      "fld_status"
+    ],
+    "groupByFieldId": null,
+    "sortFieldIds": [
+      "fld_status"
+    ],
+    "viewId": "view_open_tasks",
+    "viewName": "Open Tasks",
+    "visibleFieldIds": [
+      "fld_status"
+    ]
+  },
+  "scope": "workspace",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

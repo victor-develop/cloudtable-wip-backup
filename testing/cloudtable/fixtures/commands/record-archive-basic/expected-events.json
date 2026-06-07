@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "rec_001",
+    "aggregateType": "record",
+    "commandId": "cmd_record_archive_001",
+    "commandType": "record.archive",
+    "eventId": "evt_0001",
+    "eventType": "record.archived",
+    "tableId": "tbl_tasks",
+    "workspaceId": "ws_demo"
+  }
+]

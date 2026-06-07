@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "tbl_tasks",
+    "aggregateType": "table",
+    "commandId": "cmd_table_create_001",
+    "commandType": "table.create",
+    "eventId": "evt_0001",
+    "eventType": "table.created",
+    "tableId": null,
+    "workspaceId": "ws_demo"
+  }
+]

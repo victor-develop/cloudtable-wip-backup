@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "view_open_tasks",
+    "aggregateType": "view",
+    "commandId": "cmd_view_create_001",
+    "commandType": "view.create",
+    "eventId": "evt_0001",
+    "eventType": "view.created",
+    "tableId": "tbl_tasks",
+    "workspaceId": "ws_demo"
+  }
+]

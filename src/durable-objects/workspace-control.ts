@@ -1,7 +1,10 @@
 import type { CommandEnvelope } from "../core/commands/types";
+import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
 import { createRuntime } from "../runtime/bootstrap";
 import type { CloudTableEnv } from "../runtime/env";
 import { badRequest, json } from "../runtime/http";
+import { publishOutboxEntries } from "../runtime/queue-publisher";
+import { readWorkflowExecutionCandidate } from "../runtime/workflow-definition";
 
 type DurableObjectContextLike = DurableObjectState;
 
@@ -36,16 +39,70 @@ export class WorkspaceControlDurableObject {
 
     if (request.method === "POST" && url.pathname === "/commands") {
       const command = (await request.json()) as CommandEnvelope;
+      if (command.commandType === "workflow.manual") {
+        const workflowId =
+          typeof command.payload.workflowId === "string" ? command.payload.workflowId : null;
+        if (!workflowId) {
+          return badRequest("workflowId is required for manual workflow execution.");
+        }
+
+        const candidate = await readWorkflowExecutionCandidate(
+          this.env.DB,
+          command.workspaceId,
+          workflowId
+        );
+        if (!candidate.ok) {
+          return json(
+            {
+              coordinator: {
+                durableObject: "workspace-control",
+                objectId: this.state.id.toString()
+              },
+              result: {
+                accepted: false,
+                diagnostics: [candidate.reason],
+                events: [],
+                permission: {
+                  allowed: false,
+                  reasons: [candidate.reason]
+                },
+                replayProjection: {
+                  acceptedCommandIds: [],
+                  lastLogicalTime: new Date(0).toISOString(),
+                  receiptCount: 0,
+                  receipts: []
+                },
+                sideEffects: [],
+                status: "rejected"
+              }
+            },
+            { status: 200 }
+          );
+        }
+      }
+
       const runtime = createRuntime(this.env);
       const result = await runtime.commandBus.execute({
         ...command,
-        scope: "workspace"
+        scope: command.scope === "workflow" ? "workflow" : "workspace"
       });
+      const repository = createCloudTableD1Repository(this.env.DB, runtime.fieldTypeRegistry);
+      const eventId = result.events[0]?.eventId;
+      const published =
+        result.accepted &&
+        eventId &&
+        !result.diagnostics.includes("idempotent_replay")
+          ? await publishOutboxEntries(
+              this.env,
+              await repository.listOutboxEntriesForEvent(eventId)
+            )
+          : [];
 
       return json({
         coordinator: {
           durableObject: "workspace-control",
-          objectId: this.state.id.toString()
+          objectId: this.state.id.toString(),
+          published
         },
         result
       });

@@ -6,6 +6,11 @@ import type {
   CommandSideEffect,
   IdempotencyReceipt
 } from "./types";
+import {
+  aggregateDescriptorForCommand,
+  eventTypeForCommand,
+  fanoutReasonForCommand
+} from "./domain";
 
 const REQUIRED_COMMAND_FIELDS: Array<keyof CommandEnvelope> = [
   "actor",
@@ -53,8 +58,11 @@ export function scopeKeyForCommand(command: CommandEnvelope): string {
   switch (command.scope) {
     case "table":
       return `${command.workspaceId}:table:${command.tableId ?? "*"}`;
-    case "workflow":
-      return `${command.workspaceId}:workflow:${command.commandType}`;
+    case "workflow": {
+      const workflowId =
+        typeof command.payload.workflowId === "string" ? command.payload.workflowId : command.commandType;
+      return `${command.workspaceId}:workflow:${workflowId}`;
+    }
     case "agent-tool":
       return `${command.workspaceId}:agent-tool:${command.commandType}`;
     case "workspace":
@@ -92,22 +100,37 @@ export function validateCommand(command: CommandEnvelope): string[] {
 }
 
 export function buildAcceptedEvent(command: CommandEnvelope, eventId: string): CommandEvent {
+  const aggregate = aggregateDescriptorForCommand(command);
+
   return {
+    ...(aggregate
+      ? {
+          aggregateId: aggregate.id,
+          aggregateType: aggregate.type
+        }
+      : {}),
     commandId: command.commandId,
     commandType: command.commandType,
     eventId,
-    eventType: "scaffold.command.accepted",
+    eventType: eventTypeForCommand(command),
     tableId: command.tableId ?? null,
     workspaceId: command.workspaceId
   };
 }
 
-export function buildAcceptedSideEffects(eventId: string): CommandSideEffect[] {
+export function buildAcceptedSideEffects(
+  command: CommandEnvelope,
+  eventId: string
+): CommandSideEffect[] {
+  if (command.commandType === "workflow.webhook.enqueue") {
+    return [];
+  }
+
   return [
     {
       eventId,
       queue: "event-fanout",
-      reason: "placeholder"
+      reason: fanoutReasonForCommand(command)
     }
   ];
 }

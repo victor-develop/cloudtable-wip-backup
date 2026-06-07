@@ -1,0 +1,31 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_workflow_create_invalid_001",
+  "commandType": "workflow.create",
+  "idempotencyKey": "idem_workflow_create_invalid_001",
+  "payload": {
+    "definition": {
+      "actions": [
+        {
+          "input": {},
+          "operatorId": "set_cell"
+        }
+      ],
+      "conditions": [],
+      "trigger": {
+        "operatorId": "missing.trigger"
+      },
+      "workflowId": "wf_invalid"
+    },
+    "name": "Invalid Workflow",
+    "tableId": "tbl_tasks",
+    "workflowId": "wf_invalid",
+    "workflowKey": "invalid-workflow"
+  },
+  "scope": "workflow",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

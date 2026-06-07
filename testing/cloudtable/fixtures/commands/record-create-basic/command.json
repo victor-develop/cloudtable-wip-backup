@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_alice"
+  },
+  "commandId": "cmd_record_create_001",
+  "commandType": "record.create",
+  "idempotencyKey": "idem_record_create_001",
+  "payload": {
+    "cells": {
+      "fld_status": "todo"
+    },
+    "recordId": "rec_001"
+  },
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

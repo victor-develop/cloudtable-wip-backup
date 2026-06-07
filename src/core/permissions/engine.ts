@@ -89,7 +89,8 @@ function redactValue(
 }
 
 function extractFieldEdits(
-  command: CommandEnvelope
+  command: CommandEnvelope,
+  snapshot?: EffectivePermissionSnapshot
 ): Array<PermissionFieldDescriptor & { value?: unknown }> {
   const payload = command.payload as Record<string, unknown>;
 
@@ -102,6 +103,22 @@ function extractFieldEdits(
         value: entry.value
       }))
       .filter((entry) => entry.fieldId !== "");
+  }
+
+  if (typeof payload.patch === "object" && payload.patch !== null && !Array.isArray(payload.patch)) {
+    return Object.entries(payload.patch as Record<string, unknown>)
+      .flatMap(([fieldId, value]) => {
+        const fieldType = snapshot?.fields[fieldId]?.fieldType;
+        return typeof fieldType === "string" && fieldType.length > 0
+          ? [
+              {
+                fieldId,
+                fieldType,
+                value
+              }
+            ]
+          : [];
+      });
   }
 
   if (typeof payload.fieldId === "string" && typeof payload.fieldType === "string") {
@@ -208,7 +225,7 @@ export function createPermissionEngine(
         }
       }
 
-      for (const field of extractFieldEdits(command)) {
+      for (const field of extractFieldEdits(command, snapshot)) {
         if (field.fieldType === "") {
           reasons.push(`field_type_missing:${field.fieldId}`);
           continue;

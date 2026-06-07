@@ -25,6 +25,8 @@ export type CommandPermission = {
 };
 
 export type CommandEvent = {
+  aggregateId?: string | null;
+  aggregateType?: string | null;
   commandId: string;
   commandType: string;
   eventId: string;
