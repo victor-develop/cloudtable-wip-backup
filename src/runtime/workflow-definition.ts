@@ -12,6 +12,7 @@ type PersistedWorkflowDefinition = {
 type WorkflowDefinitionRow = {
   current_version?: number;
   published_at?: string | null;
+  version?: number;
   workflow_id?: string;
   workflow_key?: string;
   workflow_name?: string;
@@ -22,6 +23,7 @@ type WorkflowDefinitionRow = {
 export type WorkflowDefinitionMetadata = {
   currentVersion: number;
   definition: Record<string, unknown>;
+  effectiveVersion: number;
   publishedAt: string | null;
   referencedFieldIds: string[];
   status: "draft" | "published" | "paused";
@@ -41,6 +43,7 @@ export type WorkflowExecutionCandidate =
   | {
       ok: true;
       triggerTableId: string | null;
+      workflowId: string;
       workflowVersionId: string;
     };
 
@@ -120,6 +123,37 @@ export function readWorkflowReferencedFieldIds(definition: unknown): string[] {
   return Array.from(referencedFieldIds).sort();
 }
 
+async function readLatestPublishedWorkflowRow(
+  db: D1Database,
+  workspaceId: string,
+  workflowId: string
+): Promise<WorkflowDefinitionRow | null> {
+  return db
+    .prepare(
+      `SELECT
+         workflows.id AS workflow_id,
+         workflows.workflow_key AS workflow_key,
+         workflows.name AS workflow_name,
+         workflows.current_version AS current_version,
+         workflow_versions.version AS version,
+         workflow_versions.id AS workflow_version_id,
+         workflow_versions.definition_json,
+         workflow_versions.published_at AS published_at
+       FROM workflows
+       INNER JOIN workflow_versions
+         ON workflow_versions.workflow_id = workflows.id
+        AND workflow_versions.workspace_id = workflows.workspace_id
+       WHERE workflows.workspace_id = ?
+         AND workflows.id = ?
+         AND workflows.archived_at IS NULL
+         AND workflow_versions.published_at IS NOT NULL
+       ORDER BY workflow_versions.version DESC
+       LIMIT 1`
+    )
+    .bind(workspaceId, workflowId)
+    .first<WorkflowDefinitionRow>();
+}
+
 export async function readWorkflowDefinitionMetadata(
   db: D1Database,
   workspaceId: string,
@@ -166,6 +200,7 @@ export async function readWorkflowDefinitionMetadata(
   return {
     currentVersion: row.current_version ?? 0,
     definition,
+    effectiveVersion: row.version ?? row.current_version ?? 0,
     publishedAt: row.published_at ?? null,
     referencedFieldIds: readWorkflowReferencedFieldIds(parsedDefinition),
     status: workflowStatus(
@@ -185,20 +220,7 @@ export async function readWorkflowExecutionCandidate(
   workspaceId: string,
   workflowId: string
 ): Promise<WorkflowExecutionCandidate> {
-  const row = await db
-    .prepare(
-      `SELECT workflow_versions.id AS workflow_version_id, workflow_versions.definition_json
-       FROM workflows
-       INNER JOIN workflow_versions
-         ON workflow_versions.workflow_id = workflows.id
-        AND workflow_versions.workspace_id = workflows.workspace_id
-        AND workflow_versions.version = workflows.current_version
-       WHERE workflows.workspace_id = ?
-         AND workflows.id = ?
-         AND workflows.archived_at IS NULL`
-    )
-    .bind(workspaceId, workflowId)
-    .first<WorkflowDefinitionRow>();
+  const row = await readLatestPublishedWorkflowRow(db, workspaceId, workflowId);
 
   if (!row) {
     return {
@@ -234,6 +256,7 @@ export async function readWorkflowExecutionCandidate(
   return {
     ok: true,
     triggerTableId: readWorkflowTriggerTableId(definition),
+    workflowId,
     workflowVersionId: row.workflow_version_id
   };
 }

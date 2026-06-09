@@ -13,6 +13,7 @@ type FieldRow = {
   config_json: string;
   created_at: string;
   field_key: string;
+  field_order: number | null;
   field_type: string;
   field_type_version: number;
   id: string;
@@ -56,6 +57,7 @@ export type ViewDefinitionMetadata = {
       value?: JsonValue;
     }>;
     groupByFieldId: string | null;
+    showEmptyGroups: boolean;
     sortFieldIds: string[];
     sorts: Array<{
       fieldId: string;
@@ -70,6 +72,16 @@ export type ViewDefinitionMetadata = {
   viewSchemaVersion: number;
   workspaceId: string;
 };
+
+export class SchemaMetadataAccessError extends Error {
+  readonly details: unknown;
+
+  constructor(message: string, details?: unknown) {
+    super(message);
+    this.name = "SchemaMetadataAccessError";
+    this.details = details ?? null;
+  }
+}
 
 export async function readTableSchemaMetadata(
   db: D1Database,
@@ -100,10 +112,16 @@ export async function readTableSchemaMetadata(
          field_type,
          field_type_version,
          config_json,
-         created_at
+         created_at,
+         field_order
        FROM fields
        WHERE workspace_id = ? AND table_id = ? AND archived_at IS NULL
-       ORDER BY created_at ASC, id ASC`
+       ORDER BY
+         CASE WHEN field_order IS NULL THEN 0 ELSE 1 END ASC,
+         CASE WHEN field_order IS NULL THEN created_at ELSE NULL END ASC,
+         CASE WHEN field_order IS NULL THEN id ELSE NULL END ASC,
+         field_order ASC,
+         id ASC`
     )
     .bind(input.workspaceId, input.tableId)
     .all<FieldRow>();
@@ -211,6 +229,7 @@ export async function readViewDefinitionMetadata(
               operatorId: "is_not_empty"
             })),
       groupByFieldId: typeof parsed.groupByFieldId === "string" ? parsed.groupByFieldId : null,
+      showEmptyGroups: parsed.showEmptyGroups === true,
       sortFieldIds,
       sorts:
         sorts.length > 0

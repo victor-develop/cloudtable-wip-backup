@@ -1,0 +1,21 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_field_invalid_relation_config_001",
+  "commandType": "field.create",
+  "idempotencyKey": "idem_field_invalid_relation_config_001",
+  "payload": {
+    "config": {
+      "allowMultiple": "yes"
+    },
+    "fieldId": "fld_related_task",
+    "fieldKey": "relatedTask",
+    "fieldType": "relation.record",
+    "label": "Related Task"
+  },
+  "scope": "workspace",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

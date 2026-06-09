@@ -24,6 +24,14 @@ const SUPPORTED_DOMAIN_COMMAND_SPECS = {
     eventType: "field.updated",
     fanoutReason: "field_updated_fanout"
   },
+  "field.archive": {
+    eventType: "field.archived",
+    fanoutReason: "field_archived_fanout"
+  },
+  "field.reorder": {
+    eventType: "field.reordered",
+    fanoutReason: "field_reordered_fanout"
+  },
   "field.permission.configure": {
     eventType: "field.permission.configured",
     fanoutReason: "field_permission_configured_fanout"
@@ -36,9 +44,17 @@ const SUPPORTED_DOMAIN_COMMAND_SPECS = {
     eventType: "view.updated",
     fanoutReason: "view_updated_fanout"
   },
+  "view.delete": {
+    eventType: "view.deleted",
+    fanoutReason: "view_deleted_fanout"
+  },
   "workflow.create": {
     eventType: "workflow.created",
     fanoutReason: "workflow_created_fanout"
+  },
+  "workflow.update": {
+    eventType: "workflow.updated",
+    fanoutReason: "workflow_updated_fanout"
   },
   "workflow.publish": {
     eventType: "workflow.published",
@@ -56,6 +72,14 @@ const SUPPORTED_DOMAIN_COMMAND_SPECS = {
     eventType: "workflow.webhook.enqueued",
     fanoutReason: "workflow_webhook_enqueued"
   },
+  "job.enqueue": {
+    eventType: "job.enqueued",
+    fanoutReason: "job_enqueued_fanout"
+  },
+  "notification.emit": {
+    eventType: "notification.emitted",
+    fanoutReason: "notification_emitted_fanout"
+  },
   "record.create": {
     eventType: "record.created",
     fanoutReason: "record_created_fanout"
@@ -63,6 +87,10 @@ const SUPPORTED_DOMAIN_COMMAND_SPECS = {
   "record.update": {
     eventType: "record.updated",
     fanoutReason: "record_updated_fanout"
+  },
+  "records.bulk_patch": {
+    eventType: "records.bulk_patched",
+    fanoutReason: "records_bulk_patched_fanout"
   },
   "record.archive": {
     eventType: "record.archived",
@@ -104,9 +132,14 @@ export function aggregateDescriptorForCommand(
       return tableId ? { id: tableId, type: "table" } : null;
     }
     case "field.create":
-    case "field.update": {
+    case "field.update":
+    case "field.archive": {
       const fieldId = asString(command.payload.fieldId);
       return fieldId ? { id: fieldId, type: "field" } : null;
+    }
+    case "field.reorder": {
+      const tableId = asString(command.tableId);
+      return tableId ? { id: tableId, type: "table" } : null;
     }
     case "field.permission.configure": {
       const fieldId = asString(command.payload.fieldId);
@@ -116,20 +149,30 @@ export function aggregateDescriptorForCommand(
       return null;
     }
     case "record.update":
+    case "records.bulk_patch":
     case "record.archive": {
+      if (command.commandType === "records.bulk_patch") {
+        const tableId = asString(command.tableId);
+        return tableId ? { id: tableId, type: "table" } : null;
+      }
+
       const recordId = asString(command.payload.recordId);
       return recordId ? { id: recordId, type: "record" } : null;
     }
     case "view.create":
-    case "view.update": {
+    case "view.update":
+    case "view.delete": {
       const viewId = asString(command.payload.viewId);
       return viewId ? { id: viewId, type: "view" } : null;
     }
     case "workflow.create":
+    case "workflow.update":
     case "workflow.publish":
     case "workflow.pause":
     case "workflow.manual":
-    case "workflow.webhook.enqueue": {
+    case "workflow.webhook.enqueue":
+    case "job.enqueue":
+    case "notification.emit": {
       const workflowId = asString(command.payload.workflowId);
       return workflowId ? { id: workflowId, type: "workflow" } : null;
     }
@@ -197,6 +240,7 @@ export function validateDomainCommand(
       break;
     case "field.create":
     case "field.update":
+    case "field.archive":
       requireString("fieldId");
       if (typeof command.tableId !== "string" || command.tableId.length === 0) {
         diagnostics.push("missing_tableId");
@@ -230,8 +274,24 @@ export function validateDomainCommand(
         diagnostics.push(
           command.commandType === "field.create"
             ? "invalid_scope_for_field_create"
-            : "invalid_scope_for_field_update"
+            : command.commandType === "field.update"
+              ? "invalid_scope_for_field_update"
+              : "invalid_scope_for_field_archive"
         );
+      }
+      break;
+    case "field.reorder":
+      if (typeof command.tableId !== "string" || command.tableId.length === 0) {
+        diagnostics.push("missing_tableId");
+      }
+      if (
+        !Array.isArray(payload.fieldIds) ||
+        payload.fieldIds.some((fieldId) => typeof fieldId !== "string" || fieldId.length === 0)
+      ) {
+        diagnostics.push("payload_fieldIds_must_be_string_array");
+      }
+      if (command.scope !== "workspace") {
+        diagnostics.push("invalid_scope_for_field_reorder");
       }
       break;
     case "field.permission.configure": {
@@ -278,84 +338,100 @@ export function validateDomainCommand(
       break;
     case "view.create":
     case "view.update":
+    case "view.delete":
       requireString("viewId");
-      requireString("viewName");
+      if (command.commandType !== "view.delete") {
+        requireString("viewName");
+      }
       if (typeof command.tableId !== "string" || command.tableId.length === 0) {
         diagnostics.push("missing_tableId");
       }
-      if (
-        payload.visibleFieldIds !== undefined &&
-        (!Array.isArray(payload.visibleFieldIds) ||
-          payload.visibleFieldIds.some((fieldId) => typeof fieldId !== "string"))
-      ) {
-        diagnostics.push("payload_visibleFieldIds_must_be_string_array");
-      }
-      if (
-        payload.filterFieldIds !== undefined &&
-        (!Array.isArray(payload.filterFieldIds) ||
-          payload.filterFieldIds.some((fieldId) => typeof fieldId !== "string"))
-      ) {
-        diagnostics.push("payload_filterFieldIds_must_be_string_array");
-      }
-      if (
-        payload.sortFieldIds !== undefined &&
-        (!Array.isArray(payload.sortFieldIds) ||
-          payload.sortFieldIds.some((fieldId) => typeof fieldId !== "string"))
-      ) {
-        diagnostics.push("payload_sortFieldIds_must_be_string_array");
-      }
-      if (
-        payload.filters !== undefined &&
-        (!Array.isArray(payload.filters) ||
-          payload.filters.some(
-            (filter) =>
-              typeof filter !== "object" ||
-              filter === null ||
-              Array.isArray(filter) ||
-              typeof (filter as Record<string, unknown>).fieldId !== "string" ||
-              typeof (filter as Record<string, unknown>).operatorId !== "string" ||
-              ("comparator" in (filter as Record<string, unknown>) &&
-                (filter as Record<string, unknown>).comparator !== undefined &&
-                typeof (filter as Record<string, unknown>).comparator !== "string")
-          ))
-      ) {
-        diagnostics.push("payload_filters_must_be_filter_definition_array");
-      }
-      if (
-        payload.sorts !== undefined &&
-        (!Array.isArray(payload.sorts) ||
-          payload.sorts.some(
-            (sort) =>
-              typeof sort !== "object" ||
-              sort === null ||
-              Array.isArray(sort) ||
-              typeof (sort as Record<string, unknown>).fieldId !== "string" ||
-              ("mode" in (sort as Record<string, unknown>) &&
-                (sort as Record<string, unknown>).mode !== undefined &&
-                typeof (sort as Record<string, unknown>).mode !== "string")
-          ))
-      ) {
-        diagnostics.push("payload_sorts_must_be_sort_definition_array");
-      }
-      if (
-        payload.groupByFieldId !== undefined &&
-        payload.groupByFieldId !== null &&
-        typeof payload.groupByFieldId !== "string"
-      ) {
-        diagnostics.push("payload_groupByFieldId_must_be_string_or_null");
+      if (command.commandType !== "view.delete") {
+        if (
+          payload.visibleFieldIds !== undefined &&
+          (!Array.isArray(payload.visibleFieldIds) ||
+            payload.visibleFieldIds.some((fieldId) => typeof fieldId !== "string"))
+        ) {
+          diagnostics.push("payload_visibleFieldIds_must_be_string_array");
+        }
+        if (
+          payload.filterFieldIds !== undefined &&
+          (!Array.isArray(payload.filterFieldIds) ||
+            payload.filterFieldIds.some((fieldId) => typeof fieldId !== "string"))
+        ) {
+          diagnostics.push("payload_filterFieldIds_must_be_string_array");
+        }
+        if (
+          payload.sortFieldIds !== undefined &&
+          (!Array.isArray(payload.sortFieldIds) ||
+            payload.sortFieldIds.some((fieldId) => typeof fieldId !== "string"))
+        ) {
+          diagnostics.push("payload_sortFieldIds_must_be_string_array");
+        }
+        if (
+          payload.filters !== undefined &&
+          (!Array.isArray(payload.filters) ||
+            payload.filters.some(
+              (filter) =>
+                typeof filter !== "object" ||
+                filter === null ||
+                Array.isArray(filter) ||
+                typeof (filter as Record<string, unknown>).fieldId !== "string" ||
+                typeof (filter as Record<string, unknown>).operatorId !== "string" ||
+                ("comparator" in (filter as Record<string, unknown>) &&
+                  (filter as Record<string, unknown>).comparator !== undefined &&
+                  typeof (filter as Record<string, unknown>).comparator !== "string")
+            ))
+        ) {
+          diagnostics.push("payload_filters_must_be_filter_definition_array");
+        }
+        if (
+          payload.sorts !== undefined &&
+          (!Array.isArray(payload.sorts) ||
+            payload.sorts.some(
+              (sort) =>
+                typeof sort !== "object" ||
+                sort === null ||
+                Array.isArray(sort) ||
+                typeof (sort as Record<string, unknown>).fieldId !== "string" ||
+                ("mode" in (sort as Record<string, unknown>) &&
+                  (sort as Record<string, unknown>).mode !== undefined &&
+                  typeof (sort as Record<string, unknown>).mode !== "string")
+            ))
+        ) {
+          diagnostics.push("payload_sorts_must_be_sort_definition_array");
+        }
+        if (
+          payload.groupByFieldId !== undefined &&
+          payload.groupByFieldId !== null &&
+          typeof payload.groupByFieldId !== "string"
+        ) {
+          diagnostics.push("payload_groupByFieldId_must_be_string_or_null");
+        }
+        if (
+          payload.showEmptyGroups !== undefined &&
+          typeof payload.showEmptyGroups !== "boolean"
+        ) {
+          diagnostics.push("payload_showEmptyGroups_must_be_boolean");
+        }
       }
       if (command.scope !== "workspace") {
         diagnostics.push(
           command.commandType === "view.create"
             ? "invalid_scope_for_view_create"
-            : "invalid_scope_for_view_update"
+            : command.commandType === "view.update"
+              ? "invalid_scope_for_view_update"
+              : "invalid_scope_for_view_delete"
         );
       }
       break;
-    case "workflow.create": {
+    case "workflow.create":
+    case "workflow.update": {
       requireString("workflowId");
-      requireString("workflowKey");
       requireString("name");
+      if (command.commandType === "workflow.create") {
+        requireString("workflowKey");
+      }
       if (
         typeof payload.definition !== "object" ||
         payload.definition === null ||
@@ -381,7 +457,11 @@ export function validateDomainCommand(
       );
 
       if (command.scope !== "workflow") {
-        diagnostics.push("invalid_scope_for_workflow_create");
+        diagnostics.push(
+          command.commandType === "workflow.create"
+            ? "invalid_scope_for_workflow_create"
+            : "invalid_scope_for_workflow_update"
+        );
       }
       break;
     }
@@ -440,6 +520,39 @@ export function validateDomainCommand(
         diagnostics.push("invalid_scope_for_workflow_webhook_enqueue");
       }
       break;
+    case "job.enqueue":
+      requireString("workflowId");
+      requireString("workflowRunId");
+      requireString("workflowStepId");
+      requireString("triggerEventId");
+      requireString("jobType");
+      if (
+        payload.args !== undefined &&
+        (typeof payload.args !== "object" || payload.args === null || Array.isArray(payload.args))
+      ) {
+        diagnostics.push("payload_args_must_be_object");
+      }
+      if (command.scope !== "workflow") {
+        diagnostics.push("invalid_scope_for_job_enqueue");
+      }
+      break;
+    case "notification.emit":
+      requireString("workflowId");
+      requireString("workflowRunId");
+      requireString("workflowStepId");
+      requireString("triggerEventId");
+      requireString("channel");
+      requireString("message");
+      if (
+        payload.details !== undefined &&
+        (typeof payload.details !== "object" || payload.details === null || Array.isArray(payload.details))
+      ) {
+        diagnostics.push("payload_details_must_be_object");
+      }
+      if (command.scope !== "workflow") {
+        diagnostics.push("invalid_scope_for_notification_emit");
+      }
+      break;
     case "record.update":
       requireString("recordId");
       if (typeof command.tableId !== "string" || command.tableId.length === 0) {
@@ -463,6 +576,30 @@ export function validateDomainCommand(
       }
       if (command.scope !== "table") {
         diagnostics.push("invalid_scope_for_record_archive");
+      }
+      break;
+    case "records.bulk_patch":
+      if (typeof command.tableId !== "string" || command.tableId.length === 0) {
+        diagnostics.push("missing_tableId");
+      }
+      if (
+        !Array.isArray(payload.updates) ||
+        payload.updates.length === 0 ||
+        payload.updates.some(
+          (entry) =>
+            typeof entry !== "object" ||
+            entry === null ||
+            Array.isArray(entry) ||
+            typeof (entry as Record<string, unknown>).recordId !== "string" ||
+            typeof (entry as Record<string, unknown>).patch !== "object" ||
+            (entry as Record<string, unknown>).patch === null ||
+            Array.isArray((entry as Record<string, unknown>).patch)
+        )
+      ) {
+        diagnostics.push("payload_updates_must_be_non_empty_array");
+      }
+      if (command.scope !== "table") {
+        diagnostics.push("invalid_scope_for_records_bulk_patch");
       }
       break;
     case "cell.set":

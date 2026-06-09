@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "Expected number.decimal value to use at most 2 decimal places."
+  ],
+  "status": "rejected"
+}

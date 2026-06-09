@@ -1,0 +1,21 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_field_invalid_date_config_001",
+  "commandType": "field.create",
+  "idempotencyKey": "idem_field_invalid_date_config_001",
+  "payload": {
+    "config": {
+      "timezone": "UTC"
+    },
+    "fieldId": "fld_due_date",
+    "fieldKey": "dueDate",
+    "fieldType": "date.date",
+    "label": "Due Date"
+  },
+  "scope": "workspace",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

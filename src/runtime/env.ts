@@ -5,12 +5,23 @@ export type QueueKind =
   | "projection-maintenance"
   | "dead-letter-reprocessor";
 
+export type WorkflowStepRetryClass = "standard" | "network";
+
+export type WorkflowStepRetryMetadata = {
+  attempt: number;
+  delaySeconds: number;
+  maxAttempts: number;
+  nextAttemptAt: string;
+  retryClass: WorkflowStepRetryClass;
+};
+
 export type CloudTableQueueMessage = {
   kind: QueueKind;
-  workspaceId: string;
   eventId?: string;
-  workflowRunId?: string;
   payload: Record<string, unknown>;
+  retry?: WorkflowStepRetryMetadata;
+  workflowRunId?: string;
+  workspaceId: string;
 };
 
 export type CloudTableEnv = {

@@ -1,0 +1,17 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_alice"
+  },
+  "commandId": "cmd_cell_set_invalid_datetime_001",
+  "commandType": "cell.set",
+  "idempotencyKey": "idem_cell_set_invalid_datetime_001",
+  "payload": {
+    "fieldId": "fld_due_at",
+    "recordId": "rec_001",
+    "value": "2026-06-06T00:00:00"
+  },
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

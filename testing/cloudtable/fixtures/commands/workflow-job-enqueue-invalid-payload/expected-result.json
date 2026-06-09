@@ -1,0 +1,8 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "missing_payload_jobType",
+    "payload_args_must_be_object"
+  ],
+  "status": "rejected"
+}

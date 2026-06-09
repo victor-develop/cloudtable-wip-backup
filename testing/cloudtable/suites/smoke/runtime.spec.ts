@@ -5,7 +5,7 @@ import { WorkspaceControlDurableObject } from "../../../../src/durable-objects/w
 import type { CommandEnvelope } from "../../../../src/core/commands/types";
 import { handleQueueBatch } from "../../../../src/queues/consumer";
 import type { CloudTableEnv, CloudTableQueueMessage } from "../../../../src/runtime/env";
-import { handleFetch } from "../../../../src/runtime/worker";
+import { handleFetch, handleScheduled } from "../../../../src/runtime/worker";
 import {
   SqliteD1Database,
   seedAppAndTable,
@@ -40,8 +40,18 @@ class FakeDurableObjectState {
 
 class FakeQueue {
   readonly sent: CloudTableQueueMessage[] = [];
+  private remainingFailures = 0;
 
-  async send(message: CloudTableQueueMessage): Promise<void> {
+  failNext(count = 1): void {
+    this.remainingFailures = Math.max(this.remainingFailures, count);
+  }
+
+  async send(message: CloudTableQueueMessage, _options?: QueueSendOptions): Promise<void> {
+    if (this.remainingFailures > 0) {
+      this.remainingFailures -= 1;
+      throw new Error("Simulated queue publish failure.");
+    }
+
     this.sent.push(message);
   }
 }
@@ -168,6 +178,14 @@ function createBatch(
       }))
     }
   };
+}
+
+function createScheduledController(scheduledTime: number): ScheduledController {
+  return {
+    cron: "* * * * *",
+    noRetry() {},
+    scheduledTime
+  } as ScheduledController;
 }
 
 describe("cloudtable runtime smoke", () => {
@@ -441,5 +459,73 @@ describe("cloudtable runtime smoke", () => {
         record_id: "rec_1"
       }
     ]);
+  });
+
+  it("recovers queued outbox work after a post-commit publish failure", async () => {
+    const { db, env, eventFanoutQueue } = createEnv();
+    eventFanoutQueue.failNext();
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_recovery_1",
+            commandType: "record.create",
+            idempotencyKey: "idem_recovery_1",
+            payload: {
+              recordId: "rec_recovery_1"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      result: { accepted: boolean; events: Array<{ eventId: string }> };
+    };
+    expect(body.result.accepted).toBe(true);
+    expect(eventFanoutQueue.sent).toEqual([]);
+
+    const failedOutbox = db.inner
+      .prepare(
+        `SELECT available_at, delivered_at, delivery_attempts
+         FROM queue_outbox
+         WHERE event_id = ?`
+      )
+      .get(body.result.events[0]!.eventId) as {
+      available_at: string;
+      delivered_at: string | null;
+      delivery_attempts: number;
+    };
+    expect(failedOutbox.delivered_at).toBeNull();
+    expect(failedOutbox.delivery_attempts).toBe(1);
+
+    await handleScheduled(
+      createScheduledController(Date.parse(failedOutbox.available_at) + 1_000),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(eventFanoutQueue.sent).toHaveLength(1);
+
+    const outbox = db.inner
+      .prepare(
+        `SELECT delivered_at, delivery_attempts
+         FROM queue_outbox
+         WHERE event_id = ?`
+      )
+      .get(body.result.events[0]!.eventId) as {
+      delivered_at: string | null;
+      delivery_attempts: number;
+    };
+    expect(outbox.delivery_attempts).toBe(2);
+    expect(outbox.delivered_at).not.toBeNull();
   });
 });

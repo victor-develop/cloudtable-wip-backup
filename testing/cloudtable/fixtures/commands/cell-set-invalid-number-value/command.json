@@ -1,0 +1,17 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_alice"
+  },
+  "commandId": "cmd_cell_set_invalid_number_001",
+  "commandType": "cell.set",
+  "idempotencyKey": "idem_cell_set_invalid_number_001",
+  "payload": {
+    "fieldId": "fld_score",
+    "recordId": "rec_001",
+    "value": "4.567"
+  },
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

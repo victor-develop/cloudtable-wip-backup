@@ -26,6 +26,121 @@ const noopEventLedger: EventLedger = {
   }
 };
 
+function assertFieldTypeFixtures(fieldType: FieldTypeDefinition): void {
+  expect(fieldType.validateConfig(fieldType.defaultConfig, { fieldType: fieldType.type }).valid).toBe(true);
+
+  for (const fixture of fieldType.fixtures) {
+    if (fixture.kind === "normalize") {
+      const normalized = fieldType.normalize(fixture.input, {
+        fieldConfig: fieldType.defaultConfig,
+        fieldType: fieldType.type
+      });
+
+      expect(normalized).toEqual({
+        value: fixture.expected.value,
+        warnings: fixture.expected.warnings ?? []
+      });
+      expect(
+        fieldType.validateValue(normalized.value, {
+          fieldConfig: fieldType.defaultConfig,
+          fieldType: fieldType.type
+        })
+      ).toEqual({
+        valid: true,
+        errors: []
+      });
+      expect(
+        fieldType.toDisplay(normalized.value, {
+          fieldConfig: fieldType.defaultConfig,
+          fieldType: fieldType.type
+        })
+      ).toBe(
+        fixture.expected.display
+      );
+      expect(
+        fieldType.toSearchText(normalized.value, {
+          fieldConfig: fieldType.defaultConfig,
+          fieldType: fieldType.type
+        })
+      ).toBe(
+        fixture.expected.searchText
+      );
+      expect(
+        fieldType.toIndex(normalized.value, {
+          fieldConfig: fieldType.defaultConfig,
+          fieldType: fieldType.type
+        })
+      ).toEqual(
+        fixture.expected.index
+      );
+      continue;
+    }
+
+    if (fixture.kind === "invalid_config") {
+      expect(
+        fieldType.validateConfig(fixture.config, {
+          fieldType: fieldType.type
+        })
+      ).toEqual({
+        valid: false,
+        errors: fixture.expectedErrors
+      });
+      continue;
+    }
+
+    if (fixture.kind === "invalid_value") {
+      const fieldConfig = fixture.fieldConfig ?? fieldType.defaultConfig;
+
+      if ("input" in fixture) {
+        const normalized = fieldType.normalize(fixture.input, {
+          fieldConfig,
+          fieldType: fieldType.type
+        });
+
+        expect(normalized).toEqual({
+          value: fixture.expected.value,
+          warnings: fixture.expected.warnings ?? []
+        });
+        expect(
+          fieldType.validateValue(normalized.value, {
+            fieldConfig,
+            fieldType: fieldType.type
+          })
+        ).toEqual({
+          valid: false,
+          errors: fixture.expected.errors
+        });
+        continue;
+      }
+
+      expect(
+        fieldType.validateValue(fixture.value, {
+          fieldConfig,
+          fieldType: fieldType.type
+        })
+      ).toEqual({
+        valid: false,
+        errors: fixture.expected.errors
+      });
+      continue;
+    }
+
+    if (fixture.kind === "operators") {
+      expect(fieldType.getSupportedConditionOperators({ fieldType: fieldType.type })).toEqual(
+        fixture.expectedConditionOperators
+      );
+      expect(fieldType.getSupportedSortModes({ fieldType: fieldType.type })).toEqual(
+        fixture.expectedSortModes
+      );
+      continue;
+    }
+
+    expect(fieldType.getPermissionBehavior({ fieldType: fieldType.type })).toEqual(
+      fixture.expected
+    );
+  }
+}
+
 function buildCustomFieldType(): FieldTypeDefinition {
   return {
     ...mvpFieldTypes[0],
@@ -113,8 +228,53 @@ function buildCustomFieldType(): FieldTypeDefinition {
           allowsWorkflowTrigger: true,
           supportsValueVisibilityRules: false
         }
+      },
+      {
+        id: "rating.stars.invalid_config.out_of_range",
+        kind: "invalid_config",
+        config: { maxStars: 10 },
+        expectedErrors: ["Rating stars fixture should reject invalid config."]
+      },
+      {
+        id: "rating.stars.invalid_value.too_many_stars",
+        kind: "invalid_value",
+        fieldConfig: { maxStars: 5 },
+        input: 6,
+        expected: {
+          value: {
+            valueType: "rating.stars",
+            version: 1,
+            raw: "6",
+            isEmpty: false,
+            meta: {
+              stars: 6
+            }
+          },
+          warnings: [],
+          errors: ["Rating stars fixture should reject invalid value."]
+        }
       }
-    ]
+    ],
+    validateConfig(config) {
+      const hasMaxStars =
+        typeof config === "object" && config !== null && "maxStars" in config;
+
+      return {
+        valid: !hasMaxStars,
+        errors: hasMaxStars
+          ? ["Rating stars fixture should reject invalid config."]
+          : []
+      };
+    },
+    validateValue(value, context) {
+      const maxStars = Number((context.fieldConfig as { maxStars?: number } | undefined)?.maxStars ?? 5);
+      const stars = Number(value?.raw ?? 0);
+
+      return {
+        valid: stars <= maxStars,
+        errors: stars <= maxStars ? [] : ["Rating stars fixture should reject invalid value."]
+      };
+    }
   };
 }
 
@@ -146,70 +306,12 @@ describe("cloudtable scaffold", () => {
     const registry = createFieldTypeRegistry();
 
     for (const fieldType of registry.list()) {
-      expect(fieldType.validateConfig(fieldType.defaultConfig, { fieldType: fieldType.type }).valid).toBe(true);
-
-      for (const fixture of fieldType.fixtures) {
-        if (fixture.kind === "normalize") {
-          const normalized = fieldType.normalize(fixture.input, {
-            fieldConfig: fieldType.defaultConfig,
-            fieldType: fieldType.type
-          });
-
-          expect(normalized).toEqual({
-            value: fixture.expected.value,
-            warnings: fixture.expected.warnings ?? []
-          });
-          expect(
-            fieldType.validateValue(normalized.value, {
-              fieldConfig: fieldType.defaultConfig,
-              fieldType: fieldType.type
-            })
-          ).toEqual({
-            valid: true,
-            errors: []
-          });
-          expect(
-            fieldType.toDisplay(normalized.value, {
-              fieldConfig: fieldType.defaultConfig,
-              fieldType: fieldType.type
-            })
-          ).toBe(
-            fixture.expected.display
-          );
-          expect(
-            fieldType.toSearchText(normalized.value, {
-              fieldConfig: fieldType.defaultConfig,
-              fieldType: fieldType.type
-            })
-          ).toBe(
-            fixture.expected.searchText
-          );
-          expect(
-            fieldType.toIndex(normalized.value, {
-              fieldConfig: fieldType.defaultConfig,
-              fieldType: fieldType.type
-            })
-          ).toEqual(
-            fixture.expected.index
-          );
-        }
-
-        if (fixture.kind === "operators") {
-          expect(fieldType.getSupportedConditionOperators({ fieldType: fieldType.type })).toEqual(
-            fixture.expectedConditionOperators
-          );
-          expect(fieldType.getSupportedSortModes({ fieldType: fieldType.type })).toEqual(
-            fixture.expectedSortModes
-          );
-        }
-
-        if (fixture.kind === "permission") {
-          expect(fieldType.getPermissionBehavior({ fieldType: fieldType.type })).toEqual(
-            fixture.expected
-          );
-        }
-      }
+      assertFieldTypeFixtures(fieldType);
     }
+  });
+
+  it("executes invalid-config and invalid-value fixtures through the shared runner", () => {
+    assertFieldTypeFixtures(buildCustomFieldType());
   });
 
   it("rejects duplicate registrations and duplicate fixture ids at startup", () => {

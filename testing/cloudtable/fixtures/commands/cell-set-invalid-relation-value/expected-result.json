@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "Expected relation.record value to contain at most one record id."
+  ],
+  "status": "rejected"
+}

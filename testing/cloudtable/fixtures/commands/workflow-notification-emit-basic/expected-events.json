@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "wf_pipeline",
+    "aggregateType": "workflow",
+    "commandId": "cmd_workflow_notification_emit_001",
+    "commandType": "notification.emit",
+    "eventId": "evt_0001",
+    "eventType": "notification.emitted",
+    "tableId": null,
+    "workspaceId": "ws_demo"
+  }
+]

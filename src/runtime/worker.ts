@@ -1,23 +1,48 @@
+import { serializeAgentToolManifest } from "../core/agent-tools/manifest";
 import type {
+  ArchiveFieldToolInput,
+  ArchiveRecordToolInput,
   AgentToolId,
   AgentToolInvocation,
   AgentToolInvocationResult,
+  BulkUpdateRecordsToolInput,
   ConfigureFieldPermissionToolInput,
+  CreateAppToolInput,
+  CreateRecordToolInput,
   CreateFieldToolInput,
   CreateTableToolInput,
   CreateViewToolInput,
+  DeleteViewToolInput,
   DryRunCommandToolInput,
+  ExplainPermissionsToolInput,
   ExecuteCommandToolInput,
+  InspectAppToolInput,
+  InspectWorkflowDefinitionToolInput,
+  InspectTableSchemaToolInput,
+  InspectViewDefinitionToolInput,
+  InspectRecordToolInput,
   InspectWorkspaceToolInput,
   PauseWorkflowToolInput,
   PublishWorkflowToolInput,
+  QueryViewToolInput,
+  ReadActivityHistoryToolInput,
+  ReadAppActivityHistoryToolInput,
+  ReorderFieldsToolInput,
+  ReadWorkspaceActivityHistoryToolInput,
   ReadWorkflowHistoryToolInput,
   ReadWorkflowRunDetailToolInput,
+  WorkflowDeadLetterReplayToolInput,
   ProposeWorkflowToolInput,
   RunWorkflowToolInput,
+  UpdateCellToolInput,
+  UpdateFieldToolInput,
+  UpdateRecordToolInput,
+  UpdateWorkflowToolInput,
   UpdateViewToolInput
 } from "../core/agent-tools/types";
 import type { CommandEnvelope, CommandResult } from "../core/commands/types";
+import { serializeFieldTypeManifest } from "../core/field-types/manifest";
+import type { JsonValue } from "../core/field-types/types";
 import type { EffectivePermissionSnapshot } from "../core/permissions/types";
 import type { PermissionProjectionInput } from "../core/permissions/types";
 import { aggregateDescriptorForCommand } from "../core/commands/domain";
@@ -25,9 +50,16 @@ import {
   dispatchCommandToCoordinator,
   matchCommandRoute
 } from "./durable-object-dispatch";
+import {
+  readAppActivityHistory,
+  readRecordActivityHistory,
+  readTableActivityHistory,
+  readWorkspaceActivityHistory
+} from "./activity-history-read";
 import { readRecordDetail, readRecordFields } from "./direct-record-read";
 import { resolvePermissionSnapshot } from "./permission-snapshot";
 import {
+  SchemaMetadataAccessError,
   readTableSchemaMetadata,
   readViewDefinitionMetadata
 } from "./schema-metadata-read";
@@ -42,15 +74,20 @@ import {
   workflowOperationsAuthorized
 } from "./workflow-operations";
 import { createRuntime, createRuntimeWithSnapshot } from "./bootstrap";
+import type { CloudTableRuntime } from "./bootstrap";
 import { badRequest, conflict, forbidden, json, methodNotAllowed, notFound } from "./http";
 import type { CloudTableEnv } from "./env";
+import { enqueueScheduledWorkflowDispatches } from "./workflow-runtime";
 import {
   readWorkflowDefinitionMetadata,
   readWorkflowExecutionCandidate,
   readWorkflowTriggerTableId
 } from "./workflow-definition";
 import { createWorkspaceInspector } from "./workspace-inspector";
-import type { WorkflowOperatorDefinition } from "../core/workflows/types";
+import { serializeWorkflowOperatorManifest } from "../core/workflows/manifest";
+import { createWorkflowOperatorRegistry } from "../core/workflows/operator-registry";
+import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
+import { drainPendingOutboxEntries } from "./queue-publisher";
 
 type CommandPermissionScope =
   | {
@@ -85,9 +122,195 @@ export async function handleFetch(
 
   if (request.method === "GET" && url.pathname === "/internal/scaffold") {
     return json({
-      fieldTypes: runtime.fieldTypeRegistry.list(),
-      workflowOperators: runtime.workflowOperatorRegistry.list(),
-      agentTools: runtime.agentToolRegistry.list()
+      fieldTypes: runtime.fieldTypeRegistry.list().map(serializeFieldTypeManifest),
+      workflowOperators: runtime.workflowOperatorRegistry.list().map(serializeWorkflowOperatorManifest),
+      agentTools: runtime.agentToolRegistry.list().map(serializeAgentToolManifest)
+    });
+  }
+
+  const workspaceActivityMatch = url.pathname.match(/^\/v1\/workspaces\/([^/]+)\/activity$/);
+  if (workspaceActivityMatch && request.method === "GET") {
+    const workspaceId = workspaceActivityMatch[1]!;
+    const principalId = url.searchParams.get("principalId");
+    const policyRevisionValue = url.searchParams.get("policyRevision");
+    const policyRevision =
+      typeof policyRevisionValue === "string" && policyRevisionValue.length > 0
+        ? Number(policyRevisionValue)
+        : null;
+    const permissionScopeHash = url.searchParams.get("permissionScopeHash");
+
+    if (!principalId && (policyRevisionValue !== null || permissionScopeHash !== null)) {
+      return badRequest(
+        "principalId query parameter is required when permission coordinates are provided for workspace activity reads."
+      );
+    }
+
+    if (
+      policyRevisionValue !== null &&
+      (typeof policyRevision !== "number" || Number.isNaN(policyRevision))
+    ) {
+      return badRequest(
+        "policyRevision must be a finite number when provided for permissioned workspace activity reads."
+      );
+    }
+
+    const limit = readActivityLimit(url);
+    if ("response" in limit) {
+      return limit.response;
+    }
+
+    const beforeWorkspaceSequence = readActivityBeforeWorkspaceSequence(url);
+    if ("response" in beforeWorkspaceSequence) {
+      return beforeWorkspaceSequence.response;
+    }
+
+    if (principalId) {
+      const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
+        fieldTypeRegistry: runtime.fieldTypeRegistry,
+        permissionScopeHash,
+        policyRevision,
+        principalId,
+        scope: {
+          kind: "workspace"
+        },
+        workspaceId
+      });
+
+      if (!resolvedSnapshot.ok) {
+        return badRequest(resolvedSnapshot.message);
+      }
+    }
+
+    const history = await readWorkspaceActivityHistory(env.DB, {
+      beforeWorkspaceSequence: beforeWorkspaceSequence.value,
+      limit: limit.value,
+      workspaceId
+    });
+
+    return json({
+      entries: history.entries,
+      page: {
+        limit: limit.value,
+        nextBeforeWorkspaceSequence: history.nextBeforeWorkspaceSequence
+      },
+      workspaceId
+    });
+  }
+
+  const appActivityMatch = url.pathname.match(/^\/v1\/apps\/([^/]+)\/activity$/);
+  const appDetailMatch =
+    url.pathname.match(/^\/v1\/apps\/([^/]+)$/) ?? url.pathname.match(/^\/v1\/bases\/([^/]+)$/);
+  if (appDetailMatch) {
+    if (request.method !== "GET") {
+      return methodNotAllowed(request.method, ["GET"]);
+    }
+
+    const workspaceId = url.searchParams.get("workspaceId");
+    if (!workspaceId) {
+      return badRequest("workspaceId query parameter is required.");
+    }
+
+    const auth = await resolveWorkspaceCatalogAccess(env, {
+      permissionScopeHash: url.searchParams.get("permissionScopeHash"),
+      policyRevisionValue: url.searchParams.get("policyRevision"),
+      principalId: url.searchParams.get("principalId"),
+      workspaceId
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    const app = await runtime.appInspector.inspect({
+      appId: appDetailMatch[1]!,
+      workspaceId
+    });
+    if (!app) {
+      return notFound(`App ${appDetailMatch[1]!} was not found.`);
+    }
+
+    return json(app);
+  }
+
+  if (appActivityMatch && request.method === "GET") {
+    const workspaceId = url.searchParams.get("workspaceId");
+    if (!workspaceId) {
+      return badRequest("workspaceId query parameter is required.");
+    }
+
+    const principalId = url.searchParams.get("principalId");
+    const policyRevisionValue = url.searchParams.get("policyRevision");
+    const policyRevision =
+      typeof policyRevisionValue === "string" && policyRevisionValue.length > 0
+        ? Number(policyRevisionValue)
+        : null;
+    const permissionScopeHash = url.searchParams.get("permissionScopeHash");
+
+    if (!principalId && (policyRevisionValue !== null || permissionScopeHash !== null)) {
+      return badRequest(
+        "principalId query parameter is required when permission coordinates are provided for app activity reads."
+      );
+    }
+
+    if (
+      policyRevisionValue !== null &&
+      (typeof policyRevision !== "number" || Number.isNaN(policyRevision))
+    ) {
+      return badRequest(
+        "policyRevision must be a finite number when provided for permissioned app activity reads."
+      );
+    }
+
+    const limit = readActivityLimit(url);
+    if ("response" in limit) {
+      return limit.response;
+    }
+
+    const beforeWorkspaceSequence = readActivityBeforeWorkspaceSequence(url);
+    if ("response" in beforeWorkspaceSequence) {
+      return beforeWorkspaceSequence.response;
+    }
+
+    const [, appId] = appActivityMatch;
+    const appExists = await readAppExists(env.DB, {
+      appId,
+      workspaceId
+    });
+    if (!appExists) {
+      return notFound(`App ${appId} was not found.`);
+    }
+
+    if (principalId) {
+      const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
+        fieldTypeRegistry: runtime.fieldTypeRegistry,
+        permissionScopeHash,
+        policyRevision,
+        principalId,
+        scope: {
+          kind: "workspace"
+        },
+        workspaceId
+      });
+
+      if (!resolvedSnapshot.ok) {
+        return badRequest(resolvedSnapshot.message);
+      }
+    }
+
+    const history = await readAppActivityHistory(env.DB, {
+      appId,
+      beforeWorkspaceSequence: beforeWorkspaceSequence.value,
+      limit: limit.value,
+      workspaceId
+    });
+
+    return json({
+      appId,
+      entries: history.entries,
+      page: {
+        limit: limit.value,
+        nextBeforeWorkspaceSequence: history.nextBeforeWorkspaceSequence
+      },
+      workspaceId
     });
   }
 
@@ -116,7 +339,8 @@ export async function handleFetch(
     const workspaceInspector = createWorkspaceInspector(
       env.DB,
       runtime.fieldTypeRegistry,
-      runtime.workflowOperatorRegistry
+      runtime.workflowOperatorRegistry,
+      () => runtime.agentToolRegistry
     );
 
     return json(
@@ -151,6 +375,52 @@ export async function handleFetch(
       workflowOperators: runtime.workflowOperatorRegistry
         .list()
         .map(serializeWorkflowOperatorManifest)
+    });
+  }
+
+  const fieldTypeCatalogMatch = url.pathname.match(/^\/v1\/workspaces\/([^/]+)\/field-types$/);
+  if (fieldTypeCatalogMatch) {
+    if (request.method !== "GET") {
+      return methodNotAllowed(request.method, ["GET"]);
+    }
+
+    const workspaceId = fieldTypeCatalogMatch[1]!;
+    const auth = await resolveWorkspaceCatalogAccess(env, {
+      permissionScopeHash: url.searchParams.get("permissionScopeHash"),
+      policyRevisionValue: url.searchParams.get("policyRevision"),
+      principalId: url.searchParams.get("principalId"),
+      workspaceId
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    return json({
+      fieldTypes: runtime.fieldTypeRegistry.list().map(serializeFieldTypeManifest),
+      workspaceId
+    });
+  }
+
+  const agentToolCatalogMatch = url.pathname.match(/^\/v1\/workspaces\/([^/]+)\/agent-tools$/);
+  if (agentToolCatalogMatch) {
+    if (request.method !== "GET") {
+      return methodNotAllowed(request.method, ["GET"]);
+    }
+
+    const workspaceId = agentToolCatalogMatch[1]!;
+    const auth = await resolveWorkspaceCatalogAccess(env, {
+      permissionScopeHash: url.searchParams.get("permissionScopeHash"),
+      policyRevisionValue: url.searchParams.get("policyRevision"),
+      principalId: url.searchParams.get("principalId"),
+      workspaceId
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    return json({
+      agentTools: runtime.agentToolRegistry.list().map(serializeAgentToolManifest),
+      workspaceId
     });
   }
 
@@ -307,12 +577,24 @@ export async function handleFetch(
     });
   }
 
+  if (url.pathname === "/v1/permissions/explain") {
+    return handlePermissionExplanationIngress(request, env, runtime);
+  }
+
+  if (url.pathname === "/v1/permissions/persona-preview") {
+    return handlePermissionPersonaPreviewIngress(request, env, runtime);
+  }
+
   if (url.pathname === "/v1/agent-tools/preview") {
     return handleAgentToolIngress(request, env, "preview");
   }
 
   if (url.pathname === "/v1/agent-tools/execute") {
     return handleAgentToolIngress(request, env, "execute");
+  }
+
+  if (url.pathname === "/v1/permissions/explain") {
+    return handlePermissionExplainIngress(request, env);
   }
 
   if (url.pathname === "/v1/commands/preview") {
@@ -473,6 +755,177 @@ export async function handleFetch(
   }
 
   const directRecordMatch = url.pathname.match(/^\/v1\/tables\/([^/]+)\/records\/([^/]+)$/);
+  const recordActivityMatch = url.pathname.match(/^\/v1\/tables\/([^/]+)\/records\/([^/]+)\/activity$/);
+  if (recordActivityMatch && request.method === "GET") {
+    const workspaceId = url.searchParams.get("workspaceId");
+    if (!workspaceId) {
+      return badRequest("workspaceId query parameter is required.");
+    }
+
+    const principalId = url.searchParams.get("principalId");
+    const policyRevisionValue = url.searchParams.get("policyRevision");
+    const policyRevision =
+      typeof policyRevisionValue === "string" && policyRevisionValue.length > 0
+        ? Number(policyRevisionValue)
+        : null;
+    const permissionScopeHash = url.searchParams.get("permissionScopeHash");
+
+    if (!principalId && (policyRevisionValue !== null || permissionScopeHash !== null)) {
+      return badRequest(
+        "principalId query parameter is required when permission coordinates are provided for record activity reads."
+      );
+    }
+
+    if (
+      policyRevisionValue !== null &&
+      (typeof policyRevision !== "number" || Number.isNaN(policyRevision))
+    ) {
+      return badRequest(
+        "policyRevision must be a finite number when provided for permissioned record activity reads."
+      );
+    }
+
+    const limit = readActivityLimit(url);
+    if ("response" in limit) {
+      return limit.response;
+    }
+
+    const beforeTableSequence = readActivityBeforeTableSequence(url);
+    if ("response" in beforeTableSequence) {
+      return beforeTableSequence.response;
+    }
+
+    const [, tableId, recordId] = recordActivityMatch;
+    const detail = await readRecordDetail(env.DB, workspaceId, tableId, recordId);
+    if (!detail) {
+      return notFound(`Record ${recordId} was not found in table ${tableId}.`);
+    }
+
+    if (principalId) {
+      const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
+        fieldTypeRegistry: runtime.fieldTypeRegistry,
+        permissionScopeHash,
+        policyRevision,
+        principalId,
+        scope: {
+          kind: "table",
+          tableId
+        },
+        workspaceId
+      });
+
+      if (!resolvedSnapshot.ok) {
+        return badRequest(resolvedSnapshot.message);
+      }
+    }
+
+    const history = await readRecordActivityHistory(env.DB, {
+      beforeTableSequence: beforeTableSequence.value,
+      limit: limit.value,
+      recordId,
+      tableId,
+      workspaceId
+    });
+
+    return json({
+      entries: history.entries,
+      page: {
+        limit: limit.value,
+        nextBeforeTableSequence: history.nextBeforeTableSequence
+      },
+      record: {
+        ...detail.record,
+        lastEventId: detail.projection?.last_event_id ?? detail.record.last_event_id ?? null
+      },
+      workspaceId
+    });
+  }
+
+  const tableActivityMatch = url.pathname.match(/^\/v1\/tables\/([^/]+)\/activity$/);
+  if (tableActivityMatch && request.method === "GET") {
+    const workspaceId = url.searchParams.get("workspaceId");
+    if (!workspaceId) {
+      return badRequest("workspaceId query parameter is required.");
+    }
+
+    const principalId = url.searchParams.get("principalId");
+    const policyRevisionValue = url.searchParams.get("policyRevision");
+    const policyRevision =
+      typeof policyRevisionValue === "string" && policyRevisionValue.length > 0
+        ? Number(policyRevisionValue)
+        : null;
+    const permissionScopeHash = url.searchParams.get("permissionScopeHash");
+
+    if (!principalId && (policyRevisionValue !== null || permissionScopeHash !== null)) {
+      return badRequest(
+        "principalId query parameter is required when permission coordinates are provided for table activity reads."
+      );
+    }
+
+    if (
+      policyRevisionValue !== null &&
+      (typeof policyRevision !== "number" || Number.isNaN(policyRevision))
+    ) {
+      return badRequest(
+        "policyRevision must be a finite number when provided for permissioned table activity reads."
+      );
+    }
+
+    const limit = readActivityLimit(url);
+    if ("response" in limit) {
+      return limit.response;
+    }
+
+    const beforeTableSequence = readActivityBeforeTableSequence(url);
+    if ("response" in beforeTableSequence) {
+      return beforeTableSequence.response;
+    }
+
+    const [, tableId] = tableActivityMatch;
+    const table = await readTableSchemaMetadata(env.DB, {
+      tableId,
+      workspaceId
+    });
+    if (!table) {
+      return notFound(`Table ${tableId} was not found.`);
+    }
+
+    if (principalId) {
+      const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
+        fieldTypeRegistry: runtime.fieldTypeRegistry,
+        permissionScopeHash,
+        policyRevision,
+        principalId,
+        scope: {
+          kind: "table",
+          tableId
+        },
+        workspaceId
+      });
+
+      if (!resolvedSnapshot.ok) {
+        return badRequest(resolvedSnapshot.message);
+      }
+    }
+
+    const history = await readTableActivityHistory(env.DB, {
+      beforeTableSequence: beforeTableSequence.value,
+      limit: limit.value,
+      tableId,
+      workspaceId
+    });
+
+    return json({
+      entries: history.entries,
+      page: {
+        limit: limit.value,
+        nextBeforeTableSequence: history.nextBeforeTableSequence
+      },
+      tableId,
+      workspaceId
+    });
+  }
+
   if (directRecordMatch && request.method === "GET") {
 
     const workspaceId = url.searchParams.get("workspaceId");
@@ -509,6 +962,23 @@ export async function handleFetch(
           fields?: Record<string, unknown>;
         })
       : null;
+    const recordFields = rawProjection
+      ? await readRecordFields(env.DB, workspaceId, tableId)
+      : [];
+    const orderedProjection =
+      rawProjection === null
+        ? null
+        : recordFields.length === 0
+          ? rawProjection
+          : {
+              fields: Object.fromEntries(
+                recordFields
+                  .filter((field) =>
+                    Object.prototype.hasOwnProperty.call(rawProjection.fields ?? {}, field.field_key)
+                  )
+                  .map((field) => [field.field_key, rawProjection.fields?.[field.field_key] ?? null])
+              )
+            };
     let snapshot: EffectivePermissionSnapshot | undefined;
     if (principalId) {
       const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
@@ -531,7 +1001,6 @@ export async function handleFetch(
     }
 
     if (principalId && snapshot && rawProjection) {
-      const recordFields = await readRecordFields(env.DB, workspaceId, tableId);
       const projectionInputs: PermissionProjectionInput[] = recordFields.map((field) => ({
         fieldId: field.id,
         fieldType: field.field_type,
@@ -571,13 +1040,46 @@ export async function handleFetch(
     }
 
     return json({
-      projection: rawProjection,
+      projection: orderedProjection,
       projectionVersion: detail.projection?.projection_version ?? 0,
       record: {
         ...detail.record,
         lastEventId:
           detail.projection?.last_event_id ?? detail.record.last_event_id ?? null
       }
+    });
+  }
+
+  const viewGroupMoveMatch = url.pathname.match(
+    /^\/v1\/tables\/([^/]+)\/views\/([^/]+)\/records\/([^/]+)\/group-move$/
+  );
+  if (viewGroupMoveMatch && request.method === "POST") {
+    const bodyOrResponse = await readCommandIngressBody(request);
+    if (bodyOrResponse instanceof Response) {
+      return bodyOrResponse;
+    }
+
+    const [, tableId, viewId, recordId] = viewGroupMoveMatch;
+    return handleGroupedViewMove(request, env, runtime, {
+      body: bodyOrResponse,
+      recordId,
+      tableId,
+      viewId
+    });
+  }
+
+  const viewCreateMatch = url.pathname.match(/^\/v1\/tables\/([^/]+)\/views\/([^/]+)\/records$/);
+  if (viewCreateMatch && request.method === "POST") {
+    const bodyOrResponse = await readCommandIngressBody(request);
+    if (bodyOrResponse instanceof Response) {
+      return bodyOrResponse;
+    }
+
+    const [, tableId, viewId] = viewCreateMatch;
+    return handleViewScopedRecordCreate(request, env, runtime, {
+      body: bodyOrResponse,
+      tableId,
+      viewId
     });
   }
 
@@ -680,6 +1182,107 @@ export async function handleFetch(
   }
 
   return notFound("CloudTable route not found.");
+}
+
+export async function handleScheduled(
+  controller: ScheduledController,
+  env: CloudTableEnv,
+  _ctx: ExecutionContext
+): Promise<void> {
+  await enqueueScheduledWorkflowDispatches(env, controller.scheduledTime);
+  const repository = createCloudTableD1Repository(env.DB);
+  await drainPendingOutboxEntries(
+    env,
+    repository,
+    new Date(controller.scheduledTime).toISOString()
+  );
+}
+
+function readActivityLimit(url: URL): { value: number } | { response: Response } {
+  const rawLimit = url.searchParams.get("limit");
+  if (rawLimit === null || rawLimit.length === 0) {
+    return {
+      value: 25
+    };
+  }
+
+  const limit = Number(rawLimit);
+  if (!Number.isInteger(limit) || limit <= 0 || limit > 100) {
+    return {
+      response: badRequest("limit must be an integer between 1 and 100 for activity history reads.")
+    };
+  }
+
+  return {
+    value: limit
+  };
+}
+
+function readActivityBeforeTableSequence(
+  url: URL
+): { value: number | null } | { response: Response } {
+  const rawBefore = url.searchParams.get("beforeTableSequence");
+  if (rawBefore === null || rawBefore.length === 0) {
+    return {
+      value: null
+    };
+  }
+
+  const beforeTableSequence = Number(rawBefore);
+  if (!Number.isInteger(beforeTableSequence) || beforeTableSequence <= 0) {
+    return {
+      response: badRequest(
+        "beforeTableSequence must be a positive integer when provided for activity history reads."
+      )
+    };
+  }
+
+  return {
+    value: beforeTableSequence
+  };
+}
+
+function readActivityBeforeWorkspaceSequence(
+  url: URL
+): { value: number | null } | { response: Response } {
+  const rawBefore = url.searchParams.get("beforeWorkspaceSequence");
+  if (rawBefore === null || rawBefore.length === 0) {
+    return {
+      value: null
+    };
+  }
+
+  const beforeWorkspaceSequence = Number(rawBefore);
+  if (!Number.isInteger(beforeWorkspaceSequence) || beforeWorkspaceSequence <= 0) {
+    return {
+      response: badRequest(
+        "beforeWorkspaceSequence must be a positive integer when provided for activity history reads."
+      )
+    };
+  }
+
+  return {
+    value: beforeWorkspaceSequence
+  };
+}
+
+async function readAppExists(
+  db: D1Database,
+  input: {
+    appId: string;
+    workspaceId: string;
+  }
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT id
+       FROM apps
+       WHERE workspace_id = ? AND id = ? AND archived_at IS NULL`
+    )
+    .bind(input.workspaceId, input.appId)
+    .first<{ id: string }>();
+
+  return Boolean(row);
 }
 
 async function handleCommandPreviewIngress(
@@ -786,22 +1389,24 @@ async function normalizeCommandIngress(
   }
 
   const command = candidateOrResponse;
+  const hydratedCommand = await hydrateRecordMutationFieldEdits(env.DB, command);
 
-  if (typeof command.workspaceId !== "string" || command.workspaceId.length === 0) {
+  if (typeof hydratedCommand.workspaceId !== "string" || hydratedCommand.workspaceId.length === 0) {
     return {
       response: badRequest("workspaceId is required in the command body.")
     };
   }
 
-  if (command.scope === "table" && typeof command.tableId !== "string") {
+  if (hydratedCommand.scope === "table" && typeof hydratedCommand.tableId !== "string") {
     return {
       response: badRequest("tableId could not be resolved for this table route.")
     };
   }
 
   if (
-    typeof command.permissionsVersion !== "undefined" &&
-    (typeof command.permissionsVersion !== "number" || Number.isNaN(command.permissionsVersion))
+    typeof hydratedCommand.permissionsVersion !== "undefined" &&
+    (typeof hydratedCommand.permissionsVersion !== "number" ||
+      Number.isNaN(hydratedCommand.permissionsVersion))
   ) {
     return {
       response: badRequest(
@@ -811,32 +1416,36 @@ async function normalizeCommandIngress(
   }
 
   if (
-    typeof command.permissionScopeHash !== "undefined" &&
-    typeof command.permissionScopeHash !== "string"
+    typeof hydratedCommand.permissionScopeHash !== "undefined" &&
+    typeof hydratedCommand.permissionScopeHash !== "string"
   ) {
     return {
       response: badRequest("permissionScopeHash must be a string when provided for command ingress.")
     };
   }
 
-  const actorPrincipalId = readNonEmptyString(command.actor?.principalId);
-  const actorMode = command.actor?.mode;
+  const actorPrincipalId = readNonEmptyString(hydratedCommand.actor?.principalId);
+  const actorMode = hydratedCommand.actor?.mode;
   if (!actorPrincipalId || (actorMode !== "user" && actorMode !== "workflow" && actorMode !== "agent")) {
     return {
       response: badRequest("actor.principalId and actor.mode are required for command ingress.")
     };
   }
 
-  const resolvedPermissionScope = await resolveCommandPermissionScope(env.DB, command);
+  const resolvedPermissionScope = await resolveCommandPermissionScope(env.DB, hydratedCommand);
   const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
     fieldTypeRegistry: runtime.fieldTypeRegistry,
     permissionScopeHash:
-      typeof command.permissionScopeHash === "string" ? command.permissionScopeHash : undefined,
+      typeof hydratedCommand.permissionScopeHash === "string"
+        ? hydratedCommand.permissionScopeHash
+        : undefined,
     policyRevision:
-      typeof command.permissionsVersion === "number" ? command.permissionsVersion : undefined,
+      typeof hydratedCommand.permissionsVersion === "number"
+        ? hydratedCommand.permissionsVersion
+        : undefined,
     principalId: actorPrincipalId,
     scope: resolvedPermissionScope,
-    workspaceId: command.workspaceId
+    workspaceId: hydratedCommand.workspaceId
   });
 
   if (!resolvedSnapshot.ok) {
@@ -846,28 +1455,28 @@ async function normalizeCommandIngress(
   }
 
   const manualInvocationId =
-    command.commandType === "workflow.manual"
-      ? readNonEmptyString(command.payload?.manualInvocationId) ??
-        readNonEmptyString(command.idempotencyKey)
+    hydratedCommand.commandType === "workflow.manual"
+      ? readNonEmptyString(hydratedCommand.payload?.manualInvocationId) ??
+        readNonEmptyString(hydratedCommand.idempotencyKey)
       : null;
 
   const normalizedCommand: CommandEnvelope = {
-    ...(command as CommandEnvelope),
+    ...(hydratedCommand as CommandEnvelope),
     actor: {
       mode: actorMode,
       principalId: actorPrincipalId
     },
     payload:
-      command.commandType === "workflow.manual"
+      hydratedCommand.commandType === "workflow.manual"
         ? {
-            ...((command.payload ?? {}) as Record<string, unknown>),
+            ...((hydratedCommand.payload ?? {}) as Record<string, unknown>),
             input:
-              isRecord(command.payload) && isRecord(command.payload.input)
-                ? command.payload.input
+              isRecord(hydratedCommand.payload) && isRecord(hydratedCommand.payload.input)
+                ? hydratedCommand.payload.input
                 : {},
             manualInvocationId
           }
-        : (command.payload as Record<string, unknown>),
+        : (hydratedCommand.payload as Record<string, unknown>),
     permissionScopeHash: resolvedSnapshot.snapshot.scopeHash,
     permissionsVersion: resolvedSnapshot.snapshot.policyRevision
   };
@@ -895,6 +1504,782 @@ async function normalizeCommandIngress(
   return {
     command: normalizedCommand
   };
+}
+
+async function handleGroupedViewMove(
+  request: Request,
+  env: CloudTableEnv,
+  runtime: ReturnType<typeof createRuntime>,
+  input: {
+    body: Record<string, unknown>;
+    recordId: string;
+    tableId: string;
+    viewId: string;
+  }
+): Promise<Response> {
+  const workspaceId = readNonEmptyString(input.body.workspaceId);
+  if (!workspaceId) {
+    return badRequest("workspaceId is required in the command body.");
+  }
+
+  const permissionsVersion =
+    typeof input.body.permissionsVersion === "number" &&
+    Number.isFinite(input.body.permissionsVersion)
+      ? input.body.permissionsVersion
+      : null;
+  if (input.body.permissionsVersion !== undefined && permissionsVersion === null) {
+    return badRequest(
+      "permissionsVersion must be a finite number when provided for grouped view moves."
+    );
+  }
+
+  const permissionScopeHash =
+    input.body.permissionScopeHash === undefined
+      ? null
+      : readNonEmptyString(input.body.permissionScopeHash);
+  if (input.body.permissionScopeHash !== undefined && permissionScopeHash === null) {
+    return badRequest("permissionScopeHash must be a string when provided for grouped view moves.");
+  }
+
+  const actorPrincipalId = readNonEmptyString((input.body.actor as { principalId?: unknown })?.principalId);
+  const actorMode = (input.body.actor as { mode?: unknown })?.mode;
+  if (
+    !actorPrincipalId ||
+    (actorMode !== "user" && actorMode !== "workflow" && actorMode !== "agent")
+  ) {
+    return badRequest("actor.principalId and actor.mode are required for grouped view moves.");
+  }
+
+  const commandId = readNonEmptyString(input.body.commandId);
+  const idempotencyKey = readNonEmptyString(input.body.idempotencyKey);
+  if (!commandId || !idempotencyKey) {
+    return badRequest("commandId and idempotencyKey are required for grouped view moves.");
+  }
+
+  const payload = isRecord(input.body.payload) ? input.body.payload : {};
+  const hasTargetGroupValue =
+    Object.prototype.hasOwnProperty.call(payload, "targetGroupValue") ||
+    Object.prototype.hasOwnProperty.call(payload, "value");
+  if (!hasTargetGroupValue) {
+    return badRequest("payload.targetGroupValue is required for grouped view moves.");
+  }
+  const targetGroupValue = Object.prototype.hasOwnProperty.call(payload, "targetGroupValue")
+    ? payload.targetGroupValue
+    : payload.value;
+
+  const resolvedViewSnapshot = await resolvePermissionSnapshot(env.DB, {
+    fieldTypeRegistry: runtime.fieldTypeRegistry,
+    permissionScopeHash: permissionScopeHash ?? undefined,
+    policyRevision: permissionsVersion ?? undefined,
+    principalId: actorPrincipalId,
+    scope: {
+      kind: "view",
+      tableId: input.tableId,
+      viewId: input.viewId
+    },
+    workspaceId
+  });
+  if (!resolvedViewSnapshot.ok) {
+    return badRequest(resolvedViewSnapshot.message);
+  }
+
+  const [table, viewDefinition, viewQuery] = await Promise.all([
+    readTableSchemaMetadata(env.DB, {
+      tableId: input.tableId,
+      workspaceId
+    }),
+    readViewDefinitionMetadata(env.DB, {
+      tableId: input.tableId,
+      viewId: input.viewId,
+      workspaceId
+    }),
+    readViewQuery(
+      env.DB,
+      runtime.fieldTypeRegistry,
+      runtime.viewPlanner,
+      runtime.workflowOperatorRegistry,
+      {
+        snapshot: resolvedViewSnapshot.snapshot,
+        tableId: input.tableId,
+        viewId: input.viewId,
+        workspaceId
+      }
+    )
+  ]);
+  if (!table || !viewDefinition || !viewQuery) {
+    return notFound(`View ${input.viewId} was not found in table ${input.tableId}.`);
+  }
+
+  const groupMove = viewQuery.view.actions?.groupMove;
+  if (!groupMove || groupMove.status !== "writable" || !groupMove.fieldId) {
+    return forbidden(
+      `Principal ${actorPrincipalId} is not allowed to move grouped records in view ${input.viewId}.`,
+      {
+        action: groupMove ?? null,
+        tableId: input.tableId,
+        viewId: input.viewId
+      }
+    );
+  }
+
+  const currentGroups = viewQuery.groups ?? [];
+  const currentMembership = currentGroups.find((group) =>
+    group.rows.some((row) => row.recordId === input.recordId)
+  );
+  if (!currentMembership) {
+    return conflict(
+      `Record ${input.recordId} is not currently visible in grouped view ${input.viewId}.`,
+      {
+        recordId: input.recordId,
+        reason: "view_record_not_in_scope",
+        tableId: input.tableId,
+        viewId: input.viewId
+      }
+    );
+  }
+
+  const groupingFilters = viewDefinition.definition.filters.filter(
+    (filter) => filter.fieldId === groupMove.fieldId
+  );
+  const blockedFilters = groupingFilters
+    .filter(
+      (filter) => !evaluateViewFilterForValue(runtime.workflowOperatorRegistry, filter, targetGroupValue)
+    )
+    .map((filter) => filter.fieldId);
+  if (blockedFilters.length > 0) {
+    return conflict(
+      `Grouped move would remove record ${input.recordId} from view ${input.viewId}.`,
+      {
+        blockedFieldIds: blockedFilters,
+        reason: "view_group_move_filter_mismatch",
+        recordId: input.recordId,
+        tableId: input.tableId,
+        targetGroupValue,
+        viewId: input.viewId
+      }
+    );
+  }
+
+  const groupField = table.fields.find((field) => field.fieldId === groupMove.fieldId);
+  if (!groupField) {
+    return conflict(`Grouping field ${groupMove.fieldId} could not be resolved for view ${input.viewId}.`, {
+      fieldId: groupMove.fieldId,
+      reason: "view_group_field_missing",
+      tableId: input.tableId,
+      viewId: input.viewId
+    });
+  }
+
+  const resolvedTableSnapshot = await resolvePermissionSnapshot(env.DB, {
+    fieldTypeRegistry: runtime.fieldTypeRegistry,
+    principalId: actorPrincipalId,
+    scope: {
+      kind: "table",
+      tableId: input.tableId
+    },
+    workspaceId
+  });
+  if (!resolvedTableSnapshot.ok) {
+    return badRequest(resolvedTableSnapshot.message);
+  }
+
+  const command: CommandEnvelope = {
+    actor: {
+      mode: actorMode,
+      principalId: actorPrincipalId
+    },
+    commandId,
+    commandType: "cell.set",
+    idempotencyKey,
+    payload: {
+      fieldId: groupField.fieldId,
+      fieldType: groupField.fieldType,
+      recordId: input.recordId,
+      value: targetGroupValue
+    },
+    permissionScopeHash: resolvedTableSnapshot.snapshot.scopeHash,
+    permissionsVersion: resolvedTableSnapshot.snapshot.policyRevision,
+    schemaEpoch:
+      typeof input.body.schemaEpoch === "number"
+        ? input.body.schemaEpoch
+        : resolvedTableSnapshot.snapshot.schemaEpoch,
+    scope: "table",
+    tableId: input.tableId,
+    workspaceId
+  };
+
+  const response = await dispatchCommandToCoordinator(env, new URL(request.url).origin, command);
+  const responseBody = (await response.json()) as Record<string, unknown>;
+  return json({
+    ...responseBody,
+    aggregate: aggregateDescriptorForCommand(command),
+    viewAction: {
+      fieldId: groupField.fieldId,
+      recordId: input.recordId,
+      sourceBucketKey: currentMembership.bucketKey,
+      targetGroupValue,
+      type: "groupMove",
+      viewId: input.viewId
+    }
+  });
+}
+
+function canonicalizeRecordCells(
+  fields: Array<{
+    fieldId: string;
+    fieldKey: string;
+  }>,
+  cells: Record<string, unknown>
+): {
+  diagnostics: string[];
+  cells: Record<string, unknown>;
+} {
+  const diagnostics = new Set<string>();
+  const canonical = new Map<string, unknown>();
+  const aliases = new Map<string, string>();
+  for (const field of fields) {
+    aliases.set(field.fieldId, field.fieldId);
+    aliases.set(field.fieldKey, field.fieldId);
+  }
+
+  for (const [key, value] of Object.entries(cells)) {
+    const fieldId = aliases.get(key) ?? key;
+    if (canonical.has(fieldId) && JSON.stringify(canonical.get(fieldId)) !== JSON.stringify(value)) {
+      diagnostics.add(`view_create_duplicate_cell:${fieldId}`);
+      continue;
+    }
+    canonical.set(fieldId, value);
+  }
+
+  return {
+    diagnostics: Array.from(diagnostics),
+    cells: Object.fromEntries(canonical)
+  };
+}
+
+function resolveViewCreateDefaults(
+  workflowOperatorRegistry: ReturnType<typeof createRuntime>["workflowOperatorRegistry"],
+  table: NonNullable<Awaited<ReturnType<typeof readTableSchemaMetadata>>>,
+  viewDefinition: NonNullable<Awaited<ReturnType<typeof readViewDefinitionMetadata>>>,
+  targetGroupValue: unknown
+): {
+  ok: true;
+  defaultCells: Record<string, JsonValue>;
+} | {
+  message: string;
+  ok: false;
+  reason: string;
+} {
+  const defaults = new Map<string, JsonValue>();
+  const setDefault = (fieldId: string, value: JsonValue) => {
+    if (!defaults.has(fieldId)) {
+      defaults.set(fieldId, value);
+      return true;
+    }
+    return JSON.stringify(defaults.get(fieldId)) === JSON.stringify(value);
+  };
+
+  if (viewDefinition.definition.groupByFieldId) {
+    if (targetGroupValue === undefined) {
+      return {
+        message: "payload.targetGroupValue is required for grouped view record creation.",
+        ok: false,
+        reason: "view_group_value_required"
+      };
+    }
+
+    if (!setDefault(viewDefinition.definition.groupByFieldId, (targetGroupValue ?? null) as JsonValue)) {
+      return {
+        message: `Grouped view ${viewDefinition.viewId} has conflicting group defaults.`,
+        ok: false,
+        reason: "view_create_conflicting_group_defaults"
+      };
+    }
+  }
+
+  for (const filter of viewDefinition.definition.filters) {
+    let filterValue: JsonValue;
+    switch (filter.operatorId) {
+      case "equals":
+        filterValue = (filter.value ?? null) as JsonValue;
+        break;
+      case "is_empty":
+        filterValue = null;
+        break;
+      default:
+        return {
+          message: `View ${viewDefinition.viewId} cannot create records through filter ${filter.fieldId}.`,
+          ok: false,
+          reason: "view_create_filter_unsupported"
+        };
+    }
+
+    if (!setDefault(filter.fieldId, filterValue)) {
+      return {
+        message: `View ${viewDefinition.viewId} has conflicting filter defaults for ${filter.fieldId}.`,
+        ok: false,
+        reason: "view_create_conflicting_filter_defaults"
+      };
+    }
+  }
+
+  for (const filter of viewDefinition.definition.filters) {
+    const value = defaults.get(filter.fieldId) ?? null;
+    if (!evaluateViewFilterForValue(workflowOperatorRegistry, filter, value)) {
+      return {
+        message: `View-scoped create would violate filter ${filter.fieldId} in ${viewDefinition.viewId}.`,
+        ok: false,
+        reason: "view_create_filter_mismatch"
+      };
+    }
+  }
+
+  const missingFieldIds = Array.from(defaults.keys()).filter(
+    (fieldId) => !table.fields.some((field) => field.fieldId === fieldId)
+  );
+  if (missingFieldIds.length > 0) {
+    return {
+      message: `View ${viewDefinition.viewId} references unknown create fields: ${missingFieldIds.join(", ")}.`,
+      ok: false,
+      reason: "view_create_field_missing"
+    };
+  }
+
+  return {
+    defaultCells: Object.fromEntries(defaults),
+    ok: true
+  };
+}
+
+async function prepareViewScopedCreateInput(
+  env: CloudTableEnv,
+  runtime: ReturnType<typeof createRuntime>,
+  snapshot: EffectivePermissionSnapshot,
+  input: Record<string, unknown>
+): Promise<
+  | {
+      ok: true;
+      diagnostics: string[];
+      sanitized: Record<string, unknown>;
+    }
+  | {
+      message: string;
+      ok: false;
+      status: number;
+    }
+> {
+  const tableId = readNonEmptyString(input.tableId);
+  const viewId = readNonEmptyString(input.viewId);
+  const recordId = readNonEmptyString(input.recordId);
+  if (!tableId || !viewId || !recordId) {
+    return {
+      message: "tableId, viewId, and recordId are required for view-scoped createRecord preview.",
+      ok: false,
+      status: 400
+    };
+  }
+
+  const [table, viewDefinition, viewQuery] = await Promise.all([
+    readTableSchemaMetadata(env.DB, {
+      tableId,
+      workspaceId: snapshot.workspaceId
+    }),
+    readViewDefinitionMetadata(env.DB, {
+      tableId,
+      viewId,
+      workspaceId: snapshot.workspaceId
+    }),
+    readViewQuery(
+      env.DB,
+      runtime.fieldTypeRegistry,
+      runtime.viewPlanner,
+      runtime.workflowOperatorRegistry,
+      {
+        snapshot,
+        tableId,
+        viewId,
+        workspaceId: snapshot.workspaceId
+      }
+    )
+  ]);
+  if (!table || !viewDefinition || !viewQuery) {
+    return {
+      message: `View ${viewId} was not found in table ${tableId}.`,
+      ok: false,
+      status: 404
+    };
+  }
+
+  const createRecord = viewQuery.view.actions?.createRecord;
+  if (!createRecord || createRecord.status !== "writable") {
+    return {
+      message: `Principal ${snapshot.principalId} is not allowed to create records in view ${viewId}.`,
+      ok: false,
+      status: 403
+    };
+  }
+
+  const rawCells = readOptionalAgentToolObject(input.cells) ?? {};
+  const hasTargetGroupValue =
+    Object.prototype.hasOwnProperty.call(input, "targetGroupValue") ||
+    Object.prototype.hasOwnProperty.call(input, "groupValue") ||
+    Object.prototype.hasOwnProperty.call(input, "value");
+  const targetGroupValue = Object.prototype.hasOwnProperty.call(input, "targetGroupValue")
+    ? input.targetGroupValue
+    : Object.prototype.hasOwnProperty.call(input, "groupValue")
+      ? input.groupValue
+      : Object.prototype.hasOwnProperty.call(input, "value")
+        ? input.value
+        : undefined;
+
+  const defaultPlan = resolveViewCreateDefaults(
+    runtime.workflowOperatorRegistry,
+    table,
+    viewDefinition,
+    hasTargetGroupValue ? targetGroupValue : undefined
+  );
+  if (!defaultPlan.ok) {
+    return {
+      message: defaultPlan.message,
+      ok: false,
+      status: defaultPlan.reason === "view_group_value_required" ? 400 : 409
+    };
+  }
+
+  const canonicalized = canonicalizeRecordCells(table.fields, rawCells);
+  if (canonicalized.diagnostics.length > 0) {
+    return {
+      message: `View-scoped create preview received conflicting cell aliases for ${recordId}.`,
+      ok: false,
+      status: 409
+    };
+  }
+
+  for (const [fieldId, value] of Object.entries(defaultPlan.defaultCells)) {
+    if (
+      Object.prototype.hasOwnProperty.call(canonicalized.cells, fieldId) &&
+      JSON.stringify(canonicalized.cells[fieldId]) !== JSON.stringify(value)
+    ) {
+      return {
+        message: `View-scoped create preview would violate field constraint ${fieldId}.`,
+        ok: false,
+        status: 409
+      };
+    }
+  }
+
+  return {
+    diagnostics: canonicalized.diagnostics,
+    ok: true,
+    sanitized: {
+      ...input,
+      cells: {
+        ...canonicalized.cells,
+        ...defaultPlan.defaultCells
+      }
+    }
+  };
+}
+
+async function handleViewScopedRecordCreate(
+  request: Request,
+  env: CloudTableEnv,
+  runtime: ReturnType<typeof createRuntime>,
+  input: {
+    body: Record<string, unknown>;
+    tableId: string;
+    viewId: string;
+  }
+): Promise<Response> {
+  const workspaceId = readNonEmptyString(input.body.workspaceId);
+  if (!workspaceId) {
+    return badRequest("workspaceId is required in the command body.");
+  }
+
+  const permissionsVersion =
+    typeof input.body.permissionsVersion === "number" &&
+    Number.isFinite(input.body.permissionsVersion)
+      ? input.body.permissionsVersion
+      : null;
+  if (input.body.permissionsVersion !== undefined && permissionsVersion === null) {
+    return badRequest(
+      "permissionsVersion must be a finite number when provided for view-scoped record creation."
+    );
+  }
+
+  const permissionScopeHash =
+    input.body.permissionScopeHash === undefined
+      ? null
+      : readNonEmptyString(input.body.permissionScopeHash);
+  if (input.body.permissionScopeHash !== undefined && permissionScopeHash === null) {
+    return badRequest(
+      "permissionScopeHash must be a string when provided for view-scoped record creation."
+    );
+  }
+
+  const actorPrincipalId = readNonEmptyString((input.body.actor as { principalId?: unknown })?.principalId);
+  const actorMode = (input.body.actor as { mode?: unknown })?.mode;
+  if (
+    !actorPrincipalId ||
+    (actorMode !== "user" && actorMode !== "workflow" && actorMode !== "agent")
+  ) {
+    return badRequest(
+      "actor.principalId and actor.mode are required for view-scoped record creation."
+    );
+  }
+
+  const commandId = readNonEmptyString(input.body.commandId);
+  const idempotencyKey = readNonEmptyString(input.body.idempotencyKey);
+  if (!commandId || !idempotencyKey) {
+    return badRequest(
+      "commandId and idempotencyKey are required for view-scoped record creation."
+    );
+  }
+
+  const payload = isRecord(input.body.payload) ? input.body.payload : {};
+  const recordId = readNonEmptyString(payload.recordId);
+  if (!recordId) {
+    return badRequest("payload.recordId is required for view-scoped record creation.");
+  }
+
+  const rawCells =
+    typeof payload.cells === "object" && payload.cells !== null && !Array.isArray(payload.cells)
+      ? (payload.cells as Record<string, unknown>)
+      : {};
+  const hasTargetGroupValue =
+    Object.prototype.hasOwnProperty.call(payload, "targetGroupValue") ||
+    Object.prototype.hasOwnProperty.call(payload, "groupValue") ||
+    Object.prototype.hasOwnProperty.call(payload, "value");
+  const targetGroupValue = Object.prototype.hasOwnProperty.call(payload, "targetGroupValue")
+    ? payload.targetGroupValue
+    : Object.prototype.hasOwnProperty.call(payload, "groupValue")
+      ? payload.groupValue
+      : Object.prototype.hasOwnProperty.call(payload, "value")
+        ? payload.value
+        : undefined;
+
+  const resolvedViewSnapshot = await resolvePermissionSnapshot(env.DB, {
+    fieldTypeRegistry: runtime.fieldTypeRegistry,
+    permissionScopeHash: permissionScopeHash ?? undefined,
+    policyRevision: permissionsVersion ?? undefined,
+    principalId: actorPrincipalId,
+    scope: {
+      kind: "view",
+      tableId: input.tableId,
+      viewId: input.viewId
+    },
+    workspaceId
+  });
+  if (!resolvedViewSnapshot.ok) {
+    return badRequest(resolvedViewSnapshot.message);
+  }
+
+  const [table, viewDefinition, viewQuery] = await Promise.all([
+    readTableSchemaMetadata(env.DB, {
+      tableId: input.tableId,
+      workspaceId
+    }),
+    readViewDefinitionMetadata(env.DB, {
+      tableId: input.tableId,
+      viewId: input.viewId,
+      workspaceId
+    }),
+    readViewQuery(
+      env.DB,
+      runtime.fieldTypeRegistry,
+      runtime.viewPlanner,
+      runtime.workflowOperatorRegistry,
+      {
+        snapshot: resolvedViewSnapshot.snapshot,
+        tableId: input.tableId,
+        viewId: input.viewId,
+        workspaceId
+      }
+    )
+  ]);
+  if (!table || !viewDefinition || !viewQuery) {
+    return notFound(`View ${input.viewId} was not found in table ${input.tableId}.`);
+  }
+
+  const createRecord = viewQuery.view.actions?.createRecord;
+  if (!createRecord || createRecord.status !== "writable") {
+    return forbidden(
+      `Principal ${actorPrincipalId} is not allowed to create records in view ${input.viewId}.`,
+      {
+        action: createRecord ?? null,
+        tableId: input.tableId,
+        viewId: input.viewId
+      }
+    );
+  }
+
+  const defaultPlan = resolveViewCreateDefaults(
+    runtime.workflowOperatorRegistry,
+    table,
+    viewDefinition,
+    hasTargetGroupValue ? targetGroupValue : undefined
+  );
+  if (!defaultPlan.ok) {
+    const status = defaultPlan.reason === "view_group_value_required" ? 400 : 409;
+    return json(
+      {
+        details: {
+          reason: defaultPlan.reason,
+          tableId: input.tableId,
+          viewId: input.viewId
+        },
+        error: status === 400 ? "bad_request" : "conflict",
+        message: defaultPlan.message
+      },
+      {
+        status
+      }
+    );
+  }
+
+  const canonicalized = canonicalizeRecordCells(table.fields, rawCells);
+  if (canonicalized.diagnostics.length > 0) {
+    return conflict(`View-scoped create received conflicting cell aliases for ${recordId}.`, {
+      diagnostics: canonicalized.diagnostics,
+      reason: "view_create_duplicate_cell_alias",
+      recordId,
+      tableId: input.tableId,
+      viewId: input.viewId
+    });
+  }
+
+  for (const [fieldId, value] of Object.entries(defaultPlan.defaultCells)) {
+    if (
+      Object.prototype.hasOwnProperty.call(canonicalized.cells, fieldId) &&
+      JSON.stringify(canonicalized.cells[fieldId]) !== JSON.stringify(value)
+    ) {
+      return conflict(`View-scoped create would violate field constraint ${fieldId}.`, {
+        fieldId,
+        providedValue: canonicalized.cells[fieldId],
+        reason: "view_create_constraint_mismatch",
+        requiredValue: value,
+        tableId: input.tableId,
+        viewId: input.viewId
+      });
+    }
+  }
+
+  const cells = {
+    ...canonicalized.cells,
+    ...defaultPlan.defaultCells
+  };
+
+  const resolvedTableSnapshot = await resolvePermissionSnapshot(env.DB, {
+    fieldTypeRegistry: runtime.fieldTypeRegistry,
+    principalId: actorPrincipalId,
+    scope: {
+      kind: "table",
+      tableId: input.tableId
+    },
+    workspaceId
+  });
+  if (!resolvedTableSnapshot.ok) {
+    return badRequest(resolvedTableSnapshot.message);
+  }
+
+  const command: CommandEnvelope = {
+    actor: {
+      mode: actorMode,
+      principalId: actorPrincipalId
+    },
+    commandId,
+    commandType: "record.create",
+    idempotencyKey,
+    payload: {
+      ...(typeof payload.recordKey === "string" && payload.recordKey.length > 0
+        ? { recordKey: payload.recordKey }
+        : {}),
+      cells,
+      recordId
+    },
+    permissionScopeHash: resolvedTableSnapshot.snapshot.scopeHash,
+    permissionsVersion: resolvedTableSnapshot.snapshot.policyRevision,
+    schemaEpoch:
+      typeof input.body.schemaEpoch === "number"
+        ? input.body.schemaEpoch
+        : resolvedTableSnapshot.snapshot.schemaEpoch,
+    scope: "table",
+    tableId: input.tableId,
+    workspaceId
+  };
+
+  const response = await dispatchCommandToCoordinator(env, new URL(request.url).origin, command);
+  const responseBody = (await response.json()) as Record<string, unknown>;
+  return json({
+    ...responseBody,
+    aggregate: aggregateDescriptorForCommand(command),
+    viewAction: {
+      defaultedFieldIds: Object.keys(defaultPlan.defaultCells),
+      recordId,
+      targetGroupValue: hasTargetGroupValue ? targetGroupValue ?? null : null,
+      type: "createRecord",
+      viewId: input.viewId
+    }
+  });
+}
+
+function evaluateViewFilterForValue(
+  workflowOperatorRegistry: ReturnType<typeof createWorkflowOperatorRegistry>,
+  filter: {
+    comparator?: string;
+    fieldId: string;
+    operatorId: string;
+    value?: unknown;
+  },
+  value: unknown
+): boolean {
+  const operator = workflowOperatorRegistry.get(filter.operatorId);
+  if (!operator || operator.kind !== "condition") {
+    return false;
+  }
+
+  switch (filter.operatorId) {
+    case "equals":
+    case "not_equals":
+      return operator.evaluate({
+        left: value,
+        right: filter.value
+      });
+    case "is_empty":
+    case "is_not_empty":
+      return operator.evaluate({
+        value
+      });
+    case "text_contains":
+      return operator.evaluate({
+        query: filter.value,
+        value
+      });
+    case "text_starts_with":
+      return operator.evaluate({
+        prefix: filter.value,
+        value
+      });
+    case "number_compare":
+    case "date_compare":
+      return operator.evaluate({
+        comparator: filter.comparator,
+        left: value,
+        right: filter.value
+      });
+    case "select_has_option":
+      return operator.evaluate({
+        option: filter.value,
+        value
+      });
+    case "relation_contains_record":
+      return operator.evaluate({
+        recordId: filter.value,
+        value
+      });
+    default:
+      return false;
+  }
 }
 
 function buildAgentToolInvocation(
@@ -930,6 +2315,124 @@ function buildAgentToolInvocation(
         } as InspectWorkspaceToolInput,
         toolId
       };
+    case "explainPermissions": {
+      const fieldId = readRequiredAgentToolString(input.fieldId, "fieldId");
+      return {
+        input: {
+          fieldId,
+          fieldType:
+            readOptionalAgentToolString(input.fieldType) ??
+            context.snapshot.fields[fieldId]?.fieldType,
+          surfaces: readExplainablePermissionSurfaces(input.surfaces),
+          tableId: readOptionalAgentToolString(input.tableId) ?? undefined,
+          viewId: readOptionalAgentToolString(input.viewId) ?? undefined,
+          workspaceId: context.workspaceId
+        } as ExplainPermissionsToolInput,
+        toolId
+      };
+    }
+    case "previewPermissionPersona":
+      return {
+        input: {
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          viewId: readRequiredAgentToolString(input.viewId, "viewId"),
+          workspaceId: context.workspaceId
+        },
+        toolId
+      };
+    case "inspectRecord":
+      return {
+        input: {
+          recordId: readRequiredAgentToolString(input.recordId, "recordId"),
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          workspaceId: context.workspaceId
+        } as InspectRecordToolInput,
+        toolId
+      };
+    case "queryView":
+      return {
+        input: {
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          viewId: readRequiredAgentToolString(input.viewId, "viewId"),
+          workspaceId: context.workspaceId
+        } as QueryViewToolInput,
+        toolId
+      };
+    case "readActivityHistory":
+      return {
+        input: {
+          beforeTableSequence:
+            typeof input.beforeTableSequence === "number"
+              ? readPositiveInteger(input.beforeTableSequence, "beforeTableSequence")
+              : undefined,
+          limit:
+            typeof input.limit === "number" ? readActivityHistoryLimit(input.limit) : undefined,
+          recordId: readOptionalAgentToolString(input.recordId) ?? undefined,
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          workspaceId: context.workspaceId
+        } as ReadActivityHistoryToolInput,
+        toolId
+      };
+    case "readWorkspaceActivityHistory":
+      return {
+        input: {
+          beforeWorkspaceSequence:
+            typeof input.beforeWorkspaceSequence === "number"
+              ? readPositiveInteger(input.beforeWorkspaceSequence, "beforeWorkspaceSequence")
+              : undefined,
+          limit:
+            typeof input.limit === "number" ? readActivityHistoryLimit(input.limit) : undefined,
+          workspaceId: context.workspaceId
+        } as ReadWorkspaceActivityHistoryToolInput,
+        toolId
+      };
+    case "inspectApp":
+      return {
+        input: {
+          appId: readRequiredAgentToolString(input.appId, "appId"),
+          workspaceId: context.workspaceId
+        } as InspectAppToolInput,
+        toolId
+      };
+    case "inspectTableSchema":
+      return {
+        input: {
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          workspaceId: context.workspaceId
+        } as InspectTableSchemaToolInput,
+        toolId
+      };
+    case "inspectViewDefinition":
+      return {
+        input: {
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          viewId: readRequiredAgentToolString(input.viewId, "viewId"),
+          workspaceId: context.workspaceId
+        } as InspectViewDefinitionToolInput,
+        toolId
+      };
+    case "inspectWorkflowDefinition":
+      return {
+        input: {
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId"),
+          workspaceId: context.workspaceId
+        } as InspectWorkflowDefinitionToolInput,
+        toolId
+      };
+    case "readAppActivityHistory":
+      return {
+        input: {
+          appId: readRequiredAgentToolString(input.appId, "appId"),
+          beforeWorkspaceSequence:
+            typeof input.beforeWorkspaceSequence === "number"
+              ? readPositiveInteger(input.beforeWorkspaceSequence, "beforeWorkspaceSequence")
+              : undefined,
+          limit:
+            typeof input.limit === "number" ? readActivityHistoryLimit(input.limit) : undefined,
+          workspaceId: context.workspaceId
+        } as ReadAppActivityHistoryToolInput,
+        toolId
+      };
     case "readWorkflowHistory":
       return {
         input: {
@@ -944,6 +2447,37 @@ function buildAgentToolInvocation(
           workflowRunId: readRequiredAgentToolString(input.workflowRunId, "workflowRunId"),
           workspaceId: context.workspaceId
         } as ReadWorkflowRunDetailToolInput,
+        toolId
+      };
+    case "prepareWorkflowDeadLetterReplay":
+      return {
+        input: {
+          ...commandContext,
+          deadLetterId: readRequiredAgentToolString(input.deadLetterId, "deadLetterId"),
+          replayRequestId: readOptionalAgentToolString(input.replayRequestId) ?? undefined
+        } as WorkflowDeadLetterReplayToolInput,
+        toolId
+      };
+    case "requestWorkflowDeadLetterReplay":
+      if (ingress !== "execute") {
+        throw new Error("Execution-phase agent tools are not allowed on the preview ingress.");
+      }
+      return {
+        input: {
+          ...commandContext,
+          deadLetterId: readRequiredAgentToolString(input.deadLetterId, "deadLetterId"),
+          replayRequestId: readOptionalAgentToolString(input.replayRequestId) ?? undefined
+        } as WorkflowDeadLetterReplayToolInput,
+        toolId
+      };
+    case "createApp":
+      return {
+        input: {
+          ...commandContext,
+          appId: readRequiredAgentToolString(input.appId, "appId"),
+          appName: readRequiredAgentToolString(input.appName, "appName"),
+          appSlug: readRequiredAgentToolString(input.appSlug, "appSlug")
+        } as CreateAppToolInput,
         toolId
       };
     case "createTable":
@@ -978,6 +2512,15 @@ function buildAgentToolInvocation(
         } as UpdateViewToolInput,
         toolId
       };
+    case "deleteView":
+      return {
+        input: {
+          ...commandContext,
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          viewId: readRequiredAgentToolString(input.viewId, "viewId")
+        } as DeleteViewToolInput,
+        toolId
+      };
     case "configureFieldPermission":
       return {
         input: {
@@ -986,12 +2529,108 @@ function buildAgentToolInvocation(
         } as ConfigureFieldPermissionToolInput,
         toolId
       };
+    case "updateField":
+      return {
+        input: {
+          ...commandContext,
+          config: readRequiredAgentToolObject(input.config, "config"),
+          fieldId: readRequiredAgentToolString(input.fieldId, "fieldId"),
+          tableId: readRequiredAgentToolString(input.tableId, "tableId")
+        } as UpdateFieldToolInput,
+        toolId
+      };
+    case "archiveField":
+      return {
+        input: {
+          ...commandContext,
+          fieldId: readRequiredAgentToolString(input.fieldId, "fieldId"),
+          tableId: readRequiredAgentToolString(input.tableId, "tableId")
+        } as ArchiveFieldToolInput,
+        toolId
+      };
+    case "reorderFields":
+      return {
+        input: {
+          ...commandContext,
+          fieldIds: readRequiredAgentToolStringArray(input.fieldIds, "fieldIds"),
+          tableId: readRequiredAgentToolString(input.tableId, "tableId")
+        } as ReorderFieldsToolInput,
+        toolId
+      };
+    case "createRecord":
+      return {
+        input: {
+          ...commandContext,
+          cells: readOptionalAgentToolObject(input.cells) ?? undefined,
+          recordId: readRequiredAgentToolString(input.recordId, "recordId"),
+          tableId: readRequiredAgentToolString(input.tableId, "tableId")
+        } as CreateRecordToolInput,
+        toolId
+      };
+    case "updateRecord":
+      if (!Object.prototype.hasOwnProperty.call(input, "patch")) {
+        throw new Error("patch is required for this agent tool.");
+      }
+      return {
+        input: {
+          ...commandContext,
+          patch: readRequiredAgentToolObject(input.patch, "patch"),
+          recordId: readRequiredAgentToolString(input.recordId, "recordId"),
+          tableId: readRequiredAgentToolString(input.tableId, "tableId")
+        } as UpdateRecordToolInput,
+        toolId
+      };
+    case "bulkUpdateRecords": {
+      const updates = readBulkRecordUpdates(input.updates);
+      return {
+        input: {
+          ...commandContext,
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          updates
+        } as BulkUpdateRecordsToolInput,
+        toolId
+      };
+    }
+    case "archiveRecord":
+      return {
+        input: {
+          ...commandContext,
+          recordId: readRequiredAgentToolString(input.recordId, "recordId"),
+          tableId: readRequiredAgentToolString(input.tableId, "tableId")
+        } as ArchiveRecordToolInput,
+        toolId
+      };
+    case "updateCell":
+      if (!Object.prototype.hasOwnProperty.call(input, "value")) {
+        throw new Error("value is required for this agent tool.");
+      }
+      return {
+        input: {
+          ...commandContext,
+          fieldId: readRequiredAgentToolString(input.fieldId, "fieldId"),
+          recordId: readRequiredAgentToolString(input.recordId, "recordId"),
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          value: input.value
+        } as UpdateCellToolInput,
+        toolId
+      };
     case "proposeWorkflow":
       return {
         input: {
           ...input,
           ...commandContext
         } as ProposeWorkflowToolInput,
+        toolId
+      };
+    case "updateWorkflow":
+      return {
+        input: {
+          ...commandContext,
+          definition: isRecord(input.definition) ? input.definition : {},
+          name: readRequiredAgentToolString(input.name, "name"),
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as UpdateWorkflowToolInput,
         toolId
       };
     case "publishWorkflow":
@@ -1041,6 +2680,9 @@ function buildAgentToolInvocation(
         toolId
       };
   }
+
+  const unsupportedToolId: never = toolId;
+  throw new Error(`Unsupported agent tool: ${unsupportedToolId}`);
 }
 
 async function handleAgentToolIngress(
@@ -1080,14 +2722,26 @@ async function handleAgentToolIngress(
   }
 
   const runtime = createRuntime(env);
-  const workflowObservabilityTool =
-    toolId === "readWorkflowHistory" || toolId === "readWorkflowRunDetail";
-  const workflowOperationsAccess = workflowObservabilityTool
+  const workflowOperationsTool =
+    toolId === "inspectWorkflowDefinition" ||
+    toolId === "readWorkflowHistory" ||
+    toolId === "readWorkflowRunDetail" ||
+    toolId === "prepareWorkflowDeadLetterReplay" ||
+    toolId === "requestWorkflowDeadLetterReplay";
+  const workflowOperationsAccess = workflowOperationsTool
     ? await resolveWorkflowOperationsAccess(env, {
+        deadLetterId:
+          toolId === "prepareWorkflowDeadLetterReplay" ||
+          toolId === "requestWorkflowDeadLetterReplay"
+            ? readNonEmptyString(input.deadLetterId)
+            : null,
         permissionScopeHash,
         policyRevisionValue: policyRevision === null ? null : String(policyRevision),
         principalId,
-        workflowId: toolId === "readWorkflowHistory" ? readNonEmptyString(input.workflowId) : null,
+        workflowId:
+          toolId === "inspectWorkflowDefinition" || toolId === "readWorkflowHistory"
+            ? readNonEmptyString(input.workflowId)
+            : null,
         workflowRunId:
           toolId === "readWorkflowRunDetail" ? readNonEmptyString(input.workflowRunId) : null,
         workspaceId
@@ -1159,12 +2813,39 @@ async function handleAgentToolIngress(
     return badRequest(access.reason ?? `Agent tool is not allowed on the ${ingress} ingress.`);
   }
 
-  const sanitizedInput = permissionedRuntime.agentToolRegistry.sanitizeInput(
+  let sanitizedInput = permissionedRuntime.agentToolRegistry.sanitizeInput(
     tool.id,
     input,
     fields,
     snapshot
   );
+  if (tool.id === "createRecord" && readNonEmptyString(sanitizedInput.sanitized.viewId)) {
+    const prepared = await prepareViewScopedCreateInput(env, runtime, snapshot, sanitizedInput.sanitized);
+    if (!prepared.ok) {
+      return json(
+        {
+          error:
+            prepared.status === 403
+              ? "forbidden"
+              : prepared.status === 404
+                ? "not_found"
+                : prepared.status === 409
+                  ? "conflict"
+                  : "bad_request",
+          message: prepared.message
+        },
+        {
+          status: prepared.status
+        }
+      );
+    }
+
+    sanitizedInput = {
+      ...sanitizedInput,
+      diagnostics: Array.from(new Set([...sanitizedInput.diagnostics, ...prepared.diagnostics])),
+      sanitized: prepared.sanitized
+    };
+  }
 
   let invocation: AgentToolInvocation;
   try {
@@ -1181,20 +2862,46 @@ async function handleAgentToolIngress(
     );
   }
 
-  const result =
-    invocation.toolId === "executeCommand"
-      ? await invokeReviewedExecutionTool(invocation.input.command, env, request.url)
-      : await permissionedRuntime.agentToolRegistry.invoke(invocation);
+  let result: AgentToolInvocationResult;
+  try {
+    result =
+      invocation.toolId === "executeCommand"
+        ? await invokeReviewedExecutionTool(invocation.input.command, env, request.url)
+        : invocation.toolId === "explainPermissions"
+          ? explainPermissionsWithResolvedSnapshot(
+              invocation.input,
+              snapshot,
+              permissionedRuntime.permissionEngine
+            )
+        : await permissionedRuntime.agentToolRegistry.invoke(invocation);
+  } catch (error) {
+    if (error instanceof SchemaMetadataAccessError) {
+      return forbidden(error.message, error.details);
+    }
+
+    throw error;
+  }
   const serializedResult = serializeAgentToolResult(result);
   const sanitizedOutput =
     tool.id === "readWorkflowHistory" ||
-    tool.id === "readWorkflowRunDetail"
+    tool.id === "readWorkflowRunDetail" ||
+    tool.id === "prepareWorkflowDeadLetterReplay" ||
+    tool.id === "requestWorkflowDeadLetterReplay"
       ? {
           diagnostics: [] as string[],
           hiddenFieldIds: [] as string[],
           sanitized: serializedResult
         }
       : permissionedRuntime.agentToolRegistry.sanitizeOutput(tool.id, serializedResult, fields, snapshot);
+
+  const status =
+    result.kind === "workflow-dead-letter-replay" && result.status === "rejected"
+      ? result.reason === "not_found"
+        ? 404
+        : result.reason === "already_requested"
+          ? 409
+          : 400
+      : 200;
 
   return json({
     access,
@@ -1213,6 +2920,99 @@ async function handleAgentToolIngress(
       phase: tool.phase,
       scope: tool.scope,
       successorToolId: tool.successorToolId ?? null
+    }
+  }, { status });
+}
+
+async function handlePermissionExplainIngress(
+  request: Request,
+  env: CloudTableEnv
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return methodNotAllowed(request.method, ["POST"]);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return badRequest("Permission explanation body must be valid JSON.");
+  }
+
+  const workspaceId = readNonEmptyString(body.workspaceId);
+  const principalId = readNonEmptyString(body.principalId);
+  const tableId = readNonEmptyString(body.tableId);
+  const viewId = readNonEmptyString(body.viewId);
+  const fieldId = readNonEmptyString(body.fieldId);
+  const permissionScopeHash = readNonEmptyString(body.permissionScopeHash);
+  const policyRevision =
+    typeof body.policyRevision === "number" && Number.isFinite(body.policyRevision)
+      ? body.policyRevision
+      : null;
+  let surfaces: ExplainPermissionsToolInput["surfaces"];
+  try {
+    surfaces = readExplainablePermissionSurfaces(body.surfaces);
+  } catch (error) {
+    return badRequest(
+      error instanceof Error ? error.message : "Permission explanation surfaces were invalid."
+    );
+  }
+
+  if (!workspaceId || !principalId || !tableId || !fieldId) {
+    return badRequest(
+      "workspaceId, principalId, tableId, and fieldId are required for permission explanation ingress."
+    );
+  }
+
+  if (body.policyRevision !== undefined && policyRevision === null) {
+    return badRequest(
+      "policyRevision must be a finite number when provided for permission explanation ingress."
+    );
+  }
+
+  const runtime = createRuntime(env);
+  const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
+    fieldTypeRegistry: runtime.fieldTypeRegistry,
+    permissionScopeHash,
+    policyRevision,
+    principalId,
+    scope: viewId
+      ? {
+          kind: "view",
+          tableId,
+          viewId
+        }
+      : {
+          kind: "table",
+          tableId
+        },
+    workspaceId
+  });
+
+  if (!resolvedSnapshot.ok) {
+    return badRequest(resolvedSnapshot.message);
+  }
+
+  const result = explainPermissionsWithResolvedSnapshot(
+    {
+      fieldId,
+      fieldType: readOptionalAgentToolString(body.fieldType) ?? undefined,
+      surfaces,
+      tableId,
+      viewId: viewId ?? undefined,
+      workspaceId
+    },
+    resolvedSnapshot.snapshot,
+    runtime.permissionEngine
+  );
+
+  return json({
+    explanation: result.explanation,
+    permissionScope: {
+      policyRevision: resolvedSnapshot.snapshot.policyRevision,
+      principalId: resolvedSnapshot.snapshot.principalId,
+      scopeHash: resolvedSnapshot.snapshot.scopeHash,
+      workspaceId
     }
   });
 }
@@ -1250,6 +3050,223 @@ async function invokeReviewedExecutionTool(
   };
 }
 
+async function handlePermissionExplanationIngress(
+  request: Request,
+  env: CloudTableEnv,
+  runtime: CloudTableRuntime
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return methodNotAllowed(request.method, ["POST"]);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return badRequest("Permission explanation body must be valid JSON.");
+  }
+
+  const workspaceId = readNonEmptyString(body.workspaceId);
+  const principalId = readNonEmptyString(body.principalId);
+  const fieldId = readNonEmptyString(body.fieldId);
+  const permissionScopeHash = readNonEmptyString(body.permissionScopeHash);
+  const policyRevision =
+    typeof body.policyRevision === "number" && Number.isFinite(body.policyRevision)
+      ? body.policyRevision
+      : null;
+
+  if (!workspaceId || !principalId || !fieldId) {
+    return badRequest("workspaceId, principalId, and fieldId are required for permission explanation ingress.");
+  }
+
+  if (body.policyRevision !== undefined && policyRevision === null) {
+    return badRequest(
+      "policyRevision must be a finite number when provided for permission explanation ingress."
+    );
+  }
+
+  if (body.permissionScopeHash !== undefined && permissionScopeHash === null) {
+    return badRequest(
+      "permissionScopeHash must be a string when provided for permission explanation ingress."
+    );
+  }
+
+  let surfaces: ReturnType<typeof readExplainablePermissionSurfaces> | undefined;
+  try {
+    surfaces = readExplainablePermissionSurfaces(body.surfaces);
+  } catch (error) {
+    return badRequest(
+      error instanceof Error ? error.message : "Permission explanation surfaces are invalid."
+    );
+  }
+
+  const rawInput: Record<string, unknown> = {
+    fieldId,
+    surfaces,
+    tableId: body.tableId,
+    viewId: body.viewId
+  };
+  if (body.fieldType !== undefined) {
+    rawInput.fieldType = body.fieldType;
+  }
+
+  const resolvedScope = resolveAgentToolScope("explainPermissions", workspaceId, rawInput);
+  if (!resolvedScope.ok) {
+    return badRequest(resolvedScope.message);
+  }
+
+  const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
+    fieldTypeRegistry: runtime.fieldTypeRegistry,
+    permissionScopeHash,
+    policyRevision,
+    principalId,
+    scope: resolvedScope.scope,
+    workspaceId
+  });
+  if (!resolvedSnapshot.ok) {
+    return badRequest(resolvedSnapshot.message);
+  }
+
+  const snapshot = resolvedSnapshot.snapshot;
+  if (!snapshot.fields[fieldId]) {
+    return forbidden(
+      `Principal ${principalId} is not allowed to inspect permission details for field ${fieldId} in the resolved scope.`,
+      {
+        hiddenFieldIds: [fieldId]
+      }
+    );
+  }
+
+  const permissionedRuntime = createRuntimeWithSnapshot(env, snapshot);
+  let invocation: AgentToolInvocation;
+  try {
+    invocation = buildAgentToolInvocation("explainPermissions", rawInput, "preview", {
+      permissionScopeHash: snapshot.scopeHash,
+      policyRevision: snapshot.policyRevision,
+      principalId,
+      snapshot,
+      workspaceId
+    });
+  } catch (error) {
+    return badRequest(
+      error instanceof Error ? error.message : "Permission explanation input was invalid."
+    );
+  }
+
+  const result = await permissionedRuntime.agentToolRegistry.invoke(invocation);
+  if (result.kind !== "permission-explanation") {
+    throw new Error("Permission explanation ingress returned an unexpected agent tool result.");
+  }
+
+  return json({
+    explanation: result.explanation,
+    permissionScope: {
+      policyRevision: snapshot.policyRevision,
+      principalId: snapshot.principalId,
+      scopeHash: snapshot.scopeHash,
+      workspaceId
+    }
+  });
+}
+
+async function handlePermissionPersonaPreviewIngress(
+  request: Request,
+  env: CloudTableEnv,
+  runtime: CloudTableRuntime
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return methodNotAllowed(request.method, ["POST"]);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return badRequest("Permission persona preview body must be valid JSON.");
+  }
+
+  const workspaceId = readNonEmptyString(body.workspaceId);
+  const principalId = readNonEmptyString(body.principalId);
+  const tableId = readNonEmptyString(body.tableId);
+  const viewId = readNonEmptyString(body.viewId);
+  const permissionScopeHash = readNonEmptyString(body.permissionScopeHash);
+  const policyRevision =
+    typeof body.policyRevision === "number" && Number.isFinite(body.policyRevision)
+      ? body.policyRevision
+      : null;
+
+  if (!workspaceId || !principalId || !tableId || !viewId) {
+    return badRequest(
+      "workspaceId, principalId, tableId, and viewId are required for permission persona preview ingress."
+    );
+  }
+
+  if (body.policyRevision !== undefined && policyRevision === null) {
+    return badRequest(
+      "policyRevision must be a finite number when provided for permission persona preview ingress."
+    );
+  }
+
+  if (body.permissionScopeHash !== undefined && permissionScopeHash === null) {
+    return badRequest(
+      "permissionScopeHash must be a string when provided for permission persona preview ingress."
+    );
+  }
+
+  const rawInput: Record<string, unknown> = {
+    tableId,
+    viewId
+  };
+  const resolvedScope = resolveAgentToolScope("previewPermissionPersona", workspaceId, rawInput);
+  if (!resolvedScope.ok) {
+    return badRequest(resolvedScope.message);
+  }
+
+  const resolvedSnapshot = await resolvePermissionSnapshot(env.DB, {
+    fieldTypeRegistry: runtime.fieldTypeRegistry,
+    permissionScopeHash,
+    policyRevision,
+    principalId,
+    scope: resolvedScope.scope,
+    workspaceId
+  });
+  if (!resolvedSnapshot.ok) {
+    return badRequest(resolvedSnapshot.message);
+  }
+
+  const snapshot = resolvedSnapshot.snapshot;
+  const permissionedRuntime = createRuntimeWithSnapshot(env, snapshot);
+  let invocation: AgentToolInvocation;
+  try {
+    invocation = buildAgentToolInvocation("previewPermissionPersona", rawInput, "preview", {
+      permissionScopeHash: snapshot.scopeHash,
+      policyRevision: snapshot.policyRevision,
+      principalId,
+      snapshot,
+      workspaceId
+    });
+  } catch (error) {
+    return badRequest(
+      error instanceof Error ? error.message : "Permission persona preview input was invalid."
+    );
+  }
+
+  const result = await permissionedRuntime.agentToolRegistry.invoke(invocation);
+  if (result.kind !== "permission-persona-preview") {
+    throw new Error("Permission persona preview ingress returned an unexpected agent tool result.");
+  }
+
+  return json({
+    permissionScope: {
+      policyRevision: snapshot.policyRevision,
+      principalId: snapshot.principalId,
+      scopeHash: snapshot.scopeHash,
+      workspaceId
+    },
+    preview: result.preview
+  });
+}
+
 function normalizeAgentCommand(
   value: unknown,
   context: {
@@ -1281,6 +3298,71 @@ function serializeAgentToolResult(result: AgentToolInvocationResult): Record<str
   return result as unknown as Record<string, unknown>;
 }
 
+async function hydrateRecordMutationFieldEdits(
+  db: D1Database,
+  command: Partial<CommandEnvelope>
+): Promise<Partial<CommandEnvelope>> {
+  if (command.commandType !== "records.bulk_patch" || typeof command.tableId !== "string") {
+    return command;
+  }
+
+  const payload = isRecord(command.payload) ? command.payload : {};
+  const updates = Array.isArray(payload.updates) ? payload.updates : [];
+  if (updates.length === 0) {
+    return command;
+  }
+
+  const fieldRows = await db
+    .prepare(
+      `SELECT id, field_key, field_type
+       FROM fields
+       WHERE workspace_id = ? AND table_id = ? AND archived_at IS NULL`
+    )
+    .bind(command.workspaceId ?? "", command.tableId)
+    .all<{ field_key: string; field_type: string; id: string }>();
+  const fieldsByIdentifier = new Map<string, { fieldId: string; fieldType: string }>();
+  for (const field of fieldRows.results ?? []) {
+    fieldsByIdentifier.set(field.id, {
+      fieldId: field.id,
+      fieldType: field.field_type
+    });
+    fieldsByIdentifier.set(field.field_key, {
+      fieldId: field.id,
+      fieldType: field.field_type
+    });
+  }
+
+  const fieldEdits = updates.flatMap((entry) => {
+    if (!isRecord(entry) || !isRecord(entry.patch)) {
+      return [];
+    }
+    const patch = entry.patch;
+
+    return Object.keys(patch)
+      .sort()
+      .flatMap((patchKey) => {
+        const field = fieldsByIdentifier.get(patchKey);
+        return field
+          ? [
+              {
+                fieldId: field.fieldId,
+                fieldType: field.fieldType,
+                value: patch[patchKey]
+              }
+            ]
+          : [];
+      });
+  });
+
+  return {
+    ...command,
+    payload: {
+      ...payload,
+      fieldEdits
+    }
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1302,6 +3384,16 @@ function readOptionalAgentToolString(value: unknown): string | null {
   return readNonEmptyString(value);
 }
 
+function readRequiredAgentToolStringArray(value: unknown, key: string): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${key} must be a non-empty array for this agent tool.`);
+  }
+
+  return value.map((entry, index) =>
+    readRequiredAgentToolString(entry, `${key}[${index}]`)
+  );
+}
+
 function readRequiredAgentToolObject(value: unknown, key: string): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error(`${key} must be an object for this agent tool.`);
@@ -1310,8 +3402,117 @@ function readRequiredAgentToolObject(value: unknown, key: string): Record<string
   return value;
 }
 
+function readBulkRecordUpdates(
+  value: unknown
+): Array<{ patch: Record<string, unknown>; recordId: string }> {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("updates must be a non-empty array for this agent tool.");
+  }
+
+  return value.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`updates[${index}] must be an object for this agent tool.`);
+    }
+
+    return {
+      patch: readRequiredAgentToolObject(entry["patch"], `updates[${index}].patch`),
+      recordId: readRequiredAgentToolString(entry.recordId, `updates[${index}].recordId`)
+    };
+  });
+}
+
 function readOptionalAgentToolObject(value: unknown): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
+}
+
+function readPositiveInteger(value: number, key: string): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${key} must be a positive integer.`);
+  }
+
+  return value;
+}
+
+function readActivityHistoryLimit(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 100) {
+    throw new Error("limit must be an integer between 1 and 100 for activity history reads.");
+  }
+
+  return value;
+}
+
+function readExplainablePermissionSurfaces(
+  value: unknown
+): Array<"direct-record-read" | "view-query" | "command-ingress" | "workflow-step" | "agent-tool"> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const allowed = new Set([
+    "direct-record-read",
+    "view-query",
+    "command-ingress",
+    "workflow-step",
+    "agent-tool"
+  ]);
+  const surfaces: Array<
+    "direct-record-read" | "view-query" | "command-ingress" | "workflow-step" | "agent-tool"
+  > = [];
+  const seen = new Set<string>();
+
+  for (const entry of value) {
+    if (typeof entry !== "string" || !allowed.has(entry)) {
+      throw new Error(
+        "surfaces entries must be one of direct-record-read, view-query, command-ingress, workflow-step, or agent-tool."
+      );
+    }
+
+    if (seen.has(entry)) {
+      continue;
+    }
+
+    seen.add(entry);
+    surfaces.push(
+      entry as "direct-record-read" | "view-query" | "command-ingress" | "workflow-step" | "agent-tool"
+    );
+  }
+
+  return surfaces;
+}
+
+function explainPermissionsWithResolvedSnapshot(
+  input: ExplainPermissionsToolInput,
+  snapshot: EffectivePermissionSnapshot,
+  permissionEngine: ReturnType<typeof createRuntime>["permissionEngine"]
+): Extract<AgentToolInvocationResult, { kind: "permission-explanation" }> {
+  const field = snapshot.fields[input.fieldId];
+  if (!field) {
+    throw new SchemaMetadataAccessError(
+      `Principal ${snapshot.principalId} is not allowed to inspect permission explanations for field ${input.fieldId}.`,
+      {
+        hiddenFieldIds: [input.fieldId]
+      }
+    );
+  }
+
+  return {
+    explanation: {
+      ...permissionEngine.explainFieldAccess(
+        {
+          fieldId: field.fieldId,
+          fieldType: field.fieldType
+        },
+        input.surfaces,
+        snapshot
+      ),
+      scope: {
+        tableId: input.tableId ?? null,
+        viewId: input.viewId ?? null,
+        workspaceId: input.workspaceId
+      }
+    },
+    kind: "permission-explanation"
+  };
 }
 
 function resolveAgentToolScope(
@@ -1339,11 +3540,95 @@ function resolveAgentToolScope(
       message: string;
       ok: false;
     } {
-  if (toolId === "inspectWorkspace" || toolId === "createTable") {
+  if (toolId === "inspectWorkspace" || toolId === "inspectApp" || toolId === "createApp" || toolId === "createTable") {
     return {
       ok: true,
       scope: {
         kind: "workspace"
+      }
+    };
+  }
+
+  if (toolId === "readWorkspaceActivityHistory" || toolId === "readAppActivityHistory") {
+    return {
+      ok: true,
+      scope: {
+        kind: "workspace"
+      }
+    };
+  }
+
+  if (toolId === "explainPermissions" || toolId === "previewPermissionPersona") {
+    const viewId = readNonEmptyString(input.viewId);
+    const tableId = readNonEmptyString(input.tableId);
+
+    if (viewId && tableId) {
+      return {
+        ok: true,
+        scope: {
+          kind: "view",
+          tableId,
+          viewId
+        }
+      };
+    }
+  }
+
+  if (toolId === "queryView") {
+    const tableId = readNonEmptyString(input.tableId);
+    const viewId = readNonEmptyString(input.viewId);
+
+    if (!tableId || !viewId) {
+      return {
+        message: "tableId and viewId are required to resolve permissions for agent tool queryView.",
+        ok: false
+      };
+    }
+
+    return {
+      ok: true,
+      scope: {
+        kind: "view",
+        tableId,
+        viewId
+      }
+    };
+  }
+
+  if (toolId === "createRecord") {
+    const tableId = readNonEmptyString(input.tableId);
+    const viewId = readNonEmptyString(input.viewId);
+
+    if (tableId && viewId) {
+      return {
+        ok: true,
+        scope: {
+          kind: "view",
+          tableId,
+          viewId
+        }
+      };
+    }
+  }
+
+  if (toolId === "inspectViewDefinition") {
+    const tableId = readNonEmptyString(input.tableId);
+    const viewId = readNonEmptyString(input.viewId);
+
+    if (!tableId || !viewId) {
+      return {
+        message:
+          "tableId and viewId are required to resolve permissions for agent tool inspectViewDefinition.",
+        ok: false
+      };
+    }
+
+    return {
+      ok: true,
+      scope: {
+        kind: "view",
+        tableId,
+        viewId
       }
     };
   }
@@ -1383,7 +3668,7 @@ async function resolveCommandPermissionScope(
     };
   }
 
-  if (command.commandType === "workflow.create") {
+  if (command.commandType === "workflow.create" || command.commandType === "workflow.update") {
     const payloadTableId = readWorkflowTriggerTableId(command.payload);
     if (payloadTableId) {
       return {
@@ -1391,32 +3676,47 @@ async function resolveCommandPermissionScope(
         tableId: payloadTableId
       };
     }
-  }
 
-  if (command.commandType === "workflow.publish" || command.commandType === "workflow.pause") {
-    const workflowId = readNonEmptyString(command.payload?.workflowId);
-    if (workflowId && typeof command.workspaceId === "string" && command.workspaceId.length > 0) {
-      const workflowTableId = await readWorkflowTriggerTableIdFromDatabase(
-        db,
-        command.workspaceId,
-        workflowId
-      );
-      if (workflowTableId) {
-        return {
-          kind: "table",
-          tableId: workflowTableId
-        };
+    const explicitPayloadTableId = readNonEmptyString(command.payload?.tableId);
+    if (explicitPayloadTableId) {
+      return {
+        kind: "table",
+        tableId: explicitPayloadTableId
+      };
+    }
+
+    if (command.commandType === "workflow.update") {
+      const workflowId = readNonEmptyString(command.payload?.workflowId);
+      if (workflowId && typeof command.workspaceId === "string" && command.workspaceId.length > 0) {
+        const workflowTableId = await readWorkflowTriggerTableIdFromDatabase(
+          db,
+          command.workspaceId,
+          workflowId
+        );
+        if (workflowTableId) {
+          return {
+            kind: "table",
+            tableId: workflowTableId
+          };
+        }
       }
     }
   }
 
-  if (command.commandType === "workflow.manual") {
+  if (
+    command.commandType === "workflow.publish" ||
+    command.commandType === "workflow.pause" ||
+    command.commandType === "workflow.manual"
+  ) {
     const workflowId = readNonEmptyString(command.payload?.workflowId);
     if (workflowId && typeof command.workspaceId === "string" && command.workspaceId.length > 0) {
       const workflowTableId = await readWorkflowTriggerTableIdFromDatabase(
         db,
         command.workspaceId,
-        workflowId
+        workflowId,
+        {
+          publishedOnly: command.commandType === "workflow.manual"
+        }
       );
       if (workflowTableId) {
         return {
@@ -1725,59 +4025,43 @@ function readWorkspaceInspectionInclude(searchParams: URLSearchParams):
   };
 }
 
-function serializeWorkflowOperatorManifest(definition: WorkflowOperatorDefinition): Record<string, unknown> {
-  const base = {
-    fixtureContract: definition.fixtureContract.map((fixture) => ({
-      id: fixture.id,
-      kind: fixture.kind
-    })),
-    id: definition.id,
-    idempotencyMode: definition.idempotencyMode,
-    inputSchema: definition.inputSchema,
-    kind: definition.kind,
-    outputSchema: definition.outputSchema,
-    purity: definition.purity,
-    requiredCapabilities: definition.requiredCapabilities,
-    retryClass: definition.retryClass,
-    timeoutClass: definition.timeoutClass,
-    version: definition.version
-  } satisfies Record<string, unknown>;
-
-  if (definition.kind === "trigger") {
-    return {
-      ...base,
-      triggerEventTypes: definition.triggerEventTypes
-    };
-  }
-
-  if (definition.kind === "action") {
-    return {
-      ...base,
-      commandScope: definition.commandScope,
-      commandType: definition.commandType
-    };
-  }
-
-  return base;
-}
-
 async function readWorkflowTriggerTableIdFromDatabase(
   db: D1Database,
   workspaceId: string,
-  workflowId: string
+  workflowId: string,
+  options?: {
+    publishedOnly?: boolean;
+  }
 ): Promise<string | null> {
-  const row = await db
-    .prepare(
-      `SELECT workflow_versions.definition_json
-       FROM workflows
-       JOIN workflow_versions
-         ON workflow_versions.workflow_id = workflows.id
-        AND workflow_versions.workspace_id = workflows.workspace_id
-        AND workflow_versions.version = workflows.current_version
-       WHERE workflows.workspace_id = ? AND workflows.id = ? AND workflows.archived_at IS NULL`
-    )
-    .bind(workspaceId, workflowId)
-    .first<{ definition_json: string }>();
+  const row = options?.publishedOnly
+    ? await db
+        .prepare(
+          `SELECT workflow_versions.definition_json
+           FROM workflows
+           JOIN workflow_versions
+             ON workflow_versions.workflow_id = workflows.id
+            AND workflow_versions.workspace_id = workflows.workspace_id
+           WHERE workflows.workspace_id = ?
+             AND workflows.id = ?
+             AND workflows.archived_at IS NULL
+             AND workflow_versions.published_at IS NOT NULL
+           ORDER BY workflow_versions.version DESC
+           LIMIT 1`
+        )
+        .bind(workspaceId, workflowId)
+        .first<{ definition_json: string }>()
+    : await db
+        .prepare(
+          `SELECT workflow_versions.definition_json
+           FROM workflows
+           JOIN workflow_versions
+             ON workflow_versions.workflow_id = workflows.id
+            AND workflow_versions.workspace_id = workflows.workspace_id
+            AND workflow_versions.version = workflows.current_version
+           WHERE workflows.workspace_id = ? AND workflows.id = ? AND workflows.archived_at IS NULL`
+        )
+        .bind(workspaceId, workflowId)
+        .first<{ definition_json: string }>();
 
   if (!row) {
     return null;

@@ -1,0 +1,20 @@
+{
+  "persistence": {
+    "appId": "app_ops",
+    "fields": [
+      {
+        "config": {},
+        "fieldId": "fld_assignee",
+        "fieldKey": "assignee",
+        "fieldType": "principal.user",
+        "label": "Assignee"
+      }
+    ],
+    "records": [
+      {
+        "recordId": "rec_001",
+        "recordKey": "record-1"
+      }
+    ]
+  }
+}

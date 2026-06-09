@@ -184,3 +184,90 @@ export function seedAppAndTable(
 
   return { appId, tableId, workspaceId };
 }
+
+export function insertField(
+  db: SqliteD1Database,
+  input: {
+    config?: Record<string, unknown>;
+    fieldId: string;
+    fieldOrder?: number | null;
+    fieldKey: string;
+    fieldType: string;
+    label: string;
+    tableId: string;
+    workspaceId?: string;
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO fields (
+        id,
+        workspace_id,
+        table_id,
+        field_order,
+        field_key,
+        label,
+        field_type,
+        field_type_version,
+        config_json,
+        created_at,
+        updated_at,
+        archived_at,
+        last_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.fieldId,
+      input.workspaceId ?? "ws_1",
+      input.tableId,
+      input.fieldOrder ?? null,
+      input.fieldKey,
+      input.label,
+      input.fieldType,
+      1,
+      JSON.stringify(input.config ?? {}),
+      "2026-06-06T00:00:00.000Z",
+      "2026-06-06T00:00:00.000Z",
+      null,
+      null
+    );
+}
+
+export function insertRecord(
+  db: SqliteD1Database,
+  input: {
+    archivedAt?: string | null;
+    lastEventId?: string | null;
+    recordId: string;
+    recordKey: string;
+    recordRevision?: number;
+    tableId: string;
+    workspaceId?: string;
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO records (
+        id,
+        workspace_id,
+        table_id,
+        record_key,
+        record_revision,
+        created_at,
+        updated_at,
+        archived_at,
+        last_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.recordId,
+      input.workspaceId ?? "ws_1",
+      input.tableId,
+      input.recordKey,
+      input.recordRevision ?? 1,
+      "2026-06-06T00:00:00.000Z",
+      "2026-06-06T00:00:00.000Z",
+      input.archivedAt ?? null,
+      input.lastEventId ?? null
+    );
+}

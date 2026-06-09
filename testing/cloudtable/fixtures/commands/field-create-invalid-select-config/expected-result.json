@@ -1,0 +1,10 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:select.single:Field option 0 contains unsupported property: extra.",
+    "invalid_field_config:select.single:Field option 0 id must be a non-empty string.",
+    "invalid_field_config:select.single:Field option 1 label must be a non-empty string.",
+    "invalid_field_config:select.single:Field option ids must be unique: ready."
+  ],
+  "status": "rejected"
+}

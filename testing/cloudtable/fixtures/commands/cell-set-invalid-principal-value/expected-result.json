@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "Expected principal.user value entries to be unique: user_1."
+  ],
+  "status": "rejected"
+}

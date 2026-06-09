@@ -6,8 +6,17 @@ import type {
   PermissionFieldDescriptor
 } from "../permissions/types";
 import type { ViewPlanner } from "../views/planner";
-import type { WorkflowActionDefinition, WorkflowOperatorRegistry } from "../workflows/types";
+import { serializeWorkflowOperatorManifest } from "../workflows/manifest";
 import type {
+  WorkflowActionDefinition,
+  WorkflowActionManifest,
+  WorkflowOperatorRegistry,
+  WorkflowTriggerDefinition,
+  WorkflowTriggerManifest
+} from "../workflows/types";
+import type {
+  ActivityHistoryReader,
+  AppInspector,
   AgentToolAuditDiff,
   AgentToolDefinition,
   AgentToolId,
@@ -15,6 +24,13 @@ import type {
   AgentToolInvocationResult,
   AgentToolRegistry,
   AgentToolSanitizationResult,
+  PermissionPersonaPreviewReader,
+  RecordInspector,
+  TableSchemaInspector,
+  ViewDefinitionInspector,
+  WorkflowDeadLetterReplayRequester,
+  ViewQueryReader,
+  WorkflowDefinitionInspector,
   WorkflowHistoryReader,
   WorkflowRunReader,
   WorkspaceInspector
@@ -24,9 +40,18 @@ type CreateAgentToolRegistryDeps = {
   permissionEngine: PermissionEngine;
   commandBus: CommandBus;
   viewPlanner: ViewPlanner;
+  activityHistoryReader: ActivityHistoryReader;
+  appInspector: AppInspector;
+  tableSchemaInspector: TableSchemaInspector;
+  viewDefinitionInspector: ViewDefinitionInspector;
+  workflowDefinitionInspector: WorkflowDefinitionInspector;
+  permissionPersonaPreviewReader: PermissionPersonaPreviewReader;
+  recordInspector: RecordInspector;
+  viewQueryReader: ViewQueryReader;
   workflowOperatorRegistry: WorkflowOperatorRegistry;
   workflowHistoryReader: WorkflowHistoryReader;
   workflowRunReader: WorkflowRunReader;
+  workflowDeadLetterReplayRequester: WorkflowDeadLetterReplayRequester;
   workspaceInspector: WorkspaceInspector;
 };
 
@@ -38,9 +63,117 @@ const jsonStringSchema = {
   type: "string"
 } as const;
 
+const jsonUnknownSchema = {
+  type: "unknown"
+} as const;
+
 const jsonFieldRefSchema = {
   properties: {
     fieldId: jsonStringSchema
+  },
+  type: "object"
+} as const;
+
+const fieldTypeManifestSchema = {
+  properties: {
+    capabilities: {
+      type: "object"
+    },
+    configSchema: {
+      type: "object"
+    },
+    defaultConfig: {
+      type: "object"
+    },
+    permissionBehavior: {
+      type: "object"
+    },
+    supportedConditionOperators: {
+      items: jsonStringSchema,
+      type: "array"
+    },
+    supportedSortModes: {
+      items: jsonStringSchema,
+      type: "array"
+    },
+    type: jsonStringSchema,
+    valueSchema: {
+      type: "object"
+    },
+    version: {
+      type: "number"
+    }
+  },
+  type: "object"
+} as const;
+
+const workflowOperatorFixtureManifestSchema = {
+  properties: {
+    id: jsonStringSchema,
+    kind: jsonStringSchema
+  },
+  type: "object"
+} as const;
+
+const workflowOperatorManifestSchema = {
+  properties: {
+    commandScope: jsonStringSchema,
+    commandType: jsonStringSchema,
+    fixtureContract: {
+      items: workflowOperatorFixtureManifestSchema,
+      type: "array"
+    },
+    id: jsonStringSchema,
+    idempotencyMode: jsonStringSchema,
+    inputSchema: {
+      type: "object"
+    },
+    kind: jsonStringSchema,
+    outputSchema: {
+      type: "object"
+    },
+    purity: jsonStringSchema,
+    requiredCapabilities: {
+      items: jsonStringSchema,
+      type: "array"
+    },
+    retryClass: jsonStringSchema,
+    timeoutClass: jsonStringSchema,
+    triggerEventTypes: {
+      items: jsonStringSchema,
+      type: "array"
+    },
+    version: {
+      type: "number"
+    }
+  },
+  type: "object"
+} as const;
+
+const agentToolManifestSchema = {
+  properties: {
+    binding: {
+      type: "object"
+    },
+    description: jsonStringSchema,
+    fieldBinding: jsonStringSchema,
+    fieldIds: {
+      items: jsonStringSchema,
+      type: "array"
+    },
+    id: jsonStringSchema,
+    inputSchema: {
+      type: "object"
+    },
+    mutating: jsonBooleanSchema,
+    mutationTarget: jsonStringSchema,
+    outputSchema: {
+      type: "object"
+    },
+    phase: jsonStringSchema,
+    requiresConfirmation: jsonBooleanSchema,
+    scope: jsonStringSchema,
+    successorToolId: jsonStringSchema
   },
   type: "object"
 } as const;
@@ -72,6 +205,20 @@ const tools: AgentToolDefinition[] = [
           type: "array"
         },
         catalog: {
+          properties: {
+            agentTools: {
+              items: agentToolManifestSchema,
+              type: "array"
+            },
+            fieldTypes: {
+              items: fieldTypeManifestSchema,
+              type: "array"
+            },
+            workflowOperators: {
+              items: workflowOperatorManifestSchema,
+              type: "array"
+            }
+          },
           type: "object"
         },
         tables: {
@@ -84,6 +231,365 @@ const tools: AgentToolDefinition[] = [
           type: "array"
         },
         workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "app"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "appInspector"
+    },
+    description:
+      "Inspect one app/base through the canonical bootstrap metadata surface, including slug and table membership.",
+    fieldBinding: "none",
+    id: "inspectApp",
+    inputSchema: {
+      properties: {
+        appId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        app: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "app"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "tableSchemaInspector"
+    },
+    description:
+      "Inspect one table schema through the canonical metadata surface used by direct table schema ingress.",
+    fieldBinding: "all-visible-fields",
+    id: "inspectTableSchema",
+    inputSchema: {
+      properties: {
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        schema: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "table"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "viewDefinitionInspector"
+    },
+    description:
+      "Inspect one saved view definition through the canonical metadata surface used by direct view-definition ingress.",
+    fieldBinding: "all-visible-fields",
+    id: "inspectViewDefinition",
+    inputSchema: {
+      properties: {
+        tableId: jsonStringSchema,
+        viewId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        view: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "view"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "workflowDefinitionInspector"
+    },
+    description:
+      "Inspect one saved workflow definition through the canonical metadata surface used by direct workflow-definition ingress.",
+    fieldBinding: "all-visible-fields",
+    id: "inspectWorkflowDefinition",
+    inputSchema: {
+      properties: {
+        workflowId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        workflow: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "workflow"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "permissionEngine"
+    },
+    description:
+      "Explain field visibility, redaction, writability, workflow visibility, and agent visibility for the current principal and scope.",
+    fieldBinding: "explicit-field-ids",
+    id: "explainPermissions",
+    inputSchema: {
+      properties: {
+        fieldId: jsonStringSchema,
+        fieldType: jsonStringSchema,
+        surfaces: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        tableId: jsonStringSchema,
+        viewId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        explanation: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "table"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "permissionPersonaPreviewReader"
+    },
+    description:
+      "Preview the effective saved-view persona surface for the current principal, including hidden, redacted, read-only, workflow, and agent-tool constraints.",
+    fieldBinding: "all-visible-fields",
+    id: "previewPermissionPersona",
+    inputSchema: {
+      properties: {
+        tableId: jsonStringSchema,
+        viewId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        preview: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: false,
+    scope: "view"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "recordInspector"
+    },
+    description:
+      "Inspect one live record through the canonical permissioned projection surface used by direct runtime record reads.",
+    fieldBinding: "all-visible-fields",
+    id: "inspectRecord",
+    inputSchema: {
+      properties: {
+        recordId: jsonStringSchema,
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        record: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "table"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "viewQueryReader"
+    },
+    description:
+      "Query one saved view through the canonical permissioned view-query surface with existing hidden-field and protected-filter guardrails.",
+    fieldBinding: "all-visible-fields",
+    id: "queryView",
+    inputSchema: {
+      properties: {
+        tableId: jsonStringSchema,
+        viewId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        view: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "view"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "activityHistoryReader"
+    },
+    description:
+      "Read bounded table or record activity history through the same audited activity feed surface used by runtime observers.",
+    fieldBinding: "none",
+    id: "readActivityHistory",
+    inputSchema: {
+      properties: {
+        beforeTableSequence: {
+          type: "number"
+        },
+        limit: {
+          type: "number"
+        },
+        recordId: jsonStringSchema,
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        activity: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "table"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "activityHistoryReader"
+    },
+    description:
+      "Read bounded workspace activity history through the same audited activity feed surface used by runtime observers.",
+    fieldBinding: "none",
+    id: "readWorkspaceActivityHistory",
+    inputSchema: {
+      properties: {
+        beforeWorkspaceSequence: {
+          type: "number"
+        },
+        limit: {
+          type: "number"
+        },
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        activity: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "app"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "activityHistoryReader"
+    },
+    description:
+      "Read bounded app activity history through the same audited activity feed surface used by runtime observers.",
+    fieldBinding: "none",
+    id: "readAppActivityHistory",
+    inputSchema: {
+      properties: {
+        appId: jsonStringSchema,
+        beforeWorkspaceSequence: {
+          type: "number"
+        },
+        limit: {
+          type: "number"
+        },
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        activity: {
+          type: "object"
+        }
       },
       type: "object"
     },
@@ -150,6 +656,119 @@ const tools: AgentToolDefinition[] = [
     phase: "draft",
     requiresConfirmation: false,
     scope: "workflow"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "replay-dead-letter"
+    },
+    description:
+      "Prepare a bounded dead-letter replay request for an eligible workflow step through the workflow operations contract.",
+    fieldBinding: "none",
+    id: "prepareWorkflowDeadLetterReplay",
+    inputSchema: {
+      properties: {
+        deadLetterId: jsonStringSchema,
+        replayRequestId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        diffs: {
+          type: "array"
+        },
+        request: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "workflow",
+    successorToolId: "requestWorkflowDeadLetterReplay"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "replay-dead-letter"
+    },
+    description:
+      "Request replay for an eligible workflow dead letter through the same workflow operations ingress used by direct runtime operators.",
+    fieldBinding: "none",
+    id: "requestWorkflowDeadLetterReplay",
+    inputSchema: {
+      properties: {
+        deadLetterId: jsonStringSchema,
+        replayRequestId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "workflow",
+    outputSchema: {
+      properties: {
+        deadLetterId: jsonStringSchema,
+        message: jsonStringSchema,
+        reason: jsonStringSchema,
+        replayRequestId: jsonStringSchema,
+        status: jsonStringSchema
+      },
+      type: "object"
+    },
+    phase: "execute",
+    requiresConfirmation: true,
+    scope: "workflow"
+  },
+  {
+    binding: {
+      commandType: "base.create",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit base.create command payload for a new workspace app.",
+    fieldBinding: "none",
+    id: "createApp",
+    inputSchema: {
+      properties: {
+        appId: jsonStringSchema,
+        appName: jsonStringSchema,
+        appSlug: jsonStringSchema,
+        commandId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "schema",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "app",
+    successorToolId: "dryRunCommand"
   },
   {
     binding: {
@@ -273,6 +892,9 @@ const tools: AgentToolDefinition[] = [
           type: "array"
         },
         groupByFieldId: jsonStringSchema,
+        showEmptyGroups: {
+          type: "boolean"
+        },
         idempotencyKey: jsonStringSchema,
         permissionsVersion: {
           type: "number"
@@ -331,6 +953,9 @@ const tools: AgentToolDefinition[] = [
           type: "array"
         },
         groupByFieldId: jsonStringSchema,
+        showEmptyGroups: {
+          type: "boolean"
+        },
         idempotencyKey: jsonStringSchema,
         permissionsVersion: {
           type: "number"
@@ -350,6 +975,50 @@ const tools: AgentToolDefinition[] = [
           items: jsonStringSchema,
           type: "array"
         },
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "view",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "view",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "view.delete",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit view.delete command payload for an existing saved view.",
+    fieldBinding: "none",
+    id: "deleteView",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        viewId: jsonStringSchema,
         workspaceId: jsonStringSchema
       },
       type: "object"
@@ -423,6 +1092,384 @@ const tools: AgentToolDefinition[] = [
   },
   {
     binding: {
+      commandType: "field.update",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit field.update command payload for a reviewed field config mutation.",
+    fieldBinding: "explicit-field-ids",
+    id: "updateField",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        config: {
+          type: "object"
+        },
+        fieldId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "schema",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "app",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "field.archive",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit field.archive command payload for a reviewed schema archive mutation.",
+    fieldBinding: "explicit-field-ids",
+    id: "archiveField",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        fieldId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "schema",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "app",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "field.reorder",
+      kind: "command-builder",
+      scope: "workspace"
+    },
+    description: "Build an explicit field.reorder command payload for one reviewed table field order mutation.",
+    fieldBinding: "explicit-field-ids",
+    id: "reorderFields",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        fieldIds: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "schema",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "app",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "record.create",
+      kind: "command-builder",
+      scope: "table"
+    },
+    description: "Build an explicit record.create command payload from agent-provided cell values.",
+    fieldBinding: "all-visible-fields",
+    id: "createRecord",
+    inputSchema: {
+      properties: {
+        cells: {
+          type: "object"
+        },
+        commandId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        recordId: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "records",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "table",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "record.update",
+      kind: "command-builder",
+      scope: "table"
+    },
+    description: "Build an explicit record.update command payload from a reviewed record patch.",
+    fieldBinding: "all-visible-fields",
+    id: "updateRecord",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        patch: {
+          type: "object"
+        },
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        recordId: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "records",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "table",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "records.bulk_patch",
+      kind: "command-builder",
+      scope: "table"
+    },
+    description:
+      "Build an explicit records.bulk_patch command payload from a reviewed multi-record patch set.",
+    fieldBinding: "all-visible-fields",
+    id: "bulkUpdateRecords",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        updates: {
+          items: {
+            properties: {
+              patch: {
+                type: "object"
+              },
+              recordId: jsonStringSchema
+            },
+            type: "object"
+          },
+          type: "array"
+        },
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "records",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "table",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "record.archive",
+      kind: "command-builder",
+      scope: "table"
+    },
+    description: "Build an explicit record.archive command payload for a reviewed archive mutation.",
+    fieldBinding: "none",
+    id: "archiveRecord",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        recordId: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "records",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "table",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "cell.set",
+      kind: "command-builder",
+      scope: "table"
+    },
+    description: "Build an explicit cell.set command payload for one reviewed record cell mutation.",
+    fieldBinding: "explicit-field-ids",
+    id: "updateCell",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        fieldId: jsonStringSchema,
+        idempotencyKey: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        recordId: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        value: jsonUnknownSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "records",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "table",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
       kind: "proposal-service",
       service: "workflowOperatorRegistry"
     },
@@ -466,6 +1513,54 @@ const tools: AgentToolDefinition[] = [
     },
     phase: "draft",
     requiresConfirmation: false,
+    scope: "workflow",
+    successorToolId: "dryRunCommand"
+  },
+  {
+    binding: {
+      commandType: "workflow.update",
+      kind: "command-builder",
+      scope: "workflow"
+    },
+    description: "Build an explicit workflow.update command payload for revising a saved workflow draft.",
+    fieldBinding: "none",
+    id: "updateWorkflow",
+    inputSchema: {
+      properties: {
+        commandId: jsonStringSchema,
+        definition: {
+          type: "object"
+        },
+        idempotencyKey: jsonStringSchema,
+        name: jsonStringSchema,
+        permissionsVersion: {
+          type: "number"
+        },
+        permissionScopeHash: jsonStringSchema,
+        schemaEpoch: {
+          type: "number"
+        },
+        tableId: jsonStringSchema,
+        workflowId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "workflow",
+    outputSchema: {
+      properties: {
+        command: {
+          type: "object"
+        },
+        diffs: {
+          type: "array"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
     scope: "workflow",
     successorToolId: "dryRunCommand"
   },
@@ -696,9 +1791,18 @@ export function createAgentToolRegistry({
   permissionEngine,
   commandBus,
   viewPlanner,
+  activityHistoryReader,
+  appInspector,
+  tableSchemaInspector,
+  viewDefinitionInspector,
+  workflowDefinitionInspector,
+  permissionPersonaPreviewReader,
+  recordInspector,
+  viewQueryReader,
   workflowOperatorRegistry,
   workflowHistoryReader,
   workflowRunReader,
+  workflowDeadLetterReplayRequester,
   workspaceInspector
 }: CreateAgentToolRegistryDeps): AgentToolRegistry {
   return {
@@ -725,6 +1829,80 @@ export function createAgentToolRegistry({
             kind: "workspace-inspection",
             workspace: await Promise.resolve(workspaceInspector.inspect(invocation.input))
           };
+        case "inspectApp":
+          return {
+            app: await Promise.resolve(appInspector.inspect(invocation.input)),
+            kind: "app-inspection"
+          };
+        case "inspectTableSchema":
+          return {
+            kind: "table-schema-inspection",
+            schema: await Promise.resolve(tableSchemaInspector.read(invocation.input))
+          };
+        case "inspectViewDefinition":
+          return {
+            kind: "view-definition-inspection",
+            view: await Promise.resolve(viewDefinitionInspector.read(invocation.input))
+          };
+        case "inspectWorkflowDefinition":
+          return {
+            kind: "workflow-definition-inspection",
+            workflow: await Promise.resolve(workflowDefinitionInspector.read(invocation.input))
+          };
+        case "explainPermissions": {
+          const fieldType = invocation.input.fieldType;
+          if (!fieldType) {
+            throw new Error(`fieldType is required for explainPermissions on ${invocation.input.fieldId}.`);
+          }
+
+          return {
+            explanation: {
+              ...permissionEngine.explainFieldAccess(
+                {
+                  fieldId: invocation.input.fieldId,
+                  fieldType
+                },
+                invocation.input.surfaces
+              ),
+              scope: {
+                tableId: invocation.input.tableId ?? null,
+                viewId: invocation.input.viewId ?? null,
+                workspaceId: invocation.input.workspaceId
+              }
+            },
+            kind: "permission-explanation"
+          };
+        }
+        case "previewPermissionPersona":
+          return {
+            kind: "permission-persona-preview",
+            preview: await Promise.resolve(permissionPersonaPreviewReader.read(invocation.input))
+          };
+        case "inspectRecord":
+          return {
+            kind: "record-inspection",
+            record: await Promise.resolve(recordInspector.read(invocation.input))
+          };
+        case "queryView":
+          return {
+            kind: "view-query",
+            view: await Promise.resolve(viewQueryReader.read(invocation.input))
+          };
+        case "readActivityHistory":
+          return {
+            activity: await Promise.resolve(activityHistoryReader.read(invocation.input)),
+            kind: "activity-history"
+          };
+        case "readWorkspaceActivityHistory":
+          return {
+            activity: await Promise.resolve(activityHistoryReader.read(invocation.input)),
+            kind: "activity-history"
+          };
+        case "readAppActivityHistory":
+          return {
+            activity: await Promise.resolve(activityHistoryReader.read(invocation.input)),
+            kind: "activity-history"
+          };
         case "readWorkflowHistory":
           return {
             history: await Promise.resolve(workflowHistoryReader.read(invocation.input)),
@@ -735,6 +1913,48 @@ export function createAgentToolRegistry({
             kind: "workflow-run-detail",
             run: await Promise.resolve(workflowRunReader.read(invocation.input))
           };
+        case "prepareWorkflowDeadLetterReplay": {
+          const replayRequestId =
+            invocation.input.replayRequestId ??
+            `dead-letter-replay:${invocation.input.deadLetterId}`;
+          return {
+            diffs: [
+              {
+                action: "propose",
+                after: {
+                  deadLetterId: invocation.input.deadLetterId,
+                  replayRequestId
+                },
+                note: "Request replay for one eligible workflow dead letter.",
+                path: "$.workflowDeadLetterReplay"
+              }
+            ],
+            kind: "workflow-dead-letter-replay-draft",
+            request: {
+              deadLetterId: invocation.input.deadLetterId,
+              replayRequestId,
+              workspaceId: invocation.input.workspaceId
+            }
+          };
+        }
+        case "requestWorkflowDeadLetterReplay":
+          return {
+            kind: "workflow-dead-letter-replay",
+            ...(await Promise.resolve(workflowDeadLetterReplayRequester.requestReplay(invocation.input)))
+          };
+        case "createApp": {
+          const command = buildCommandEnvelope("base.create", "workspace", invocation.input, {
+            baseId: invocation.input.appId,
+            name: invocation.input.appName,
+            slug: invocation.input.appSlug
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
         case "createTable": {
           const command = buildCommandEnvelope("table.create", "workspace", invocation.input, {
             appId: invocation.input.appId,
@@ -772,6 +1992,7 @@ export function createAgentToolRegistry({
             filters: invocation.input.filters ?? [],
             groupByFieldId: invocation.input.groupByFieldId ?? null,
             planner: viewPlanner.describe(),
+            showEmptyGroups: invocation.input.showEmptyGroups,
             sortFieldIds: invocation.input.sortFieldIds ?? [],
             sorts: invocation.input.sorts ?? [],
             tableId: invocation.input.tableId,
@@ -792,12 +2013,25 @@ export function createAgentToolRegistry({
             filters: invocation.input.filters ?? [],
             groupByFieldId: invocation.input.groupByFieldId ?? null,
             planner: viewPlanner.describe(),
+            showEmptyGroups: invocation.input.showEmptyGroups,
             sortFieldIds: invocation.input.sortFieldIds ?? [],
             sorts: invocation.input.sorts ?? [],
             tableId: invocation.input.tableId,
             viewId: invocation.input.viewId,
             viewName: invocation.input.viewName,
             visibleFieldIds: invocation.input.visibleFieldIds
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "deleteView": {
+          const command = buildCommandEnvelope("view.delete", "workspace", invocation.input, {
+            tableId: invocation.input.tableId,
+            viewId: invocation.input.viewId
           });
 
           return {
@@ -830,9 +2064,112 @@ export function createAgentToolRegistry({
             diffs: summarizeCommand(command)
           };
         }
+        case "updateField": {
+          const command = buildCommandEnvelope("field.update", "workspace", invocation.input, {
+            config: invocation.input.config,
+            fieldId: invocation.input.fieldId,
+            tableId: invocation.input.tableId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "archiveField": {
+          const command = buildCommandEnvelope("field.archive", "workspace", invocation.input, {
+            fieldId: invocation.input.fieldId,
+            tableId: invocation.input.tableId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "reorderFields": {
+          const command = buildCommandEnvelope("field.reorder", "workspace", invocation.input, {
+            fieldIds: invocation.input.fieldIds ?? [],
+            tableId: invocation.input.tableId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "createRecord": {
+          const command = buildCommandEnvelope("record.create", "table", invocation.input, {
+            cells: invocation.input.cells ?? {},
+            recordId: invocation.input.recordId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "updateRecord": {
+          const command = buildCommandEnvelope("record.update", "table", invocation.input, {
+            patch: invocation.input.patch,
+            recordId: invocation.input.recordId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "bulkUpdateRecords": {
+          const command = buildCommandEnvelope("records.bulk_patch", "table", invocation.input, {
+            updates: invocation.input.updates
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "archiveRecord": {
+          const command = buildCommandEnvelope("record.archive", "table", invocation.input, {
+            recordId: invocation.input.recordId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
+        case "updateCell": {
+          const command = buildCommandEnvelope("cell.set", "table", invocation.input, {
+            fieldId: invocation.input.fieldId,
+            recordId: invocation.input.recordId,
+            value: invocation.input.value
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
+          };
+        }
         case "proposeWorkflow": {
           const diagnostics: string[] = [];
           const trigger = workflowOperatorRegistry.get(invocation.input.triggerId);
+          const triggerManifest =
+            trigger && trigger.kind === "trigger"
+              ? toWorkflowTriggerProposal(trigger)
+              : {
+                  id: invocation.input.triggerId,
+                  kind: "trigger" as const
+                };
           if (!trigger || trigger.kind !== "trigger") {
             diagnostics.push(`unknown_trigger:${invocation.input.triggerId}`);
           }
@@ -852,10 +2189,7 @@ export function createAgentToolRegistry({
             businessRule: invocation.input.businessRule,
             name: invocation.input.name,
             tableId: invocation.input.tableId,
-            trigger: {
-              id: trigger?.id ?? invocation.input.triggerId,
-              kind: "trigger" as const
-            },
+            trigger: triggerManifest,
             workflowId: invocation.input.workflowId
           };
           const command = buildCommandEnvelope("workflow.create", "workflow", invocation.input, {
@@ -905,6 +2239,20 @@ export function createAgentToolRegistry({
               }
             ],
             diagnostics
+          };
+        }
+        case "updateWorkflow": {
+          const command = buildCommandEnvelope("workflow.update", "workflow", invocation.input, {
+            definition: invocation.input.definition,
+            name: invocation.input.name,
+            tableId: invocation.input.tableId,
+            workflowId: invocation.input.workflowId
+          });
+
+          return {
+            kind: "command-draft",
+            command,
+            diffs: summarizeCommand(command)
           };
         }
         case "publishWorkflow": {
@@ -967,12 +2315,26 @@ export function createAgentToolRegistry({
       return permissionEngine.filterAgentTools(tools, fields, snapshot);
     },
     sanitizeInput(toolId, payload, fields, snapshot) {
-      this.require(toolId);
-      return sanitizePayload(permissionEngine, payload, fields, snapshot);
+      const tool = this.require(toolId);
+      if (toolId === "explainPermissions" || toolId === "previewPermissionPersona") {
+        return {
+          diagnostics: [],
+          hiddenFieldIds: [],
+          sanitized: payload
+        };
+      }
+      return sanitizePayload(permissionEngine, tool, payload, fields, snapshot);
     },
     sanitizeOutput(toolId, payload, fields, snapshot) {
-      this.require(toolId);
-      return sanitizePayload(permissionEngine, payload, fields, snapshot);
+      const tool = this.require(toolId);
+      if (toolId === "explainPermissions" || toolId === "previewPermissionPersona") {
+        return {
+          diagnostics: [],
+          hiddenFieldIds: [],
+          sanitized: payload
+        };
+      }
+      return sanitizePayload(permissionEngine, tool, payload, fields, snapshot);
     }
   };
 }
@@ -1042,9 +2404,15 @@ function summarizeCommand(command: CommandEnvelope): AgentToolAuditDiff[] {
       ];
     case "view.create":
     case "view.update":
+    case "view.delete":
       return [
         {
-          action: command.commandType === "view.create" ? "create" : "update",
+          action:
+            command.commandType === "view.create"
+              ? "create"
+              : command.commandType === "view.delete"
+                ? "delete"
+                : "update",
           after: payload,
           path: `/tables/${payload.tableId}/views/${payload.viewId}`
         }
@@ -1057,6 +2425,57 @@ function summarizeCommand(command: CommandEnvelope): AgentToolAuditDiff[] {
           path: `/tables/${payload.tableId}/fields/${payload.fieldId}/permissions/${payload.principalId}`
         }
       ];
+    case "field.update":
+    case "field.archive":
+    case "field.reorder":
+      return [
+        {
+          action: "update",
+          after: payload,
+          path:
+            command.commandType === "field.reorder"
+              ? `/tables/${payload.tableId}/fields`
+              : `/tables/${payload.tableId}/fields/${payload.fieldId}`
+        }
+      ];
+    case "record.create":
+      return [
+        {
+          action: "create",
+          after: payload,
+          path: `/tables/${command.tableId}/records/${payload.recordId}`
+        }
+      ];
+    case "record.update":
+    case "record.archive":
+      return [
+        {
+          action: "update",
+          after: payload,
+          path: `/tables/${command.tableId}/records/${payload.recordId}`
+        }
+      ];
+    case "records.bulk_patch": {
+      const updates = Array.isArray(payload.updates)
+        ? payload.updates.filter(
+            (entry): entry is Record<string, unknown> =>
+              typeof entry === "object" && entry !== null && !Array.isArray(entry)
+          )
+        : [];
+      return updates.map((entry) => ({
+        action: "update" as const,
+        after: entry,
+        path: `/tables/${command.tableId}/records/${entry.recordId}`
+      }));
+    }
+    case "cell.set":
+      return [
+        {
+          action: "update",
+          after: payload,
+          path: `/tables/${command.tableId}/records/${payload.recordId}/fields/${payload.fieldId}`
+        }
+      ];
     case "workflow.create":
       return [
         {
@@ -1065,6 +2484,7 @@ function summarizeCommand(command: CommandEnvelope): AgentToolAuditDiff[] {
           path: `/workflows/${payload.workflowId}`
         }
       ];
+    case "workflow.update":
     case "workflow.publish":
     case "workflow.pause":
       return [
@@ -1093,29 +2513,45 @@ function summarizeCommand(command: CommandEnvelope): AgentToolAuditDiff[] {
   }
 }
 
-function toWorkflowActionProposal(action: WorkflowActionDefinition) {
-  return {
-    commandType: action.commandType,
-    id: action.id,
-    requiredCapabilities: action.requiredCapabilities
-  };
+function toWorkflowActionProposal(action: WorkflowActionDefinition): WorkflowActionManifest {
+  return serializeWorkflowOperatorManifest(action) as WorkflowActionManifest;
+}
+
+function toWorkflowTriggerProposal(trigger: WorkflowTriggerDefinition): WorkflowTriggerManifest {
+  return serializeWorkflowOperatorManifest(trigger) as WorkflowTriggerManifest;
 }
 
 function sanitizePayload(
   permissionEngine: PermissionEngine,
+  tool: AgentToolDefinition,
   payload: Record<string, unknown>,
   fields: readonly PermissionFieldDescriptor[],
   snapshot?: EffectivePermissionSnapshot
 ): AgentToolSanitizationResult {
   const visibility = permissionEngine.resolveAgentToolFieldVisibility(fields, snapshot);
-  const hiddenFieldIds = new Set(visibility.hiddenFieldIds);
+  const inaccessibleFieldIds = new Set(visibility.hiddenFieldIds);
   const diagnostics = new Set<string>();
   const removedFieldIds = new Set<string>();
+  const nonWritableFieldIds = new Set<string>();
 
-  const sanitized = sanitizeUnknown(payload, hiddenFieldIds, removedFieldIds);
+  if (tool.mutating && tool.mutationTarget === "records") {
+    const writableFieldIds = new Set(visibility.writableFieldIds);
+    for (const field of fields) {
+      if (!writableFieldIds.has(field.fieldId)) {
+        inaccessibleFieldIds.add(field.fieldId);
+        if (!visibility.hiddenFieldIds.includes(field.fieldId)) {
+          nonWritableFieldIds.add(field.fieldId);
+        }
+      }
+    }
+  }
+
+  const sanitized = sanitizeUnknown(payload, inaccessibleFieldIds, removedFieldIds);
 
   for (const fieldId of removedFieldIds) {
-    diagnostics.add(`agent_hidden:${fieldId}`);
+    diagnostics.add(
+      nonWritableFieldIds.has(fieldId) ? `agent_non_writable:${fieldId}` : `agent_hidden:${fieldId}`
+    );
   }
 
   return {
@@ -1127,12 +2563,12 @@ function sanitizePayload(
 
 function sanitizeUnknown(
   value: unknown,
-  hiddenFieldIds: ReadonlySet<string>,
+  inaccessibleFieldIds: ReadonlySet<string>,
   removedFieldIds: Set<string>
 ): unknown {
   if (Array.isArray(value)) {
     return value
-      .map((entry) => sanitizeUnknown(entry, hiddenFieldIds, removedFieldIds))
+      .map((entry) => sanitizeUnknown(entry, inaccessibleFieldIds, removedFieldIds))
       .filter((entry) => entry !== undefined);
   }
 
@@ -1140,7 +2576,7 @@ function sanitizeUnknown(
     return value;
   }
 
-  if (typeof value.fieldId === "string" && hiddenFieldIds.has(value.fieldId)) {
+  if (typeof value.fieldId === "string" && inaccessibleFieldIds.has(value.fieldId)) {
     removedFieldIds.add(value.fieldId);
     return undefined;
   }
@@ -1149,7 +2585,7 @@ function sanitizeUnknown(
 
   for (const [key, entry] of Object.entries(value)) {
     if (singularFieldIdKeys.has(key) && typeof entry === "string") {
-      if (hiddenFieldIds.has(entry)) {
+      if (inaccessibleFieldIds.has(entry)) {
         removedFieldIds.add(entry);
         continue;
       }
@@ -1164,7 +2600,7 @@ function sanitizeUnknown(
           return false;
         }
 
-        if (hiddenFieldIds.has(item)) {
+        if (inaccessibleFieldIds.has(item)) {
           removedFieldIds.add(item);
           return false;
         }
@@ -1177,7 +2613,7 @@ function sanitizeUnknown(
 
     if (key === "fields" && isRecord(entry)) {
       const visibleEntries = Object.entries(entry).filter(([fieldId]) => {
-        if (hiddenFieldIds.has(fieldId)) {
+        if (inaccessibleFieldIds.has(fieldId)) {
           removedFieldIds.add(fieldId);
           return false;
         }
@@ -1188,7 +2624,33 @@ function sanitizeUnknown(
       continue;
     }
 
-    const sanitizedEntry = sanitizeUnknown(entry, hiddenFieldIds, removedFieldIds);
+    if (key === "cells" && isRecord(entry)) {
+      const visibleEntries = Object.entries(entry).filter(([fieldId]) => {
+        if (inaccessibleFieldIds.has(fieldId)) {
+          removedFieldIds.add(fieldId);
+          return false;
+        }
+
+        return true;
+      });
+      sanitizedEntries.push([key, Object.fromEntries(visibleEntries)]);
+      continue;
+    }
+
+    if (key === "patch" && isRecord(entry)) {
+      const visibleEntries = Object.entries(entry).filter(([fieldId]) => {
+        if (inaccessibleFieldIds.has(fieldId)) {
+          removedFieldIds.add(fieldId);
+          return false;
+        }
+
+        return true;
+      });
+      sanitizedEntries.push([key, Object.fromEntries(visibleEntries)]);
+      continue;
+    }
+
+    const sanitizedEntry = sanitizeUnknown(entry, inaccessibleFieldIds, removedFieldIds);
     if (sanitizedEntry !== undefined) {
       sanitizedEntries.push([key, sanitizedEntry]);
     }

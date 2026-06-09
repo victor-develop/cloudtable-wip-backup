@@ -1,9 +1,10 @@
 import type { CommandEnvelope } from "../../../../src/core/commands/types";
 import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
-import { fanoutReasonForCommand, validateDomainCommand } from "../../../../src/core/commands/domain";
+import { validateDomainCommand } from "../../../../src/core/commands/domain";
 import {
   buildAcceptedEvent,
+  buildAcceptedSideEffects,
   hashCommand,
   validateCommand
 } from "../../../../src/core/commands/transcript";
@@ -53,13 +54,7 @@ function buildAcceptedResult(
     diagnostics: [],
     events: [event],
     permission,
-    sideEffects: [
-      {
-        eventId,
-        queue: "event-fanout",
-        reason: fanoutReasonForCommand(command)
-      }
-    ],
+    sideEffects: buildAcceptedSideEffects(command, eventId),
     status: "accepted"
   };
 }
@@ -107,13 +102,7 @@ function replayProjectionFromEvents(
           receiptCount: 0,
           receipts: []
         },
-        sideEffects: [
-          {
-            eventId: events[0]?.eventId,
-            queue: "event-fanout",
-            reason: fanoutReasonForCommand(command)
-          }
-        ],
+        sideEffects: buildAcceptedSideEffects(command, String(events[0]?.eventId ?? "")),
         status: "accepted"
       }
     });

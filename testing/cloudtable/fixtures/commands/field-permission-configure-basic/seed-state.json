@@ -1,0 +1,23 @@
+{
+  "persistence": {
+    "appId": "app_demo",
+    "fields": [
+      {
+        "config": {
+          "permissionsByPrincipal": {
+            "usr_admin": {
+              "agent": true,
+              "read": "visible",
+              "workflow": true,
+              "write": true
+            }
+          }
+        },
+        "fieldId": "fld_title",
+        "fieldKey": "title",
+        "fieldType": "text.single_line",
+        "label": "Title"
+      }
+    ]
+  }
+}

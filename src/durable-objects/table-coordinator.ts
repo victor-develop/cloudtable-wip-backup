@@ -92,10 +92,13 @@ export class TableCoordinatorDurableObject {
       result.accepted &&
       eventId &&
       !result.diagnostics.includes("idempotent_replay")
-        ? await publishOutboxEntries(
+        ? (
+            await publishOutboxEntries(
             this.env,
+            repository,
             await repository.listOutboxEntriesForEvent(eventId)
           )
+          ).published
         : [];
 
     return {

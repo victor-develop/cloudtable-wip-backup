@@ -79,6 +79,19 @@ type WorkflowHistoryItem = {
   steps: Array<{
     attemptCount: number;
     audit: Record<string, unknown> | null;
+    deadLetter: {
+      attemptCount: number;
+      createdAt: string;
+      failureCode: string;
+      failureMessage: string;
+      id: string;
+      queueName: string;
+      replayRequest: {
+        id: string;
+        requestedAt: string;
+        requestedBy: string;
+      } | null;
+    } | null;
     finishedAt: string | null;
     id: string;
     input: Record<string, unknown>;
@@ -124,6 +137,7 @@ function isWorkflowOperationsAuthorized(snapshot: EffectivePermissionSnapshot): 
   return (
     allowed.has("workflow.manual") ||
     allowed.has("workflow.create") ||
+    allowed.has("workflow.update") ||
     allowed.has("workflow.publish") ||
     allowed.has("workflow.pause")
   );
@@ -213,6 +227,17 @@ function mapHistoryRun(
       return {
         attemptCount: step.attempt_count,
         audit: parseJsonRecord(step.audit_json),
+        deadLetter: linkedDeadLetter
+          ? {
+              attemptCount: linkedDeadLetter.deadLetter.attempt_count,
+              createdAt: linkedDeadLetter.deadLetter.created_at,
+              failureCode: linkedDeadLetter.deadLetter.failure_code,
+              failureMessage: linkedDeadLetter.deadLetter.failure_message,
+              id: linkedDeadLetter.deadLetter.id,
+              queueName: linkedDeadLetter.deadLetter.queue_name,
+              replayRequest: linkedDeadLetter.payload.replayRequest ?? null
+            }
+          : null,
         finishedAt: step.finished_at,
         id: step.id,
         input: parseJsonRecord(step.input_json) ?? {},

@@ -1,0 +1,14 @@
+{
+  "acceptedCommandIds": [
+    "cmd_workflow_webhook_001"
+  ],
+  "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+  "receiptCount": 1,
+  "receipts": [
+    {
+      "idempotencyKey": "idem_workflow_webhook_001",
+      "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"workflow\",\n    \"principalId\": \"wf_pipeline\"\n  },\n  \"commandType\": \"workflow.webhook.enqueue\",\n  \"payload\": {\n    \"body\": {\n      \"event\": \"record.updated\",\n      \"recordId\": \"rec_001\"\n    },\n    \"destination\": \"https://example.test/hooks/cloudtable\",\n    \"headers\": {\n      \"x-cloudtable-workflow\": \"wf_pipeline\"\n    },\n    \"method\": \"POST\",\n    \"triggerEventId\": \"evt_record_updated_001\",\n    \"workflowId\": \"wf_pipeline\",\n    \"workflowRunId\": \"wfr_001\",\n    \"workflowStepId\": \"step_send_webhook_001\"\n  },\n  \"scope\": \"workflow\",\n  \"workspaceId\": \"ws_demo\"\n}",
+      "status": "accepted"
+    }
+  ]
+}

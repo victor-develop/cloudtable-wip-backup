@@ -1,0 +1,14 @@
+{
+  "acceptedCommandIds": [
+    "cmd_workflow_notification_emit_001"
+  ],
+  "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+  "receiptCount": 1,
+  "receipts": [
+    {
+      "idempotencyKey": "idem_workflow_notification_emit_001",
+      "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"workflow\",\n    \"principalId\": \"wf_pipeline\"\n  },\n  \"commandType\": \"notification.emit\",\n  \"payload\": {\n    \"channel\": \"activity\",\n    \"details\": {\n      \"recordId\": \"rec_001\"\n    },\n    \"message\": \"Workflow step completed.\",\n    \"triggerEventId\": \"evt_record_updated_001\",\n    \"workflowId\": \"wf_pipeline\",\n    \"workflowRunId\": \"wfr_001\",\n    \"workflowStepId\": \"step_emit_notification_event_001\"\n  },\n  \"scope\": \"workflow\",\n  \"workspaceId\": \"ws_demo\"\n}",
+      "status": "accepted"
+    }
+  ]
+}

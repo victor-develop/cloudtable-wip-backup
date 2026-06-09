@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "Expected date.datetime value to use an ISO datetime with timezone."
+  ],
+  "status": "rejected"
+}

@@ -1,0 +1,21 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_field_invalid_boolean_config_001",
+  "commandType": "field.create",
+  "idempotencyKey": "idem_field_invalid_boolean_config_001",
+  "payload": {
+    "config": {
+      "unexpected": true
+    },
+    "fieldId": "fld_done",
+    "fieldKey": "done",
+    "fieldType": "boolean.checkbox",
+    "label": "Done"
+  },
+  "scope": "workspace",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

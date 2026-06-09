@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 
+import { serializeAgentToolManifest } from "../../../../src/core/agent-tools/manifest";
 import { createAgentToolRegistry } from "../../../../src/core/agent-tools/registry";
 import type { WorkspaceInspection } from "../../../../src/core/agent-tools/types";
 import type { CommandBus } from "../../../../src/core/commands/command-bus";
 import type { CommandEnvelope, CommandResult } from "../../../../src/core/commands/types";
+import { serializeFieldTypeManifest } from "../../../../src/core/field-types/manifest";
 import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
 import { createPermissionEngine } from "../../../../src/core/permissions/engine";
 import type { EffectivePermissionSnapshot } from "../../../../src/core/permissions/types";
 import { createViewPlanner } from "../../../../src/core/views/planner";
+import { serializeWorkflowOperatorManifest } from "../../../../src/core/workflows/manifest";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
+import { createAppInspector } from "../../../../src/runtime/app-inspector";
 import { createWorkspaceInspector } from "../../../../src/runtime/workspace-inspector";
 import {
   SqliteD1Database,
@@ -70,11 +74,32 @@ const fields = [
 ] as const;
 
 function createRegistry(overrides?: {
+  appInspectionResult?: Record<string, unknown> | null;
   dryRunResult?: CommandResult;
   executeResult?: CommandResult;
   inspectedWorkspace?: WorkspaceInspection;
+  tableSchemaInspectionResult?: Record<string, unknown> | null;
+  viewDefinitionInspectionResult?: Record<string, unknown> | null;
+  workflowDefinitionInspectionResult?: Record<string, unknown> | null;
+  permissionPersonaPreviewResult?: Record<string, unknown> | null;
+  activityHistoryResult?: Record<string, unknown>;
+  recordInspectionResult?: Record<string, unknown> | null;
+  viewQueryResult?: Record<string, unknown> | null;
   workflowHistoryResult?: Record<string, unknown>;
   workflowRunResult?: Record<string, unknown> | null;
+  workflowDeadLetterReplayResult?:
+    | {
+        deadLetterId: string;
+        replayRequestId: string;
+        status: "enqueued";
+      }
+    | {
+        deadLetterId: string;
+        message: string;
+        reason: "already_requested" | "not_found" | "not_replayable";
+        replayRequestId: string;
+        status: "rejected";
+      };
 }) {
   const permissionEngine = createPermissionEngine(fieldTypeRegistry, {
     snapshot
@@ -137,6 +162,7 @@ function createRegistry(overrides?: {
       throw new Error("not used in agent tool registry tests");
     }
   };
+  let registry: ReturnType<typeof createAgentToolRegistry>;
   const inspectedWorkspace =
     overrides?.inspectedWorkspace ??
     ({
@@ -144,17 +170,18 @@ function createRegistry(overrides?: {
         {
           appId: "app_crm",
           name: "CRM",
+          slug: "crm",
           tableIds: ["tbl_accounts"]
         }
       ],
       catalog: {
-        fieldTypes: ["text.single_line", "status.semantic"],
+        agentTools: [],
+        fieldTypes: [
+          serializeFieldTypeManifest(fieldTypeRegistry.require("text.single_line")),
+          serializeFieldTypeManifest(fieldTypeRegistry.require("status.semantic"))
+        ],
         workflowOperators: [
-          {
-            id: "record_updated",
-            kind: "trigger",
-            requiredCapabilities: ["workflows.execute"]
-          }
+          serializeWorkflowOperatorManifest(workflowOperatorRegistry.require("record_updated"))
         ]
       },
       tables: [
@@ -176,10 +203,348 @@ function createRegistry(overrides?: {
       workspaceId: "ws_demo"
     } satisfies WorkspaceInspection);
 
-  return createAgentToolRegistry({
+  registry = createAgentToolRegistry({
     commandBus,
     permissionEngine,
     viewPlanner: createViewPlanner(fieldTypeRegistry, permissionEngine),
+    activityHistoryReader: {
+      read(input) {
+        if ("appId" in input) {
+          return {
+            appId: input.appId,
+            entries: [],
+            page: {
+              limit: input.limit ?? 25,
+              nextBeforeWorkspaceSequence: null
+            },
+            workspaceId: input.workspaceId
+          } as never;
+        }
+
+        if (!("tableId" in input)) {
+          return {
+            entries: [],
+            page: {
+              limit: input.limit ?? 25,
+              nextBeforeWorkspaceSequence: null
+            },
+            workspaceId: input.workspaceId
+          } as never;
+        }
+
+        return (overrides?.activityHistoryResult ??
+          {
+            entries: [],
+            page: {
+              limit: 25,
+              nextBeforeTableSequence: null
+            },
+            tableId: "tbl_accounts",
+            workspaceId: "ws_demo"
+          }) as never;
+      }
+    },
+    appInspector: {
+      inspect() {
+        return (overrides?.appInspectionResult ??
+          {
+            appId: "app_crm",
+            createdAt: "2026-06-06T00:00:00.000Z",
+            name: "CRM",
+            slug: "crm",
+            tableCount: 1,
+            tableIds: ["tbl_accounts"],
+            updatedAt: "2026-06-06T00:00:00.000Z",
+            workspaceId: "ws_demo"
+          }) as never;
+      }
+    },
+    tableSchemaInspector: {
+      read() {
+        return (overrides?.tableSchemaInspectionResult ??
+          {
+            appId: "app_crm",
+            fields: [
+              {
+                config: {},
+                fieldId: "title",
+                fieldKey: "title",
+                fieldType: "text.single_line",
+                fieldTypeVersion: 1,
+                label: "Title"
+              }
+            ],
+            schemaEpoch: 3,
+            tableId: "tbl_accounts",
+            tableName: "Accounts",
+            tableSchemaVersion: 2,
+            tableSlug: "accounts",
+            workspaceId: "ws_demo"
+          }) as never;
+      }
+    },
+    viewDefinitionInspector: {
+      read() {
+        return (overrides?.viewDefinitionInspectionResult ??
+          {
+            definition: {
+              filterFieldIds: ["status"],
+              filters: [
+                {
+                  fieldId: "status",
+                  operatorId: "equals",
+                  protected: false,
+                  value: "open"
+                }
+              ],
+              groupByFieldId: null,
+              showEmptyGroups: false,
+              sortFieldIds: ["title"],
+              sorts: [
+                {
+                  fieldId: "title",
+                  mode: "ascending"
+                }
+              ],
+              visibleFieldIds: ["title", "status"]
+            },
+            tableId: "tbl_accounts",
+            viewId: "view_open",
+            viewKey: "open",
+            viewName: "Open Accounts",
+            viewSchemaVersion: 2,
+            workspaceId: "ws_demo"
+          }) as never;
+      }
+    },
+    workflowDefinitionInspector: {
+      read() {
+        return (overrides?.workflowDefinitionInspectionResult ??
+          {
+            currentVersion: 2,
+            definition: {
+              actions: [
+                {
+                  input: {
+                    fieldId: "status",
+                    tableId: "tbl_accounts",
+                    value: "open"
+                  },
+                  operatorId: "record.patch"
+                }
+              ],
+              conditions: [],
+              metadata: {
+                status: "paused"
+              },
+              trigger: {
+                match: {
+                  tableId: "tbl_accounts"
+                },
+                operatorId: "manual"
+              },
+              workflowId: "wf_demo"
+            },
+            effectiveVersion: 2,
+            publishedAt: "2026-06-06T00:00:00.000Z",
+            status: "paused",
+            triggerTableId: "tbl_accounts",
+            workflowId: "wf_demo",
+            workflowKey: "demo",
+            workflowName: "Demo Workflow",
+            workflowVersionId: "wf_demo:v2",
+            workspaceId: "ws_demo"
+          }) as never;
+      }
+    },
+    permissionPersonaPreviewReader: {
+      read() {
+        return (overrides?.permissionPersonaPreviewResult ??
+          {
+            actions: {
+              allowedMutatingToolIds: ["updateRecord"],
+              allowedToolIds: ["queryView", "updateRecord"],
+              blockedMutatingToolIds: [],
+              blockedToolIds: [],
+              tools: []
+            },
+            fields: [
+              {
+                configuredVisible: true,
+                fieldId: "title",
+                fieldKey: "title",
+                fieldType: "text.single_line",
+                hiddenByView: false,
+                label: "Title",
+                referencedByFilter: false,
+                referencedByGroup: false,
+                referencedBySort: true,
+                surfaces: {
+                  agentTool: {
+                    allowed: true,
+                    fieldId: "title",
+                    fieldType: "text.single_line",
+                    readState: "visible",
+                    reasons: [],
+                    writeAllowed: true
+                  },
+                  commandIngress: {
+                    allowed: true,
+                    fieldId: "title",
+                    fieldType: "text.single_line",
+                    readState: "visible",
+                    reasons: [],
+                    writeAllowed: true
+                  },
+                  viewQuery: {
+                    allowed: true,
+                    fieldId: "title",
+                    fieldType: "text.single_line",
+                    readState: "visible",
+                    reasons: [],
+                    writeAllowed: true
+                  },
+                  workflowStep: {
+                    allowed: true,
+                    fieldId: "title",
+                    fieldType: "text.single_line",
+                    readState: "visible",
+                    reasons: [],
+                    writeAllowed: true
+                  }
+                }
+              }
+            ],
+            principalId: "usr_alice",
+            rows: [],
+            table: {
+              appId: "app_crm",
+              schemaEpoch: 3,
+              tableId: "tbl_accounts",
+              tableName: "Accounts",
+              tableSchemaVersion: 2,
+              tableSlug: "accounts"
+            },
+            view: {
+              configuredVisibleFieldIds: ["title"],
+              filters: [],
+              groupByFieldId: null,
+              sortFieldIds: ["title"],
+              surfaces: {
+                agentTool: {
+                  hiddenFieldIds: [],
+                  readOnlyFieldIds: [],
+                  redactedFieldIds: [],
+                  visibleFieldIds: ["title"],
+                  writableFieldIds: ["title"]
+                },
+                commandIngress: {
+                  hiddenFieldIds: [],
+                  readOnlyFieldIds: [],
+                  redactedFieldIds: [],
+                  visibleFieldIds: ["title"],
+                  writableFieldIds: ["title"]
+                },
+                viewQuery: {
+                  hiddenFieldIds: [],
+                  readOnlyFieldIds: [],
+                  redactedFieldIds: [],
+                  visibleFieldIds: ["title"],
+                  writableFieldIds: ["title"]
+                },
+                workflowStep: {
+                  hiddenFieldIds: [],
+                  readOnlyFieldIds: [],
+                  redactedFieldIds: [],
+                  visibleFieldIds: ["title"],
+                  writableFieldIds: ["title"]
+                }
+              },
+              viewId: "view_open",
+              viewKey: "open",
+              viewName: "Open Accounts",
+              viewQuery: {
+                allowed: true,
+                blockedFieldIds: [],
+                diagnostics: [],
+                tableId: "tbl_accounts",
+                viewId: "view_open",
+                viewKey: "open",
+                viewName: "Open Accounts",
+                visibleFieldIds: ["title"]
+              },
+              viewSchemaVersion: 2
+            },
+            workspaceId: "ws_demo"
+          }) as never;
+      }
+    },
+    recordInspector: {
+      read() {
+        return (overrides?.recordInspectionResult ??
+          {
+            projection: {
+              fields: {
+                title: "Acme"
+              }
+            },
+            projectionVersion: 3,
+            record: {
+              id: "rec_demo",
+              record_key: "record-demo"
+            }
+          }) as never;
+      }
+    },
+    viewQueryReader: {
+      read() {
+        return (overrides?.viewQueryResult ??
+          {
+            fields: [
+              {
+                fieldId: "title",
+                fieldKey: "title"
+              }
+            ],
+            rows: [
+              {
+                cells: {
+                  title: "Acme"
+                },
+                hiddenFieldIds: [],
+                recordId: "rec_demo",
+                recordKey: "record-demo",
+                redactedFieldIds: [],
+                states: {
+                  title: "visible"
+                }
+              }
+            ],
+            view: {
+              allowed: true,
+              blockedFieldIds: [],
+              diagnostics: [],
+              tableId: "tbl_accounts",
+              viewId: "view_open",
+              viewKey: "open",
+              viewName: "Open Accounts",
+              visibleFieldIds: ["title"]
+            }
+          }) as never;
+      }
+    },
+    workflowDeadLetterReplayRequester: {
+      requestReplay(input) {
+        return (
+          overrides?.workflowDeadLetterReplayResult ?? {
+            deadLetterId: input.deadLetterId,
+            replayRequestId:
+              input.replayRequestId ?? `dead-letter-replay:${input.deadLetterId}`,
+            status: "enqueued"
+          }
+        ) as never;
+      }
+    },
     workflowHistoryReader: {
       read() {
         return (overrides?.workflowHistoryResult ??
@@ -206,6 +571,14 @@ function createRegistry(overrides?: {
       }
     }
   });
+
+  if (!overrides?.inspectedWorkspace) {
+    inspectedWorkspace.catalog!.agentTools = [
+      serializeAgentToolManifest(registry.require("inspectWorkspace"))
+    ];
+  }
+
+  return registry;
 }
 
 function baseCommandInput(): Omit<CommandEnvelope, "commandType" | "payload" | "scope"> {
@@ -228,6 +601,7 @@ function insertField(
   input: {
     createdAt?: string;
     fieldId: string;
+    fieldOrder?: number | null;
     fieldKey: string;
     fieldType: string;
     label: string;
@@ -241,6 +615,7 @@ function insertField(
         id,
         workspace_id,
         table_id,
+        field_order,
         field_key,
         label,
         field_type,
@@ -250,12 +625,13 @@ function insertField(
         updated_at,
         archived_at,
         last_event_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       input.fieldId,
       input.workspaceId ?? "ws_1",
       input.tableId,
+      input.fieldOrder ?? null,
       input.fieldKey,
       input.label,
       input.fieldType,
@@ -328,6 +704,7 @@ function insertView(
       JSON.stringify({
         filterFieldIds: [],
         groupByFieldId: null,
+        showEmptyGroups: false,
         sortFieldIds: [],
         visibleFieldIds: []
       }),
@@ -413,20 +790,80 @@ describe("cloudtable agent tool registry", () => {
 
     expect(registry.list().map((tool) => tool.id)).toEqual([
       "inspectWorkspace",
+      "inspectApp",
+      "inspectTableSchema",
+      "inspectViewDefinition",
+      "inspectWorkflowDefinition",
+      "explainPermissions",
+      "previewPermissionPersona",
+      "inspectRecord",
+      "queryView",
+      "readActivityHistory",
+      "readWorkspaceActivityHistory",
+      "readAppActivityHistory",
       "readWorkflowHistory",
       "readWorkflowRunDetail",
+      "prepareWorkflowDeadLetterReplay",
+      "requestWorkflowDeadLetterReplay",
+      "createApp",
       "createTable",
       "createField",
       "createView",
       "updateView",
+      "deleteView",
       "configureFieldPermission",
+      "updateField",
+      "archiveField",
+      "reorderFields",
+      "createRecord",
+      "updateRecord",
+      "bulkUpdateRecords",
+      "archiveRecord",
+      "updateCell",
       "proposeWorkflow",
+      "updateWorkflow",
       "publishWorkflow",
       "pauseWorkflow",
       "runWorkflow",
       "dryRunCommand",
       "executeCommand"
     ]);
+    expect(registry.require("inspectApp")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "appInspector"
+      },
+      scope: "app"
+    });
+    expect(registry.require("inspectTableSchema")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "tableSchemaInspector"
+      },
+      scope: "table"
+    });
+    expect(registry.require("inspectViewDefinition")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "viewDefinitionInspector"
+      },
+      scope: "view"
+    });
+    expect(registry.require("inspectWorkflowDefinition")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "workflowDefinitionInspector"
+      },
+      scope: "workflow"
+    });
+    expect(registry.require("createApp")).toMatchObject({
+      binding: {
+        commandType: "base.create",
+        kind: "command-builder",
+        scope: "workspace"
+      },
+      successorToolId: "dryRunCommand"
+    });
     expect(registry.require("createTable")).toMatchObject({
       binding: {
         commandType: "table.create",
@@ -449,11 +886,78 @@ describe("cloudtable agent tool registry", () => {
       },
       scope: "workflow"
     });
+    expect(registry.require("explainPermissions")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "permissionEngine"
+      },
+      scope: "table"
+    });
+    expect(registry.require("previewPermissionPersona")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "permissionPersonaPreviewReader"
+      },
+      phase: "preview",
+      scope: "view"
+    });
+    expect(registry.require("inspectRecord")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "recordInspector"
+      },
+      scope: "table"
+    });
+    expect(registry.require("queryView")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "viewQueryReader"
+      },
+      scope: "view"
+    });
+    expect(registry.require("readActivityHistory")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "activityHistoryReader"
+      },
+      scope: "table"
+    });
+    expect(registry.require("readWorkspaceActivityHistory")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "activityHistoryReader"
+      },
+      scope: "app"
+    });
+    expect(registry.require("readAppActivityHistory")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "activityHistoryReader"
+      },
+      scope: "app"
+    });
     expect(registry.require("readWorkflowRunDetail")).toMatchObject({
       binding: {
         kind: "query-service",
         service: "workflowRunReader"
       },
+      scope: "workflow"
+    });
+    expect(registry.require("prepareWorkflowDeadLetterReplay")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "replay-dead-letter"
+      },
+      phase: "preview",
+      scope: "workflow",
+      successorToolId: "requestWorkflowDeadLetterReplay"
+    });
+    expect(registry.require("requestWorkflowDeadLetterReplay")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "replay-dead-letter"
+      },
+      phase: "execute",
       scope: "workflow"
     });
   });
@@ -476,17 +980,20 @@ describe("cloudtable agent tool registry", () => {
           {
             appId: "app_crm",
             name: "CRM",
+            slug: "crm",
             tableIds: ["tbl_accounts"]
           }
         ],
         catalog: {
-          fieldTypes: ["text.single_line", "status.semantic"],
+          agentTools: [
+            serializeAgentToolManifest(registry.require("inspectWorkspace"))
+          ],
+          fieldTypes: [
+            serializeFieldTypeManifest(fieldTypeRegistry.require("text.single_line")),
+            serializeFieldTypeManifest(fieldTypeRegistry.require("status.semantic"))
+          ],
           workflowOperators: [
-            {
-              id: "record_updated",
-              kind: "trigger",
-              requiredCapabilities: ["workflows.execute"]
-            }
+            serializeWorkflowOperatorManifest(workflowOperatorRegistry.require("record_updated"))
           ]
         },
         tables: [
@@ -505,6 +1012,152 @@ describe("cloudtable agent tool registry", () => {
           }
         ],
         workflows: [],
+        workspaceId: "ws_demo"
+      }
+    });
+  });
+
+  it("inspects direct app bootstrap metadata through the dedicated query service", async () => {
+    const registry = createRegistry();
+
+    const result = await registry.invoke({
+      toolId: "inspectApp",
+      input: {
+        appId: "app_crm",
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(result).toEqual({
+      app: {
+        appId: "app_crm",
+        createdAt: "2026-06-06T00:00:00.000Z",
+        name: "CRM",
+        slug: "crm",
+        tableCount: 1,
+        tableIds: ["tbl_accounts"],
+        updatedAt: "2026-06-06T00:00:00.000Z",
+        workspaceId: "ws_demo"
+      },
+      kind: "app-inspection"
+    });
+  });
+
+  it("inspects table, view, and workflow definitions through dedicated query services", async () => {
+    const registry = createRegistry();
+
+    const schemaResult = await registry.invoke({
+      toolId: "inspectTableSchema",
+      input: {
+        tableId: "tbl_accounts",
+        workspaceId: "ws_demo"
+      }
+    });
+    const viewResult = await registry.invoke({
+      toolId: "inspectViewDefinition",
+      input: {
+        tableId: "tbl_accounts",
+        viewId: "view_open",
+        workspaceId: "ws_demo"
+      }
+    });
+    const workflowResult = await registry.invoke({
+      toolId: "inspectWorkflowDefinition",
+      input: {
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(schemaResult).toEqual({
+      kind: "table-schema-inspection",
+      schema: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: {},
+            fieldId: "title",
+            fieldKey: "title",
+            fieldType: "text.single_line",
+            fieldTypeVersion: 1,
+            label: "Title"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_accounts",
+        tableName: "Accounts",
+        tableSchemaVersion: 2,
+        tableSlug: "accounts",
+        workspaceId: "ws_demo"
+      }
+    });
+    expect(viewResult).toEqual({
+      kind: "view-definition-inspection",
+      view: {
+        definition: {
+          filterFieldIds: ["status"],
+          filters: [
+            {
+              fieldId: "status",
+              operatorId: "equals",
+              protected: false,
+              value: "open"
+            }
+          ],
+          groupByFieldId: null,
+          showEmptyGroups: false,
+          sortFieldIds: ["title"],
+          sorts: [
+            {
+              fieldId: "title",
+              mode: "ascending"
+            }
+          ],
+          visibleFieldIds: ["title", "status"]
+        },
+        tableId: "tbl_accounts",
+        viewId: "view_open",
+        viewKey: "open",
+        viewName: "Open Accounts",
+        viewSchemaVersion: 2,
+        workspaceId: "ws_demo"
+      }
+    });
+    expect(workflowResult).toEqual({
+      kind: "workflow-definition-inspection",
+      workflow: {
+        currentVersion: 2,
+        definition: {
+          actions: [
+            {
+              input: {
+                fieldId: "status",
+                tableId: "tbl_accounts",
+                value: "open"
+              },
+              operatorId: "record.patch"
+            }
+          ],
+          conditions: [],
+          metadata: {
+            status: "paused"
+          },
+          trigger: {
+            match: {
+              tableId: "tbl_accounts"
+            },
+            operatorId: "manual"
+          },
+          workflowId: "wf_demo"
+        },
+        effectiveVersion: 2,
+        publishedAt: "2026-06-06T00:00:00.000Z",
+        status: "paused",
+        triggerTableId: "tbl_accounts",
+        workflowId: "wf_demo",
+        workflowKey: "demo",
+        workflowName: "Demo Workflow",
+        workflowVersionId: "wf_demo:v2",
         workspaceId: "ws_demo"
       }
     });
@@ -561,6 +1214,405 @@ describe("cloudtable agent tool registry", () => {
         id: "wfr_demo_1",
         status: "dead_lettered",
         workflowId: "wf_demo"
+      }
+    });
+  });
+
+  it("routes workflow dead-letter replay through the dedicated workflow operations service", async () => {
+    const registry = createRegistry();
+
+    const draft = await registry.invoke({
+      toolId: "prepareWorkflowDeadLetterReplay",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        deadLetterId: "wdl:wfr_demo_1:step:0",
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        schemaEpoch: 3,
+        workspaceId: "ws_demo"
+      }
+    });
+    const execution = await registry.invoke({
+      toolId: "requestWorkflowDeadLetterReplay",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        deadLetterId: "wdl:wfr_demo_1:step:0",
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        schemaEpoch: 3,
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(draft).toEqual({
+      diffs: [
+        {
+          action: "propose",
+          after: {
+            deadLetterId: "wdl:wfr_demo_1:step:0",
+            replayRequestId: "dead-letter-replay:wdl:wfr_demo_1:step:0"
+          },
+          note: "Request replay for one eligible workflow dead letter.",
+          path: "$.workflowDeadLetterReplay"
+        }
+      ],
+      kind: "workflow-dead-letter-replay-draft",
+      request: {
+        deadLetterId: "wdl:wfr_demo_1:step:0",
+        replayRequestId: "dead-letter-replay:wdl:wfr_demo_1:step:0",
+        workspaceId: "ws_demo"
+      }
+    });
+    expect(execution).toEqual({
+      deadLetterId: "wdl:wfr_demo_1:step:0",
+      kind: "workflow-dead-letter-replay",
+      replayRequestId: "dead-letter-replay:wdl:wfr_demo_1:step:0",
+      status: "enqueued"
+    });
+  });
+
+  it("routes record, view, and activity inspection through dedicated read-only services", async () => {
+    const registry = createRegistry({
+      activityHistoryResult: {
+        entries: [
+          {
+            eventId: "evt_2"
+          }
+        ],
+        page: {
+          limit: 10,
+          nextBeforeTableSequence: 1
+        },
+        record: {
+          id: "rec_demo"
+        },
+        workspaceId: "ws_demo"
+      },
+      recordInspectionResult: {
+        projection: {
+          fields: {
+            title: "Acme"
+          }
+        },
+        projectionVersion: 4,
+        record: {
+          id: "rec_demo"
+        }
+      },
+      viewQueryResult: {
+        rows: [
+          {
+            cells: {
+              title: "Acme"
+            }
+          }
+        ],
+        view: {
+          allowed: true,
+          viewId: "view_open"
+        }
+      }
+    });
+
+    const recordResult = await registry.invoke({
+      toolId: "inspectRecord",
+      input: {
+        recordId: "rec_demo",
+        tableId: "tbl_accounts",
+        workspaceId: "ws_demo"
+      }
+    });
+    const viewResult = await registry.invoke({
+      toolId: "queryView",
+      input: {
+        tableId: "tbl_accounts",
+        viewId: "view_open",
+        workspaceId: "ws_demo"
+      }
+    });
+    const activityResult = await registry.invoke({
+      toolId: "readActivityHistory",
+      input: {
+        limit: 10,
+        recordId: "rec_demo",
+        tableId: "tbl_accounts",
+        workspaceId: "ws_demo"
+      }
+    });
+    const workspaceActivityResult = await registry.invoke({
+      toolId: "readWorkspaceActivityHistory",
+      input: {
+        limit: 10,
+        workspaceId: "ws_demo"
+      }
+    });
+    const appActivityResult = await registry.invoke({
+      toolId: "readAppActivityHistory",
+      input: {
+        appId: "app_crm",
+        limit: 10,
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(recordResult).toEqual({
+      kind: "record-inspection",
+      record: {
+        projection: {
+          fields: {
+            title: "Acme"
+          }
+        },
+        projectionVersion: 4,
+        record: {
+          id: "rec_demo"
+        }
+      }
+    });
+    expect(viewResult).toEqual({
+      kind: "view-query",
+      view: {
+        rows: [
+          {
+            cells: {
+              title: "Acme"
+            }
+          }
+        ],
+        view: {
+          allowed: true,
+          viewId: "view_open"
+        }
+      }
+    });
+    expect(activityResult).toEqual({
+      activity: {
+        entries: [
+          {
+            eventId: "evt_2"
+          }
+        ],
+        page: {
+          limit: 10,
+          nextBeforeTableSequence: 1
+        },
+        record: {
+          id: "rec_demo"
+        },
+        workspaceId: "ws_demo"
+      },
+      kind: "activity-history"
+    });
+    expect(workspaceActivityResult).toEqual({
+      activity: {
+        entries: [],
+        page: {
+          limit: 10,
+          nextBeforeWorkspaceSequence: null
+        },
+        workspaceId: "ws_demo"
+      },
+      kind: "activity-history"
+    });
+    expect(appActivityResult).toEqual({
+      activity: {
+        appId: "app_crm",
+        entries: [],
+        page: {
+          limit: 10,
+          nextBeforeWorkspaceSequence: null
+        },
+        workspaceId: "ws_demo"
+      },
+      kind: "activity-history"
+    });
+  });
+
+  it("explains permission decisions through a dedicated read-only agent tool", async () => {
+    const registry = createRegistry();
+
+    const result = await registry.invoke({
+      toolId: "explainPermissions",
+      input: {
+        fieldId: "customer_note",
+        fieldType: "text.long",
+        surfaces: ["direct-record-read", "agent-tool"],
+        tableId: "tbl_accounts",
+        viewId: "view_open",
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(result).toEqual({
+      explanation: {
+        fieldId: "customer_note",
+        fieldType: "text.long",
+        scope: {
+          tableId: "tbl_accounts",
+          viewId: "view_open",
+          workspaceId: "ws_demo"
+        },
+        surfaces: [
+          {
+            allowed: true,
+            message: "Field is visible for direct record reads.",
+            readState: "visible",
+            reasonMessages: [],
+            reasons: [],
+            surface: "direct-record-read",
+            writeAllowed: true
+          },
+          {
+            allowed: false,
+            message: "Field is hidden for agent tools.",
+            readState: "hidden",
+            reasonMessages: ["Field is hidden for agent tools."],
+            reasons: ["agent_hidden:customer_note"],
+            surface: "agent-tool",
+            writeAllowed: false
+          }
+        ]
+      },
+      kind: "permission-explanation"
+    });
+  });
+
+  it("previews effective persona access for a saved view through a dedicated preview tool", async () => {
+    const registry = createRegistry();
+
+    const result = await registry.invoke({
+      toolId: "previewPermissionPersona",
+      input: {
+        tableId: "tbl_accounts",
+        viewId: "view_open",
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "permission-persona-preview",
+      preview: {
+        actions: {
+          allowedMutatingToolIds: ["updateRecord"],
+          allowedToolIds: ["queryView", "updateRecord"],
+          blockedMutatingToolIds: [],
+          blockedToolIds: [],
+          tools: []
+        },
+        fields: [
+          {
+            configuredVisible: true,
+            fieldId: "title",
+            fieldKey: "title",
+            fieldType: "text.single_line",
+            hiddenByView: false,
+            label: "Title",
+            referencedByFilter: false,
+            referencedByGroup: false,
+            referencedBySort: true,
+            surfaces: {
+              agentTool: {
+                allowed: true,
+                fieldId: "title",
+                fieldType: "text.single_line",
+                readState: "visible",
+                reasons: [],
+                writeAllowed: true
+              },
+              commandIngress: {
+                allowed: true,
+                fieldId: "title",
+                fieldType: "text.single_line",
+                readState: "visible",
+                reasons: [],
+                writeAllowed: true
+              },
+              viewQuery: {
+                allowed: true,
+                fieldId: "title",
+                fieldType: "text.single_line",
+                readState: "visible",
+                reasons: [],
+                writeAllowed: true
+              },
+              workflowStep: {
+                allowed: true,
+                fieldId: "title",
+                fieldType: "text.single_line",
+                readState: "visible",
+                reasons: [],
+                writeAllowed: true
+              }
+            }
+          }
+        ],
+        principalId: "usr_alice",
+        rows: [],
+        table: {
+          appId: "app_crm",
+          schemaEpoch: 3,
+          tableId: "tbl_accounts",
+          tableName: "Accounts",
+          tableSchemaVersion: 2,
+          tableSlug: "accounts"
+        },
+        view: {
+          configuredVisibleFieldIds: ["title"],
+          filters: [],
+          groupByFieldId: null,
+          sortFieldIds: ["title"],
+          surfaces: {
+            agentTool: {
+              hiddenFieldIds: [],
+              readOnlyFieldIds: [],
+              redactedFieldIds: [],
+              visibleFieldIds: ["title"],
+              writableFieldIds: ["title"]
+            },
+            commandIngress: {
+              hiddenFieldIds: [],
+              readOnlyFieldIds: [],
+              redactedFieldIds: [],
+              visibleFieldIds: ["title"],
+              writableFieldIds: ["title"]
+            },
+            viewQuery: {
+              hiddenFieldIds: [],
+              readOnlyFieldIds: [],
+              redactedFieldIds: [],
+              visibleFieldIds: ["title"],
+              writableFieldIds: ["title"]
+            },
+            workflowStep: {
+              hiddenFieldIds: [],
+              readOnlyFieldIds: [],
+              redactedFieldIds: [],
+              visibleFieldIds: ["title"],
+              writableFieldIds: ["title"]
+            }
+          },
+          viewId: "view_open",
+          viewKey: "open",
+          viewName: "Open Accounts",
+          viewQuery: {
+            allowed: true,
+            blockedFieldIds: [],
+            diagnostics: [],
+            tableId: "tbl_accounts",
+            viewId: "view_open",
+            viewKey: "open",
+            viewName: "Open Accounts",
+            visibleFieldIds: ["title"]
+          },
+          viewSchemaVersion: 2
+        },
+        workspaceId: "ws_demo"
       }
     });
   });
@@ -659,9 +1711,45 @@ describe("cloudtable agent tool registry", () => {
     };
 
     const registry = createAgentToolRegistry({
+      activityHistoryReader: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
+      appInspector: createAppInspector(db as unknown as D1Database),
+      tableSchemaInspector: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
+      viewDefinitionInspector: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
+      workflowDefinitionInspector: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
+      permissionPersonaPreviewReader: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
       commandBus,
       permissionEngine,
+      recordInspector: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
       viewPlanner: createViewPlanner(fieldTypeRegistry, permissionEngine),
+      viewQueryReader: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
       workflowHistoryReader: {
         read() {
           throw new Error("not used in D1 inspector test");
@@ -672,11 +1760,17 @@ describe("cloudtable agent tool registry", () => {
           throw new Error("not used in D1 inspector test");
         }
       },
+      workflowDeadLetterReplayRequester: {
+        requestReplay() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
       workflowOperatorRegistry,
       workspaceInspector: createWorkspaceInspector(
         db as unknown as D1Database,
         fieldTypeRegistry,
-        workflowOperatorRegistry
+        workflowOperatorRegistry,
+        () => registry
       )
     });
 
@@ -691,16 +1785,31 @@ describe("cloudtable agent tool registry", () => {
       kind: "workspace-inspection",
       workspace: {
         apps: [
-          {
-            appId: "app_crm",
-            name: "App 1",
-            tableIds: ["tbl_accounts", "tbl_contacts"]
-          }
+        {
+          appId: "app_crm",
+          name: "App 1",
+          slug: "app-1",
+          tableIds: ["tbl_accounts", "tbl_contacts"]
+        }
         ],
         catalog: {
-          fieldTypes: expect.arrayContaining(["text.single_line", "status.semantic"]),
+          agentTools: expect.arrayContaining([
+            expect.objectContaining({
+              binding: {
+                kind: "command-bus",
+                operation: "dry-run"
+              },
+              id: "dryRunCommand",
+              successorToolId: "executeCommand"
+            })
+          ]),
+          fieldTypes: expect.arrayContaining([
+            serializeFieldTypeManifest(fieldTypeRegistry.require("text.single_line")),
+            serializeFieldTypeManifest(fieldTypeRegistry.require("status.semantic"))
+          ]),
           workflowOperators: expect.arrayContaining([
             expect.objectContaining({
+              commandType: "cell.set",
               id: "set_cell"
             })
           ])
@@ -739,9 +1848,18 @@ describe("cloudtable agent tool registry", () => {
     });
   });
 
-  it("builds auditable command drafts for schema and permission mutations", async () => {
+  it("builds auditable command drafts for schema, permission, and record mutations", async () => {
     const registry = createRegistry();
 
+    const appDraft = await registry.invoke({
+      toolId: "createApp",
+      input: {
+        ...baseCommandInput(),
+        appId: "app_crm",
+        appName: "CRM",
+        appSlug: "crm"
+      }
+    });
     const tableDraft = await registry.invoke({
       toolId: "createTable",
       input: {
@@ -781,6 +1899,105 @@ describe("cloudtable agent tool registry", () => {
         write: false
       }
     });
+    const updateFieldDraft = await registry.invoke({
+      toolId: "updateField",
+      input: {
+        ...baseCommandInput(),
+        config: {
+          display: "currency",
+          integerOnly: true
+        },
+        fieldId: "status",
+        tableId: "tbl_accounts"
+      }
+    });
+    const archiveFieldDraft = await registry.invoke({
+      toolId: "archiveField",
+      input: {
+        ...baseCommandInput(),
+        fieldId: "status",
+        tableId: "tbl_accounts"
+      }
+    });
+    const reorderFieldsDraft = await registry.invoke({
+      toolId: "reorderFields",
+      input: {
+        ...baseCommandInput(),
+        fieldIds: ["eta", "title", "status"],
+        tableId: "tbl_accounts"
+      }
+    });
+    const createRecordDraft = await registry.invoke({
+      toolId: "createRecord",
+      input: {
+        ...baseCommandInput(),
+        cells: {
+          status: "Open",
+          title: "Acme"
+        },
+        recordId: "rec_accounts_001",
+        tableId: "tbl_accounts"
+      }
+    });
+    const updateCellDraft = await registry.invoke({
+      toolId: "updateCell",
+      input: {
+        ...baseCommandInput(),
+        fieldId: "status",
+        recordId: "rec_accounts_001",
+        tableId: "tbl_accounts",
+        value: "Qualified"
+      }
+    });
+    const updateRecordDraft = await registry.invoke({
+      toolId: "updateRecord",
+      input: {
+        ...baseCommandInput(),
+        patch: {
+          status: "Qualified",
+          title: "Acme Revised"
+        },
+        recordId: "rec_accounts_001",
+        tableId: "tbl_accounts"
+      }
+    });
+    const bulkUpdateRecordsDraft = await registry.invoke({
+      toolId: "bulkUpdateRecords",
+      input: {
+        ...baseCommandInput(),
+        tableId: "tbl_accounts",
+        updates: [
+          {
+            patch: {
+              status: "Qualified"
+            },
+            recordId: "rec_accounts_001"
+          },
+          {
+            patch: {
+              title: "Globex"
+            },
+            recordId: "rec_accounts_002"
+          }
+        ]
+      }
+    });
+    const archiveRecordDraft = await registry.invoke({
+      toolId: "archiveRecord",
+      input: {
+        ...baseCommandInput(),
+        recordId: "rec_accounts_001",
+        tableId: "tbl_accounts"
+      }
+    });
+    const deleteViewDraft = await registry.invoke({
+      toolId: "deleteView",
+      input: {
+        ...baseCommandInput(),
+        tableId: "tbl_accounts",
+        viewId: "view_open"
+      }
+    });
     const updateViewDraft = await registry.invoke({
       toolId: "updateView",
       input: {
@@ -795,6 +2012,17 @@ describe("cloudtable agent tool registry", () => {
       }
     });
 
+    expect(appDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "base.create",
+        payload: {
+          baseId: "app_crm",
+          name: "CRM",
+          slug: "crm"
+        }
+      }
+    });
     expect(tableDraft).toMatchObject({
       kind: "command-draft",
       command: {
@@ -832,6 +2060,194 @@ describe("cloudtable agent tool registry", () => {
           principalId: "role_support"
         }
       }
+    });
+    expect(updateFieldDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "field.update",
+        payload: {
+          config: {
+            display: "currency",
+            integerOnly: true
+          },
+          fieldId: "status",
+          tableId: "tbl_accounts"
+        },
+        scope: "workspace",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/tables/tbl_accounts/fields/status"
+        }
+      ]
+    });
+    expect(archiveFieldDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "field.archive",
+        payload: {
+          fieldId: "status",
+          tableId: "tbl_accounts"
+        },
+        scope: "workspace",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/tables/tbl_accounts/fields/status"
+        }
+      ]
+    });
+    expect(reorderFieldsDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "field.reorder",
+        payload: {
+          fieldIds: ["eta", "title", "status"],
+          tableId: "tbl_accounts"
+        },
+        scope: "workspace",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/tables/tbl_accounts/fields"
+        }
+      ]
+    });
+    expect(createRecordDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "record.create",
+        payload: {
+          cells: {
+            status: "Open",
+            title: "Acme"
+          },
+          recordId: "rec_accounts_001"
+        },
+        scope: "table",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "create",
+          path: "/tables/tbl_accounts/records/rec_accounts_001"
+        }
+      ]
+    });
+    expect(updateRecordDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "record.update",
+        payload: {
+          patch: {
+            status: "Qualified",
+            title: "Acme Revised"
+          },
+          recordId: "rec_accounts_001"
+        },
+        scope: "table",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/tables/tbl_accounts/records/rec_accounts_001"
+        }
+      ]
+    });
+    expect(bulkUpdateRecordsDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "records.bulk_patch",
+        payload: {
+          updates: [
+            {
+              patch: {
+                status: "Qualified"
+              },
+              recordId: "rec_accounts_001"
+            },
+            {
+              patch: {
+                title: "Globex"
+              },
+              recordId: "rec_accounts_002"
+            }
+          ]
+        },
+        scope: "table",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/tables/tbl_accounts/records/rec_accounts_001"
+        },
+        {
+          action: "update",
+          path: "/tables/tbl_accounts/records/rec_accounts_002"
+        }
+      ]
+    });
+    expect(archiveRecordDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "record.archive",
+        payload: {
+          recordId: "rec_accounts_001"
+        },
+        scope: "table",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/tables/tbl_accounts/records/rec_accounts_001"
+        }
+      ]
+    });
+    expect(deleteViewDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "view.delete",
+        payload: {
+          tableId: "tbl_accounts",
+          viewId: "view_open"
+        },
+        scope: "workspace",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "delete",
+          path: "/tables/tbl_accounts/views/view_open"
+        }
+      ]
+    });
+    expect(updateCellDraft).toMatchObject({
+      kind: "command-draft",
+      command: {
+        commandType: "cell.set",
+        payload: {
+          fieldId: "status",
+          recordId: "rec_accounts_001",
+          value: "Qualified"
+        },
+        scope: "table",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/tables/tbl_accounts/records/rec_accounts_001/fields/status"
+        }
+      ]
     });
     expect(updateViewDraft).toMatchObject({
       kind: "command-draft",
@@ -875,16 +2291,19 @@ describe("cloudtable agent tool registry", () => {
         actions: [
           {
             commandType: "record.update",
+            fixtureContract: [{ id: "update_record.action.sample", kind: "action" }],
             id: "update_record"
           },
           {
             commandType: "workflow.webhook.enqueue",
+            fixtureContract: [{ id: "send_webhook.action.sample", kind: "action" }],
             id: "send_webhook"
           }
         ],
         trigger: {
           id: "field_changed",
-          kind: "trigger"
+          kind: "trigger",
+          triggerEventTypes: ["cell.set"]
         },
         workflowId: "wf_qualify_lead"
       }
@@ -894,6 +2313,34 @@ describe("cloudtable agent tool registry", () => {
   it("builds explicit workflow lifecycle commands on the audited path", async () => {
     const registry = createRegistry();
 
+    const updateDraft = await registry.invoke({
+      toolId: "updateWorkflow",
+      input: {
+        ...baseCommandInput(),
+        definition: {
+          actions: [
+            {
+              input: {
+                value: "draft-edit"
+              },
+              operatorId: "set_cell"
+            }
+          ],
+          conditions: [],
+          metadata: {
+            status: "draft",
+            tableId: "tbl_accounts"
+          },
+          trigger: {
+            operatorId: "manual"
+          },
+          workflowId: "wf_follow_up"
+        },
+        name: "Follow Up Draft",
+        tableId: "tbl_accounts",
+        workflowId: "wf_follow_up"
+      }
+    });
     const publishDraft = await registry.invoke({
       toolId: "publishWorkflow",
       input: {
@@ -923,6 +2370,25 @@ describe("cloudtable agent tool registry", () => {
       }
     });
 
+    expect(updateDraft).toMatchObject({
+      command: {
+        commandType: "workflow.update",
+        payload: {
+          name: "Follow Up Draft",
+          tableId: "tbl_accounts",
+          workflowId: "wf_follow_up"
+        },
+        scope: "workflow",
+        tableId: "tbl_accounts"
+      },
+      diffs: [
+        {
+          action: "update",
+          path: "/workflows/wf_follow_up"
+        }
+      ],
+      kind: "command-draft"
+    });
     expect(publishDraft).toMatchObject({
       command: {
         commandType: "workflow.publish",
@@ -1079,6 +2545,91 @@ describe("cloudtable agent tool registry", () => {
     });
   });
 
+  it("strips non-writable record mutation fields from agent tool payloads", () => {
+    const registry = createRegistry();
+    const nonWritableSnapshot: EffectivePermissionSnapshot = {
+      ...snapshot,
+      fields: {
+        ...snapshot.fields,
+        customer_note: {
+          ...snapshot.fields.customer_note,
+          agent: true,
+          write: false
+        }
+      }
+    };
+
+    const sanitizedCreateRecord = registry.sanitizeInput(
+      "createRecord",
+      {
+        cells: {
+          customer_note: "internal",
+          status: "Open",
+          title: "Acme"
+        },
+        recordId: "rec_accounts_001",
+        tableId: "tbl_accounts"
+      },
+      fields,
+      nonWritableSnapshot
+    );
+    const sanitizedUpdateCell = registry.sanitizeInput(
+      "updateCell",
+      {
+        fieldId: "customer_note",
+        recordId: "rec_accounts_001",
+        tableId: "tbl_accounts",
+        value: "internal"
+      },
+      fields,
+      nonWritableSnapshot
+    );
+    const sanitizedUpdateRecord = registry.sanitizeInput(
+      "updateRecord",
+      {
+        patch: {
+          customer_note: "internal",
+          status: "Open",
+          title: "Acme"
+        },
+        recordId: "rec_accounts_001",
+        tableId: "tbl_accounts"
+      },
+      fields,
+      nonWritableSnapshot
+    );
+
+    expect(sanitizedCreateRecord).toEqual({
+      diagnostics: ["agent_non_writable:customer_note"],
+      hiddenFieldIds: ["customer_note"],
+      sanitized: {
+        cells: {
+          status: "Open",
+          title: "Acme"
+        },
+        recordId: "rec_accounts_001",
+        tableId: "tbl_accounts"
+      }
+    });
+    expect(sanitizedUpdateCell).toEqual({
+      diagnostics: ["agent_non_writable:customer_note"],
+      hiddenFieldIds: ["customer_note"],
+      sanitized: {}
+    });
+    expect(sanitizedUpdateRecord).toEqual({
+      diagnostics: ["agent_non_writable:customer_note"],
+      hiddenFieldIds: ["customer_note"],
+      sanitized: {
+        patch: {
+          status: "Open",
+          title: "Acme"
+        },
+        recordId: "rec_accounts_001",
+        tableId: "tbl_accounts"
+      }
+    });
+  });
+
   it("shows an agent building a small app via table, field, view, permission, and workflow tools", async () => {
     const registry = createRegistry();
 
@@ -1112,6 +2663,7 @@ describe("cloudtable agent tool registry", () => {
         ...baseCommandInput(),
         filterFieldIds: ["status"],
         groupByFieldId: "status",
+        showEmptyGroups: true,
         sortFieldIds: ["title"],
         tableId: "tbl_accounts",
         viewId: "view_open_accounts",
@@ -1148,6 +2700,20 @@ describe("cloudtable agent tool registry", () => {
     expect([tableDraft, fieldDraft, viewDraft, permissionDraft].every((result) => result.kind === "command-draft")).toBe(
       true
     );
+    expect(viewDraft).toMatchObject({
+      command: {
+        commandType: "view.create",
+        payload: {
+          groupByFieldId: "status",
+          showEmptyGroups: true,
+          tableId: "tbl_accounts",
+          viewId: "view_open_accounts",
+          viewName: "Open Accounts",
+          visibleFieldIds: ["title", "status"]
+        }
+      },
+      kind: "command-draft"
+    });
     expect(workflowProposal).toMatchObject({
       command: {
         commandType: "workflow.create",
@@ -1157,6 +2723,18 @@ describe("cloudtable agent tool registry", () => {
       },
       kind: "workflow-proposal",
       proposal: {
+        actions: [
+          {
+            commandType: "record.update",
+            fixtureContract: [{ id: "update_record.action.sample", kind: "action" }],
+            id: "update_record"
+          }
+        ],
+        trigger: {
+          id: "field_changed",
+          kind: "trigger",
+          triggerEventTypes: ["cell.set"]
+        },
         workflowId: "wf_follow_up"
       }
     });

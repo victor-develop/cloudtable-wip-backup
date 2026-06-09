@@ -22,8 +22,31 @@ export type SeedReceipt = {
   result: CommandTranscriptResult;
 };
 
+export type CommandFixtureSeedField = {
+  config?: Record<string, unknown>;
+  fieldId: string;
+  fieldKey: string;
+  fieldType: string;
+  label: string;
+};
+
+export type CommandFixtureSeedRecord = {
+  archivedAt?: string | null;
+  lastEventId?: string | null;
+  recordId: string;
+  recordKey: string;
+  recordRevision?: number;
+};
+
+export type CommandFixturePersistenceSeed = {
+  appId?: string;
+  fields?: CommandFixtureSeedField[];
+  records?: CommandFixtureSeedRecord[];
+};
+
 export type CommandFixtureSeedState = {
   permission?: PermissionExpectation;
+  persistence?: CommandFixturePersistenceSeed;
   receipts?: SeedReceipt[];
 };
 

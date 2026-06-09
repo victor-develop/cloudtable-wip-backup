@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "wf_pipeline",
+    "aggregateType": "workflow",
+    "commandId": "cmd_workflow_job_enqueue_001",
+    "commandType": "job.enqueue",
+    "eventId": "evt_0001",
+    "eventType": "job.enqueued",
+    "tableId": null,
+    "workspaceId": "ws_demo"
+  }
+]

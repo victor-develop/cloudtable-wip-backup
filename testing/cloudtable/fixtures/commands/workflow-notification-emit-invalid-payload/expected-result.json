@@ -1,0 +1,9 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "missing_payload_channel",
+    "missing_payload_message",
+    "payload_details_must_be_object"
+  ],
+  "status": "rejected"
+}

@@ -3,7 +3,9 @@ import type { FieldTypeRegistry } from "../field-types/types";
 import type {
   AgentToolAccess,
   AgentToolFieldVisibility,
+  ExplainablePermissionSurface,
   EffectivePermissionSnapshot,
+  FieldPermissionExplanation,
   FieldAccessDecision,
   FieldReadState,
   PermissionDecision,
@@ -18,6 +20,14 @@ type CreatePermissionEngineOptions = {
 };
 
 type ResolvedFieldAccess = EffectivePermissionSnapshot["fields"][string];
+
+const explainableSurfaces: ExplainablePermissionSurface[] = [
+  "direct-record-read",
+  "view-query",
+  "command-ingress",
+  "workflow-step",
+  "agent-tool"
+];
 
 function fieldReasonPrefix(surface: PermissionSurface): string {
   switch (surface) {
@@ -149,6 +159,84 @@ function extractFieldEdits(
   return [];
 }
 
+function uniqueExplainableSurfaces(
+  surfaces?: readonly ExplainablePermissionSurface[]
+): ExplainablePermissionSurface[] {
+  if (!surfaces || surfaces.length === 0) {
+    return [...explainableSurfaces];
+  }
+
+  return Array.from(new Set(surfaces));
+}
+
+function surfaceLabel(surface: ExplainablePermissionSurface): string {
+  switch (surface) {
+    case "direct-record-read":
+      return "direct record reads";
+    case "view-query":
+      return "view queries";
+    case "command-ingress":
+      return "command writes";
+    case "workflow-step":
+      return "workflow steps";
+    case "agent-tool":
+      return "agent tools";
+  }
+}
+
+function describeReason(reason: string, surface: ExplainablePermissionSurface): string {
+  if (reason.startsWith(`${fieldReasonPrefix(surface)}_hidden:`)) {
+    return `Field is hidden for ${surfaceLabel(surface)}.`;
+  }
+
+  if (reason.startsWith(`${fieldReasonPrefix(surface)}_redacted:`)) {
+    return `Field value is redacted for ${surfaceLabel(surface)}.`;
+  }
+
+  if (reason.startsWith("field_read_only:")) {
+    return `Field is read-only for this principal.`;
+  }
+
+  if (reason.startsWith("field_not_agent_mutable:")) {
+    return `Field type cannot be mutated through agent tools.`;
+  }
+
+  return `Permission reason: ${reason}.`;
+}
+
+function summarizeFieldExplanation(
+  surface: ExplainablePermissionSurface,
+  decision: FieldAccessDecision
+): string {
+  if (decision.readState === "hidden") {
+    return `Field is hidden for ${surfaceLabel(surface)}.`;
+  }
+
+  if (decision.readState === "redacted") {
+    return `Field value is redacted for ${surfaceLabel(surface)}.`;
+  }
+
+  if (surface === "command-ingress") {
+    return decision.writeAllowed
+      ? `Field can be written through commands.`
+      : `Field is visible but cannot be written through commands.`;
+  }
+
+  if (surface === "workflow-step") {
+    return decision.writeAllowed
+      ? `Workflow steps can read and write this field in the current scope.`
+      : `Workflow steps can read this field, but they cannot write it in the current scope.`;
+  }
+
+  if (surface === "agent-tool") {
+    return decision.writeAllowed
+      ? `Agent tools can read and write this field in the current scope.`
+      : `Agent tools can read this field, but they cannot write it in the current scope.`;
+  }
+
+  return `Field is visible for ${surfaceLabel(surface)}.`;
+}
+
 export function createPermissionEngine(
   fieldTypeRegistry: FieldTypeRegistry,
   options: CreatePermissionEngineOptions = {}
@@ -198,6 +286,24 @@ export function createPermissionEngine(
         reasons,
         writeAllowed
       } satisfies FieldAccessDecision;
+    },
+    explainFieldAccess(field, surfaces, snapshot = defaultSnapshot) {
+      return {
+        fieldId: field.fieldId,
+        fieldType: field.fieldType,
+        surfaces: uniqueExplainableSurfaces(surfaces).map((surface) => {
+          const decision = this.evaluateFieldAccess(field, surface, snapshot);
+          return {
+            allowed: decision.allowed,
+            message: summarizeFieldExplanation(surface, decision),
+            readState: decision.readState,
+            reasonMessages: decision.reasons.map((reason) => describeReason(reason, surface)),
+            reasons: decision.reasons,
+            surface,
+            writeAllowed: decision.writeAllowed
+          };
+        })
+      } satisfies FieldPermissionExplanation;
     },
     evaluateCommand(command, snapshot = defaultSnapshot) {
       const reasons: string[] = [];
@@ -319,7 +425,7 @@ export function createPermissionEngine(
             ? emptyAgentToolVisibility()
             : resolveScopedVisibility(tool.fieldIds, visibility);
         const requiresWritableFields =
-          tool.mutating && tool.mutationTarget === "records";
+          tool.mutating && tool.mutationTarget === "records" && tool.fieldBinding !== "none";
         const allowed = !requiresWritableFields || scopedVisibility.writableFieldIds.length > 0;
 
         return {

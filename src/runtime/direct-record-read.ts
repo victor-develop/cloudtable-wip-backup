@@ -17,6 +17,7 @@ type RecordRow = {
 
 type RecordFieldRow = {
   field_key: string;
+  field_order: number | null;
   field_type: string;
   id: string;
 };
@@ -76,10 +77,15 @@ export async function readRecordFields(
 ): Promise<RecordFieldRow[]> {
   const rows = await db
     .prepare(
-      `SELECT id, field_key, field_type
+      `SELECT id, field_key, field_type, field_order
        FROM fields
        WHERE workspace_id = ? AND table_id = ? AND archived_at IS NULL
-       ORDER BY field_key ASC, id ASC`
+       ORDER BY
+         CASE WHEN field_order IS NULL THEN 0 ELSE 1 END ASC,
+         CASE WHEN field_order IS NULL THEN created_at ELSE NULL END ASC,
+         CASE WHEN field_order IS NULL THEN id ELSE NULL END ASC,
+         field_order ASC,
+         id ASC`
     )
     .bind(workspaceId, tableId)
     .all<RecordFieldRow>();

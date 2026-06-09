@@ -1,0 +1,22 @@
+{
+  "actor": {
+    "mode": "workflow",
+    "principalId": "wf_pipeline"
+  },
+  "commandId": "cmd_workflow_notification_emit_001",
+  "commandType": "notification.emit",
+  "idempotencyKey": "idem_workflow_notification_emit_001",
+  "payload": {
+    "channel": "activity",
+    "details": {
+      "recordId": "rec_001"
+    },
+    "message": "Workflow step completed.",
+    "triggerEventId": "evt_record_updated_001",
+    "workflowId": "wf_pipeline",
+    "workflowRunId": "wfr_001",
+    "workflowStepId": "step_emit_notification_event_001"
+  },
+  "scope": "workflow",
+  "workspaceId": "ws_demo"
+}

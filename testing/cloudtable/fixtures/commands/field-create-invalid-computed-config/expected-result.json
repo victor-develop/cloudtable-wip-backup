@@ -1,0 +1,8 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:computed.readonly:Field configuration expression must be a non-empty string.",
+    "invalid_field_config:computed.readonly:dependsOnFieldIds entries must be unique: fld_title."
+  ],
+  "status": "rejected"
+}

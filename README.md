@@ -85,6 +85,8 @@ Run the narrow Cloudflare adapter smoke path:
 npm run test:nightly-cloudflare
 ```
 
+For the real-account Cloudflare validation pass, use `testing/cloudtable/docs/cloudflare-remote-validation-runbook.md`.
+
 Typecheck:
 
 ```bash

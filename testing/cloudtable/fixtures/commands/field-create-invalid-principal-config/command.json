@@ -1,0 +1,25 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_field_invalid_principal_config_001",
+  "commandType": "field.create",
+  "idempotencyKey": "idem_field_invalid_principal_config_001",
+  "payload": {
+    "config": {
+      "allowedRoleIds": [
+        "admin",
+        "admin",
+        ""
+      ]
+    },
+    "fieldId": "fld_assignee",
+    "fieldKey": "assignee",
+    "fieldType": "principal.user",
+    "label": "Assignee"
+  },
+  "scope": "workspace",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

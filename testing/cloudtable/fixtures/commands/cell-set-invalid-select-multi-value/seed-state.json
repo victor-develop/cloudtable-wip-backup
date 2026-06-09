@@ -1,0 +1,31 @@
+{
+  "persistence": {
+    "appId": "app_ops",
+    "fields": [
+      {
+        "config": {
+          "options": [
+            {
+              "id": "alpha",
+              "label": "Alpha"
+            },
+            {
+              "id": "beta",
+              "label": "Beta"
+            }
+          ]
+        },
+        "fieldId": "fld_tags",
+        "fieldKey": "tags",
+        "fieldType": "select.multi",
+        "label": "Tags"
+      }
+    ],
+    "records": [
+      {
+        "recordId": "rec_001",
+        "recordKey": "record-1"
+      }
+    ]
+  }
+}

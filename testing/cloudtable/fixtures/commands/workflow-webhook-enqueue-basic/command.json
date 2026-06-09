@@ -1,0 +1,26 @@
+{
+  "actor": {
+    "mode": "workflow",
+    "principalId": "wf_pipeline"
+  },
+  "commandId": "cmd_workflow_webhook_001",
+  "commandType": "workflow.webhook.enqueue",
+  "idempotencyKey": "idem_workflow_webhook_001",
+  "payload": {
+    "body": {
+      "event": "record.updated",
+      "recordId": "rec_001"
+    },
+    "destination": "https://example.test/hooks/cloudtable",
+    "headers": {
+      "x-cloudtable-workflow": "wf_pipeline"
+    },
+    "method": "POST",
+    "triggerEventId": "evt_record_updated_001",
+    "workflowId": "wf_pipeline",
+    "workflowRunId": "wfr_001",
+    "workflowStepId": "step_send_webhook_001"
+  },
+  "scope": "workflow",
+  "workspaceId": "ws_demo"
+}

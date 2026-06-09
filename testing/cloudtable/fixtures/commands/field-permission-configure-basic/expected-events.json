@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "fld_title",
+    "aggregateType": "field",
+    "commandId": "cmd_field_permission_001",
+    "commandType": "field.permission.configure",
+    "eventId": "evt_0001",
+    "eventType": "field.permission.configured",
+    "tableId": "tbl_tasks",
+    "workspaceId": "ws_demo"
+  }
+]

@@ -1,0 +1,8 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:principal.user:allowedRoleIds entries must be unique: admin.",
+    "invalid_field_config:principal.user:allowedRoleIds entry 2 must be a non-empty string."
+  ],
+  "status": "rejected"
+}

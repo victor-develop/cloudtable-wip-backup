@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "Expected date.date value to use YYYY-MM-DD format."
+  ],
+  "status": "rejected"
+}

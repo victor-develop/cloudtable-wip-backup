@@ -74,6 +74,9 @@
       }
     ]
   },
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "r2_buckets": [
     {
       "binding": "ARTIFACTS_BUCKET",

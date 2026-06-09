@@ -46,7 +46,7 @@ export function matchCommandRoute(
   }
 
   const fieldMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/fields$/);
-  if (fieldMatch) {
+  if (fieldMatch && method === "POST") {
     return {
       commandType: "field.create",
       params: {
@@ -57,10 +57,22 @@ export function matchCommandRoute(
     };
   }
 
-  const fieldUpdateMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/fields\/([^/]+)$/);
-  if (fieldUpdateMatch && (method === "PATCH" || method === "PUT")) {
+  const fieldReorderMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/fields:reorder$/);
+  if (fieldReorderMatch && method === "POST") {
     return {
-      commandType: "field.update",
+      commandType: "field.reorder",
+      params: {
+        tableId: fieldReorderMatch[1]
+      },
+      scope: "workspace",
+      tableId: fieldReorderMatch[1]
+    };
+  }
+
+  const fieldUpdateMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/fields\/([^/]+)$/);
+  if (fieldUpdateMatch && (method === "PATCH" || method === "PUT" || method === "DELETE")) {
+    return {
+      commandType: method === "DELETE" ? "field.archive" : "field.update",
       params: {
         fieldId: fieldUpdateMatch[2],
         tableId: fieldUpdateMatch[1]
@@ -98,6 +110,18 @@ export function matchCommandRoute(
     };
   }
 
+  const bulkRecordPatchMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/records:bulkPatch$/);
+  if (bulkRecordPatchMatch && method === "POST") {
+    return {
+      commandType: "records.bulk_patch",
+      params: {
+        tableId: bulkRecordPatchMatch[1]
+      },
+      scope: "table",
+      tableId: bulkRecordPatchMatch[1]
+    };
+  }
+
   const recordMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/records\/([^/]+)$/);
   if (recordMatch && (method === "PATCH" || method === "PUT" || method === "DELETE")) {
     return {
@@ -124,9 +148,9 @@ export function matchCommandRoute(
   }
 
   const viewMatch = pathname.match(/^\/v1\/tables\/([^/]+)\/views\/([^/]+)$/);
-  if (viewMatch && (method === "PATCH" || method === "PUT")) {
+  if (viewMatch && (method === "PATCH" || method === "PUT" || method === "DELETE")) {
     return {
-      commandType: "view.update",
+      commandType: method === "DELETE" ? "view.delete" : "view.update",
       params: {
         tableId: viewMatch[1],
         viewId: viewMatch[2]
@@ -162,6 +186,17 @@ export function matchCommandRoute(
       commandType: "workflow.publish",
       params: {
         workflowId: workflowPublishMatch[1]
+      },
+      scope: "workflow"
+    };
+  }
+
+  const workflowUpdateMatch = pathname.match(/^\/v1\/workflows\/([^/]+)$/);
+  if (workflowUpdateMatch && (method === "PATCH" || method === "PUT")) {
+    return {
+      commandType: "workflow.update",
+      params: {
+        workflowId: workflowUpdateMatch[1]
       },
       scope: "workflow"
     };

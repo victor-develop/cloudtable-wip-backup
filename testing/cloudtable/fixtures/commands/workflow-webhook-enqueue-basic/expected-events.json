@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "wf_pipeline",
+    "aggregateType": "workflow",
+    "commandId": "cmd_workflow_webhook_001",
+    "commandType": "workflow.webhook.enqueue",
+    "eventId": "evt_0001",
+    "eventType": "workflow.webhook.enqueued",
+    "tableId": null,
+    "workspaceId": "ws_demo"
+  }
+]

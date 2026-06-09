@@ -50,6 +50,29 @@ export type FieldAccessDecision = {
   reasons: string[];
 };
 
+export type ExplainablePermissionSurface =
+  | "direct-record-read"
+  | "view-query"
+  | "command-ingress"
+  | "workflow-step"
+  | "agent-tool";
+
+export type PermissionSurfaceExplanation = {
+  surface: ExplainablePermissionSurface;
+  allowed: boolean;
+  readState: FieldReadState;
+  writeAllowed: boolean;
+  reasons: string[];
+  reasonMessages: string[];
+  message: string;
+};
+
+export type FieldPermissionExplanation = {
+  fieldId: string;
+  fieldType: string;
+  surfaces: PermissionSurfaceExplanation[];
+};
+
 export type PermissionProjectionInput = PermissionFieldDescriptor & {
   value: unknown;
 };
@@ -83,6 +106,11 @@ export type PermissionEngine = {
     surface: PermissionSurface,
     snapshot?: EffectivePermissionSnapshot
   ): FieldAccessDecision;
+  explainFieldAccess(
+    field: PermissionFieldDescriptor,
+    surfaces?: readonly ExplainablePermissionSurface[],
+    snapshot?: EffectivePermissionSnapshot
+  ): FieldPermissionExplanation;
   evaluateCommand(
     command: CommandEnvelope,
     snapshot?: EffectivePermissionSnapshot

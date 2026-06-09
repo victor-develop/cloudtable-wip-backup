@@ -1,0 +1,20 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_alice"
+  },
+  "commandId": "cmd_cell_set_invalid_select_multi_001",
+  "commandType": "cell.set",
+  "idempotencyKey": "idem_cell_set_invalid_select_multi_001",
+  "payload": {
+    "fieldId": "fld_tags",
+    "recordId": "rec_001",
+    "value": [
+      "alpha",
+      "missing"
+    ]
+  },
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

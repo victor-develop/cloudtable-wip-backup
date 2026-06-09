@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "wf_pipeline",
+    "aggregateType": "workflow",
+    "commandId": "cmd_workflow_manual_001",
+    "commandType": "workflow.manual",
+    "eventId": "evt_0001",
+    "eventType": "workflow.manual",
+    "tableId": null,
+    "workspaceId": "ws_demo"
+  }
+]

@@ -1,0 +1,22 @@
+{
+  "persistence": {
+    "appId": "app_ops",
+    "fields": [
+      {
+        "config": {
+          "precision": 2
+        },
+        "fieldId": "fld_score",
+        "fieldKey": "score",
+        "fieldType": "number.decimal",
+        "label": "Score"
+      }
+    ],
+    "records": [
+      {
+        "recordId": "rec_001",
+        "recordKey": "record-1"
+      }
+    ]
+  }
+}

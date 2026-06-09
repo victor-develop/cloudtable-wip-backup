@@ -1,0 +1,28 @@
+{
+  "persistence": {
+    "appId": "app_ops",
+    "fields": [
+      {
+        "config": {
+          "options": [
+            {
+              "id": "todo",
+              "label": "Todo",
+              "semantic": "todo"
+            }
+          ]
+        },
+        "fieldId": "fld_status",
+        "fieldKey": "status",
+        "fieldType": "status.semantic",
+        "label": "Status"
+      }
+    ],
+    "records": [
+      {
+        "recordId": "rec_001",
+        "recordKey": "record-1"
+      }
+    ]
+  }
+}

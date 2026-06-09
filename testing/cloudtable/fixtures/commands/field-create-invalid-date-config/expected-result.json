@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:date.date:Field configuration contains unsupported property: timezone."
+  ],
+  "status": "rejected"
+}

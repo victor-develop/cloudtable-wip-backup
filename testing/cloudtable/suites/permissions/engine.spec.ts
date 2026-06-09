@@ -265,6 +265,78 @@ describe("cloudtable permission engine", () => {
     expect(createDecision.reasons).toContain("agent_hidden:customer_note");
   });
 
+  it("explains direct, view, command, workflow, and agent field access deterministically", () => {
+    const permissionEngine = createPermissionEngine(registry, {
+      snapshot
+    });
+
+    const explanation = permissionEngine.explainFieldAccess(
+      {
+        fieldId: "customer_note",
+        fieldType: "text.long"
+      },
+      [
+        "direct-record-read",
+        "view-query",
+        "command-ingress",
+        "workflow-step",
+        "agent-tool"
+      ]
+    );
+
+    expect(explanation).toEqual({
+      fieldId: "customer_note",
+      fieldType: "text.long",
+      surfaces: [
+        {
+          allowed: true,
+          message: "Field value is redacted for direct record reads.",
+          readState: "redacted",
+          reasonMessages: ["Field value is redacted for direct record reads."],
+          reasons: ["field_redacted:customer_note"],
+          surface: "direct-record-read",
+          writeAllowed: true
+        },
+        {
+          allowed: true,
+          message: "Field value is redacted for view queries.",
+          readState: "redacted",
+          reasonMessages: ["Field value is redacted for view queries."],
+          reasons: ["field_redacted:customer_note"],
+          surface: "view-query",
+          writeAllowed: true
+        },
+        {
+          allowed: true,
+          message: "Field value is redacted for command writes.",
+          readState: "redacted",
+          reasonMessages: ["Field value is redacted for command writes."],
+          reasons: ["field_redacted:customer_note"],
+          surface: "command-ingress",
+          writeAllowed: true
+        },
+        {
+          allowed: true,
+          message: "Field value is redacted for workflow steps.",
+          readState: "redacted",
+          reasonMessages: ["Field value is redacted for workflow steps."],
+          reasons: ["workflow_redacted:customer_note"],
+          surface: "workflow-step",
+          writeAllowed: true
+        },
+        {
+          allowed: false,
+          message: "Field is hidden for agent tools.",
+          readState: "hidden",
+          reasonMessages: ["Field is hidden for agent tools."],
+          reasons: ["agent_hidden:customer_note"],
+          surface: "agent-tool",
+          writeAllowed: false
+        }
+      ]
+    });
+  });
+
   it("filters agent tools against visible writable fields", () => {
     const permissionEngine = createPermissionEngine(registry, {
       snapshot
@@ -282,9 +354,49 @@ describe("cloudtable permission engine", () => {
       }
     } as CommandBus;
     const agentToolRegistry = createAgentToolRegistry({
+      activityHistoryReader: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      appInspector: {
+        inspect() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      tableSchemaInspector: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      viewDefinitionInspector: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      workflowDefinitionInspector: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      permissionPersonaPreviewReader: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
       commandBus,
       permissionEngine,
+      recordInspector: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
       viewPlanner,
+      viewQueryReader: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
       workflowHistoryReader: {
         read() {
           throw new Error("not used in permission tests");
@@ -292,6 +404,11 @@ describe("cloudtable permission engine", () => {
       },
       workflowRunReader: {
         read() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      workflowDeadLetterReplayRequester: {
+        requestReplay() {
           throw new Error("not used in permission tests");
         }
       },
@@ -324,6 +441,8 @@ describe("cloudtable permission engine", () => {
     );
 
     const createViewTool = accessible.find((tool) => tool.toolId === "createView");
+    const updateRecordTool = accessible.find((tool) => tool.toolId === "updateRecord");
+    const archiveRecordTool = accessible.find((tool) => tool.toolId === "archiveRecord");
     const executeTool = accessible.find((tool) => tool.toolId === "executeCommand");
 
     expect(createViewTool).toEqual({
@@ -332,6 +451,20 @@ describe("cloudtable permission engine", () => {
       reason: null,
       toolId: "createView",
       visibleFieldIds: ["health_score"]
+    });
+    expect(updateRecordTool).toEqual({
+      allowed: false,
+      hiddenFieldIds: ["customer_note"],
+      reason: "agent_mutation_denied",
+      toolId: "updateRecord",
+      visibleFieldIds: ["health_score"]
+    });
+    expect(archiveRecordTool).toEqual({
+      allowed: true,
+      hiddenFieldIds: [],
+      reason: null,
+      toolId: "archiveRecord",
+      visibleFieldIds: []
     });
     expect(executeTool).toEqual({
       allowed: true,

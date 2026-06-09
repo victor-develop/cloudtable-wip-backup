@@ -4,7 +4,7 @@ import type { CloudTableEnv, CloudTableQueueMessage } from "./runtime/env";
 import { WorkspaceControlDurableObject } from "./durable-objects/workspace-control";
 import { TableCoordinatorDurableObject } from "./durable-objects/table-coordinator";
 import { handleQueueBatch } from "./queues/consumer";
-import { handleFetch } from "./runtime/worker";
+import { handleFetch, handleScheduled } from "./runtime/worker";
 
 export {
   TableCoordinatorDurableObject,
@@ -21,6 +21,8 @@ export default {
     ctx: ExecutionContext
   ) {
     await handleQueueBatch(batch, env, ctx);
+  },
+  async scheduled(controller: ScheduledController, env: CloudTableEnv, ctx: ExecutionContext) {
+    await handleScheduled(controller, env, ctx);
   }
 };
-

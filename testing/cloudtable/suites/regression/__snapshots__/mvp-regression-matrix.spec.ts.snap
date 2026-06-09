@@ -176,6 +176,206 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
   },
   {
     "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "invalid_field_config:number.decimal:Field configuration precision must be a non-negative integer.",
+        "invalid_field_config:number.decimal:Field configuration display must be one of: plain, currency, percent."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": false,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "receipts": [],
+    "scenario": "field_validation_rejects_invalid_config"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "invalid_field_config:select.single:Field option 0 contains unsupported property: extra.",
+        "invalid_field_config:select.single:Field option 0 id must be a non-empty string.",
+        "invalid_field_config:select.single:Field option 1 label must be a non-empty string.",
+        "invalid_field_config:select.single:Field option ids must be unique: ready."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": false,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "receipts": [],
+    "scenario": "field_validation_rejects_invalid_select_config"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "invalid_field_config:status.semantic:Status option todo is missing a semantic value.",
+        "invalid_field_config:status.semantic:Status option doing has unsupported semantic: moving."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": false,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "receipts": [],
+    "scenario": "field_validation_rejects_invalid_status_config"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "invalid_field_config:boolean.checkbox:Field configuration contains unsupported property: unexpected."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": false,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "receipts": [],
+    "scenario": "field_validation_rejects_invalid_boolean_config"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "invalid_field_config:date.date:Field configuration contains unsupported property: timezone."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": false,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "receipts": [],
+    "scenario": "field_validation_rejects_invalid_date_config"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "invalid_field_config:principal.user:allowedRoleIds entries must be unique: admin.",
+        "invalid_field_config:principal.user:allowedRoleIds entry 2 must be a non-empty string."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": false,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "receipts": [],
+    "scenario": "field_validation_rejects_invalid_principal_config"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "invalid_field_config:relation.record:Field configuration targetTableId must be a non-empty string.",
+        "invalid_field_config:relation.record:Field configuration allowMultiple must be a boolean."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": false,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "receipts": [],
+    "scenario": "field_validation_rejects_invalid_relation_config"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "invalid_field_config:computed.readonly:Field configuration expression must be a non-empty string.",
+        "invalid_field_config:computed.readonly:dependsOnFieldIds entries must be unique: fld_title."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": false,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "receipts": [],
+    "scenario": "field_validation_rejects_invalid_computed_config"
+  },
+  {
+    "actual": {
       "accepted": true,
       "diagnostics": [],
       "events": [
@@ -262,6 +462,430 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
   },
   {
     "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "Expected number.decimal value to use at most 2 decimal places."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "persisted": {
+      "eventIds": [],
+      "projectionRecordIds": [],
+      "receiptKeys": []
+    },
+    "scenario": "field_validation_rejects_invalid_value"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "Unknown option id for select.multi: missing."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "persisted": {
+      "eventIds": [],
+      "projectionRecordIds": [],
+      "receiptKeys": []
+    },
+    "scenario": "field_validation_rejects_invalid_select_value"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "Unknown option id for status.semantic: missing."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "persisted": {
+      "eventIds": [],
+      "projectionRecordIds": [],
+      "receiptKeys": []
+    },
+    "scenario": "field_validation_rejects_invalid_status_value"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "Expected boolean.checkbox value to be a boolean or null."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "persisted": {
+      "eventIds": [],
+      "projectionRecordIds": [],
+      "receiptKeys": []
+    },
+    "scenario": "field_validation_rejects_invalid_boolean_value"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "Expected date.date value to use YYYY-MM-DD format."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "persisted": {
+      "eventIds": [],
+      "projectionRecordIds": [],
+      "receiptKeys": []
+    },
+    "scenario": "field_validation_rejects_invalid_date_value"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "Expected date.datetime value to use an ISO datetime with timezone."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "persisted": {
+      "eventIds": [],
+      "projectionRecordIds": [],
+      "receiptKeys": []
+    },
+    "scenario": "field_validation_rejects_invalid_datetime_value"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "Expected principal.user value entries to be unique: user_1."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "persisted": {
+      "eventIds": [],
+      "projectionRecordIds": [],
+      "receiptKeys": []
+    },
+    "scenario": "field_validation_rejects_invalid_principal_value"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "Expected relation.record value to contain at most one record id."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "persisted": {
+      "eventIds": [],
+      "projectionRecordIds": [],
+      "receiptKeys": []
+    },
+    "scenario": "field_validation_rejects_invalid_relation_value"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "Expected relation.record reference rec_other_table to belong to table tbl_related, found tbl_tasks."
+      ],
+      "events": [],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "field_validation",
+    "persisted": {
+      "eventIds": [],
+      "projectionRecordIds": [],
+      "receiptKeys": []
+    },
+    "scenario": "field_validation_rejects_wrong_table_relation_reference"
+  },
+  {
+    "actual": {
+      "accepted": true,
+      "diagnostics": [],
+      "events": [
+        {
+          "aggregateId": "title",
+          "aggregateType": "field",
+          "commandId": "cmd_field_permission_001",
+          "commandType": "field.permission.configure",
+          "eventId": "evt_0001",
+          "eventType": "field.permission.configured",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        }
+      ],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [
+          "cmd_field_permission_001"
+        ],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 1,
+        "receipts": [
+          {
+            "idempotencyKey": "idem_field_permission_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"field.permission.configure\\",\\n  \\"payload\\": {\\n    \\"fieldId\\": \\"title\\",\\n    \\"policy\\": {\\n      \\"agent\\": false,\\n      \\"read\\": \\"redacted\\",\\n      \\"workflow\\": true,\\n      \\"write\\": false\\n    },\\n    \\"principalId\\": \\"usr_member\\"\\n  },\\n  \\"scope\\": \\"workspace\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          }
+        ]
+      },
+      "sideEffects": [
+        {
+          "eventId": "evt_0001",
+          "queue": "event-fanout",
+          "reason": "field_permission_configured_fanout"
+        }
+      ],
+      "status": "accepted"
+    },
+    "category": "field_permissions",
+    "receipts": [
+      {
+        "idempotencyKey": "idem_field_permission_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"field.permission.configure\\",\\n  \\"payload\\": {\\n    \\"fieldId\\": \\"title\\",\\n    \\"policy\\": {\\n      \\"agent\\": false,\\n      \\"read\\": \\"redacted\\",\\n      \\"workflow\\": true,\\n      \\"write\\": false\\n    },\\n    \\"principalId\\": \\"usr_member\\"\\n  },\\n  \\"scope\\": \\"workspace\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "title",
+              "aggregateType": "field",
+              "commandId": "cmd_field_permission_001",
+              "commandType": "field.permission.configure",
+              "eventId": "evt_0001",
+              "eventType": "field.permission.configured",
+              "tableId": "tbl_tasks",
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "field_permission_configured_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      }
+    ],
+    "scenario": "field_permission_configuration"
+  },
+  {
+    "actual": {
+      "accepted": true,
+      "diagnostics": [],
+      "events": [
+        {
+          "aggregateId": "wf_follow_up",
+          "aggregateType": "workflow",
+          "commandId": "cmd_workflow_update_001",
+          "commandType": "workflow.update",
+          "eventId": "evt_0001",
+          "eventType": "workflow.updated",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        }
+      ],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [
+          "cmd_workflow_update_001"
+        ],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 1,
+        "receipts": [
+          {
+            "idempotencyKey": "idem_workflow_update_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.update\\",\\n  \\"payload\\": {\\n    \\"definition\\": {\\n      \\"actions\\": [\\n        {\\n          \\"input\\": {\\n            \\"value\\": \\"follow-up\\"\\n          },\\n          \\"operatorId\\": \\"set_cell\\"\\n        }\\n      ],\\n      \\"conditions\\": [],\\n      \\"metadata\\": {\\n        \\"status\\": \\"draft\\",\\n        \\"tableId\\": \\"tbl_tasks\\"\\n      },\\n      \\"trigger\\": {\\n        \\"match\\": {\\n          \\"tableId\\": \\"tbl_tasks\\"\\n        },\\n        \\"operatorId\\": \\"record_updated\\"\\n      },\\n      \\"workflowId\\": \\"wf_follow_up\\"\\n    },\\n    \\"name\\": \\"Follow Up Draft\\",\\n    \\"tableId\\": \\"tbl_tasks\\",\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          }
+        ]
+      },
+      "sideEffects": [
+        {
+          "eventId": "evt_0001",
+          "queue": "event-fanout",
+          "reason": "workflow_updated_fanout"
+        }
+      ],
+      "status": "accepted"
+    },
+    "category": "workflow_lifecycle",
+    "receipts": [
+      {
+        "idempotencyKey": "idem_workflow_update_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.update\\",\\n  \\"payload\\": {\\n    \\"definition\\": {\\n      \\"actions\\": [\\n        {\\n          \\"input\\": {\\n            \\"value\\": \\"follow-up\\"\\n          },\\n          \\"operatorId\\": \\"set_cell\\"\\n        }\\n      ],\\n      \\"conditions\\": [],\\n      \\"metadata\\": {\\n        \\"status\\": \\"draft\\",\\n        \\"tableId\\": \\"tbl_tasks\\"\\n      },\\n      \\"trigger\\": {\\n        \\"match\\": {\\n          \\"tableId\\": \\"tbl_tasks\\"\\n        },\\n        \\"operatorId\\": \\"record_updated\\"\\n      },\\n      \\"workflowId\\": \\"wf_follow_up\\"\\n    },\\n    \\"name\\": \\"Follow Up Draft\\",\\n    \\"tableId\\": \\"tbl_tasks\\",\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "wf_follow_up",
+              "aggregateType": "workflow",
+              "commandId": "cmd_workflow_update_001",
+              "commandType": "workflow.update",
+              "eventId": "evt_0001",
+              "eventType": "workflow.updated",
+              "tableId": "tbl_tasks",
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "workflow_updated_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      }
+    ],
+    "scenario": "workflow_update_event"
+  },
+  {
+    "actual": {
       "accepted": true,
       "diagnostics": [],
       "events": [
@@ -285,8 +909,13 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
           "cmd_workflow_publish_001"
         ],
         "lastLogicalTime": "2026-06-06T00:00:00.000Z",
-        "receiptCount": 1,
+        "receiptCount": 2,
         "receipts": [
+          {
+            "idempotencyKey": "idem_workflow_update_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.update\\",\\n  \\"payload\\": {\\n    \\"definition\\": {\\n      \\"actions\\": [\\n        {\\n          \\"input\\": {\\n            \\"value\\": \\"follow-up\\"\\n          },\\n          \\"operatorId\\": \\"set_cell\\"\\n        }\\n      ],\\n      \\"conditions\\": [],\\n      \\"metadata\\": {\\n        \\"status\\": \\"draft\\",\\n        \\"tableId\\": \\"tbl_tasks\\"\\n      },\\n      \\"trigger\\": {\\n        \\"match\\": {\\n          \\"tableId\\": \\"tbl_tasks\\"\\n        },\\n        \\"operatorId\\": \\"record_updated\\"\\n      },\\n      \\"workflowId\\": \\"wf_follow_up\\"\\n    },\\n    \\"name\\": \\"Follow Up Draft\\",\\n    \\"tableId\\": \\"tbl_tasks\\",\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          },
           {
             "idempotencyKey": "idem_workflow_publish_001",
             "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.publish\\",\\n  \\"payload\\": {\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
@@ -305,6 +934,44 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
     },
     "category": "workflow_lifecycle",
     "receipts": [
+      {
+        "idempotencyKey": "idem_workflow_update_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.update\\",\\n  \\"payload\\": {\\n    \\"definition\\": {\\n      \\"actions\\": [\\n        {\\n          \\"input\\": {\\n            \\"value\\": \\"follow-up\\"\\n          },\\n          \\"operatorId\\": \\"set_cell\\"\\n        }\\n      ],\\n      \\"conditions\\": [],\\n      \\"metadata\\": {\\n        \\"status\\": \\"draft\\",\\n        \\"tableId\\": \\"tbl_tasks\\"\\n      },\\n      \\"trigger\\": {\\n        \\"match\\": {\\n          \\"tableId\\": \\"tbl_tasks\\"\\n        },\\n        \\"operatorId\\": \\"record_updated\\"\\n      },\\n      \\"workflowId\\": \\"wf_follow_up\\"\\n    },\\n    \\"name\\": \\"Follow Up Draft\\",\\n    \\"tableId\\": \\"tbl_tasks\\",\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"tableId\\": \\"tbl_tasks\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "wf_follow_up",
+              "aggregateType": "workflow",
+              "commandId": "cmd_workflow_update_001",
+              "commandType": "workflow.update",
+              "eventId": "evt_0001",
+              "eventType": "workflow.updated",
+              "tableId": "tbl_tasks",
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "workflow_updated_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      },
       {
         "idempotencyKey": "idem_workflow_publish_001",
         "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.publish\\",\\n  \\"payload\\": {\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
@@ -345,6 +1012,290 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
       }
     ],
     "scenario": "workflow_publish_event"
+  },
+  {
+    "actual": {
+      "accepted": true,
+      "diagnostics": [],
+      "events": [
+        {
+          "aggregateId": "wf_follow_up",
+          "aggregateType": "workflow",
+          "commandId": "cmd_workflow_manual_001",
+          "commandType": "workflow.manual",
+          "eventId": "evt_0001",
+          "eventType": "workflow.manual",
+          "tableId": null,
+          "workspaceId": "ws_demo"
+        }
+      ],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [
+          "cmd_workflow_manual_001"
+        ],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 1,
+        "receipts": [
+          {
+            "idempotencyKey": "idem_workflow_manual_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.manual\\",\\n  \\"payload\\": {\\n    \\"input\\": {\\n      \\"recordId\\": \\"rec_001\\",\\n      \\"source\\": \\"button\\"\\n    },\\n    \\"manualInvocationId\\": \\"manual_run_001\\",\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          }
+        ]
+      },
+      "sideEffects": [
+        {
+          "eventId": "evt_0001",
+          "queue": "event-fanout",
+          "reason": "workflow_manual_fanout"
+        }
+      ],
+      "status": "accepted"
+    },
+    "category": "workflow_execution",
+    "receipts": [
+      {
+        "idempotencyKey": "idem_workflow_manual_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_alice\\"\\n  },\\n  \\"commandType\\": \\"workflow.manual\\",\\n  \\"payload\\": {\\n    \\"input\\": {\\n      \\"recordId\\": \\"rec_001\\",\\n      \\"source\\": \\"button\\"\\n    },\\n    \\"manualInvocationId\\": \\"manual_run_001\\",\\n    \\"workflowId\\": \\"wf_follow_up\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "wf_follow_up",
+              "aggregateType": "workflow",
+              "commandId": "cmd_workflow_manual_001",
+              "commandType": "workflow.manual",
+              "eventId": "evt_0001",
+              "eventType": "workflow.manual",
+              "tableId": null,
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "workflow_manual_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      }
+    ],
+    "scenario": "workflow_manual_event"
+  },
+  {
+    "actual": {
+      "accepted": false,
+      "diagnostics": [
+        "permission_principal_mismatch"
+      ],
+      "events": [],
+      "permission": {
+        "allowed": false,
+        "reasons": [
+          "permission_principal_mismatch"
+        ]
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 0,
+        "receipts": []
+      },
+      "sideEffects": [],
+      "status": "rejected"
+    },
+    "category": "workflow_execution",
+    "receipts": [],
+    "scenario": "workflow_webhook_enqueue_delivery"
+  },
+  {
+    "actual": {
+      "accepted": true,
+      "diagnostics": [],
+      "events": [
+        {
+          "aggregateId": "wf_follow_up",
+          "aggregateType": "workflow",
+          "commandId": "cmd_workflow_job_enqueue_001",
+          "commandType": "job.enqueue",
+          "eventId": "evt_0001",
+          "eventType": "job.enqueued",
+          "tableId": null,
+          "workspaceId": "ws_demo"
+        }
+      ],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [
+          "cmd_workflow_job_enqueue_001"
+        ],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 1,
+        "receipts": [
+          {
+            "idempotencyKey": "idem_workflow_job_enqueue_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"workflow\\",\\n    \\"principalId\\": \\"wf_follow_up\\"\\n  },\\n  \\"commandType\\": \\"job.enqueue\\",\\n  \\"payload\\": {\\n    \\"args\\": {\\n      \\"recordId\\": \\"rec_001\\"\\n    },\\n    \\"jobType\\": \\"projection.rebuild\\",\\n    \\"triggerEventId\\": \\"evt_record_updated_001\\",\\n    \\"workflowId\\": \\"wf_follow_up\\",\\n    \\"workflowRunId\\": \\"wfr_001\\",\\n    \\"workflowStepId\\": \\"step_enqueue_internal_job_001\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          }
+        ]
+      },
+      "sideEffects": [
+        {
+          "eventId": "evt_0001",
+          "queue": "event-fanout",
+          "reason": "job_enqueued_fanout"
+        }
+      ],
+      "status": "accepted"
+    },
+    "category": "workflow_execution",
+    "receipts": [
+      {
+        "idempotencyKey": "idem_workflow_job_enqueue_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"workflow\\",\\n    \\"principalId\\": \\"wf_follow_up\\"\\n  },\\n  \\"commandType\\": \\"job.enqueue\\",\\n  \\"payload\\": {\\n    \\"args\\": {\\n      \\"recordId\\": \\"rec_001\\"\\n    },\\n    \\"jobType\\": \\"projection.rebuild\\",\\n    \\"triggerEventId\\": \\"evt_record_updated_001\\",\\n    \\"workflowId\\": \\"wf_follow_up\\",\\n    \\"workflowRunId\\": \\"wfr_001\\",\\n    \\"workflowStepId\\": \\"step_enqueue_internal_job_001\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "wf_follow_up",
+              "aggregateType": "workflow",
+              "commandId": "cmd_workflow_job_enqueue_001",
+              "commandType": "job.enqueue",
+              "eventId": "evt_0001",
+              "eventType": "job.enqueued",
+              "tableId": null,
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "job_enqueued_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      }
+    ],
+    "scenario": "workflow_internal_job_enqueue_event"
+  },
+  {
+    "actual": {
+      "accepted": true,
+      "diagnostics": [],
+      "events": [
+        {
+          "aggregateId": "wf_follow_up",
+          "aggregateType": "workflow",
+          "commandId": "cmd_workflow_notification_emit_001",
+          "commandType": "notification.emit",
+          "eventId": "evt_0001",
+          "eventType": "notification.emitted",
+          "tableId": null,
+          "workspaceId": "ws_demo"
+        }
+      ],
+      "permission": {
+        "allowed": true,
+        "reasons": []
+      },
+      "replayProjection": {
+        "acceptedCommandIds": [
+          "cmd_workflow_notification_emit_001"
+        ],
+        "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+        "receiptCount": 1,
+        "receipts": [
+          {
+            "idempotencyKey": "idem_workflow_notification_emit_001",
+            "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"workflow\\",\\n    \\"principalId\\": \\"wf_follow_up\\"\\n  },\\n  \\"commandType\\": \\"notification.emit\\",\\n  \\"payload\\": {\\n    \\"channel\\": \\"activity\\",\\n    \\"details\\": {\\n      \\"recordId\\": \\"rec_001\\"\\n    },\\n    \\"message\\": \\"Workflow step completed.\\",\\n    \\"triggerEventId\\": \\"evt_record_updated_001\\",\\n    \\"workflowId\\": \\"wf_follow_up\\",\\n    \\"workflowRunId\\": \\"wfr_001\\",\\n    \\"workflowStepId\\": \\"step_emit_notification_event_001\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+            "status": "accepted"
+          }
+        ]
+      },
+      "sideEffects": [
+        {
+          "eventId": "evt_0001",
+          "queue": "event-fanout",
+          "reason": "notification_emitted_fanout"
+        }
+      ],
+      "status": "accepted"
+    },
+    "category": "workflow_execution",
+    "receipts": [
+      {
+        "idempotencyKey": "idem_workflow_notification_emit_001",
+        "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"workflow\\",\\n    \\"principalId\\": \\"wf_follow_up\\"\\n  },\\n  \\"commandType\\": \\"notification.emit\\",\\n  \\"payload\\": {\\n    \\"channel\\": \\"activity\\",\\n    \\"details\\": {\\n      \\"recordId\\": \\"rec_001\\"\\n    },\\n    \\"message\\": \\"Workflow step completed.\\",\\n    \\"triggerEventId\\": \\"evt_record_updated_001\\",\\n    \\"workflowId\\": \\"wf_follow_up\\",\\n    \\"workflowRunId\\": \\"wfr_001\\",\\n    \\"workflowStepId\\": \\"step_emit_notification_event_001\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"workspaceId\\": \\"ws_demo\\"\\n}",
+        "result": {
+          "accepted": true,
+          "diagnostics": [],
+          "events": [
+            {
+              "aggregateId": "wf_follow_up",
+              "aggregateType": "workflow",
+              "commandId": "cmd_workflow_notification_emit_001",
+              "commandType": "notification.emit",
+              "eventId": "evt_0001",
+              "eventType": "notification.emitted",
+              "tableId": null,
+              "workspaceId": "ws_demo"
+            }
+          ],
+          "permission": {
+            "allowed": true,
+            "reasons": []
+          },
+          "replayProjection": {
+            "acceptedCommandIds": [],
+            "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+            "receiptCount": 0,
+            "receipts": []
+          },
+          "sideEffects": [
+            {
+              "eventId": "evt_0001",
+              "queue": "event-fanout",
+              "reason": "notification_emitted_fanout"
+            }
+          ],
+          "status": "accepted"
+        }
+      }
+    ],
+    "scenario": "workflow_notification_emit_event"
   },
   {
     "actual": {
@@ -427,6 +1378,392 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
   },
   {
     "actual": {
+      "app": {
+        "first": {
+          "entries": [
+            {
+              "actor": {
+                "mode": "workflow",
+                "principalId": "wf_pipeline"
+              },
+              "command": {
+                "commandId": "cmd_workflow_001",
+                "commandType": "workflow.publish"
+              },
+              "createdAt": "2026-06-06T00:05:00.000Z",
+              "eventId": "evt_activity_005",
+              "eventType": "workflow.published",
+              "record": null,
+              "sequence": {
+                "table": 4,
+                "workspace": 5
+              },
+              "target": {
+                "id": "wf_pipeline",
+                "type": "workflow"
+              }
+            },
+            {
+              "actor": {
+                "mode": "agent",
+                "principalId": "agt_sync"
+              },
+              "command": {
+                "commandId": "cmd_cell_001",
+                "commandType": "cell.set"
+              },
+              "createdAt": "2026-06-06T00:04:00.000Z",
+              "eventId": "evt_activity_004",
+              "eventType": "cell.set",
+              "record": {
+                "id": "rec_1",
+                "key": "record-1"
+              },
+              "sequence": {
+                "table": 3,
+                "workspace": 4
+              },
+              "target": {
+                "id": "rec_1",
+                "type": "record"
+              }
+            }
+          ],
+          "nextBeforeWorkspaceSequence": 4
+        },
+        "second": {
+          "entries": [
+            {
+              "actor": {
+                "mode": "user",
+                "principalId": "usr_alice"
+              },
+              "command": {
+                "commandId": "cmd_record_001",
+                "commandType": "record.create"
+              },
+              "createdAt": "2026-06-06T00:03:00.000Z",
+              "eventId": "evt_activity_003",
+              "eventType": "record.created",
+              "record": {
+                "id": "rec_1",
+                "key": "record-1"
+              },
+              "sequence": {
+                "table": 2,
+                "workspace": 3
+              },
+              "target": {
+                "id": "rec_1",
+                "type": "record"
+              }
+            },
+            {
+              "actor": {
+                "mode": "user",
+                "principalId": "usr_alice"
+              },
+              "command": {
+                "commandId": "cmd_field_001",
+                "commandType": "field.create"
+              },
+              "createdAt": "2026-06-06T00:02:00.000Z",
+              "eventId": "evt_activity_002",
+              "eventType": "field.created",
+              "record": null,
+              "sequence": {
+                "table": 1,
+                "workspace": 2
+              },
+              "target": {
+                "id": null,
+                "type": "field"
+              }
+            }
+          ],
+          "nextBeforeWorkspaceSequence": 2
+        }
+      },
+      "record": {
+        "first": {
+          "entries": [
+            {
+              "actor": {
+                "mode": "agent",
+                "principalId": "agt_sync"
+              },
+              "command": {
+                "commandId": "cmd_cell_001",
+                "commandType": "cell.set"
+              },
+              "createdAt": "2026-06-06T00:04:00.000Z",
+              "eventId": "evt_activity_004",
+              "eventType": "cell.set",
+              "record": {
+                "id": "rec_1",
+                "key": "record-1"
+              },
+              "sequence": {
+                "table": 3,
+                "workspace": 4
+              },
+              "target": {
+                "id": "rec_1",
+                "type": "record"
+              }
+            }
+          ],
+          "nextBeforeTableSequence": 3
+        },
+        "second": {
+          "entries": [
+            {
+              "actor": {
+                "mode": "user",
+                "principalId": "usr_alice"
+              },
+              "command": {
+                "commandId": "cmd_record_001",
+                "commandType": "record.create"
+              },
+              "createdAt": "2026-06-06T00:03:00.000Z",
+              "eventId": "evt_activity_003",
+              "eventType": "record.created",
+              "record": {
+                "id": "rec_1",
+                "key": "record-1"
+              },
+              "sequence": {
+                "table": 2,
+                "workspace": 3
+              },
+              "target": {
+                "id": "rec_1",
+                "type": "record"
+              }
+            }
+          ],
+          "nextBeforeTableSequence": null
+        }
+      },
+      "table": {
+        "first": {
+          "entries": [
+            {
+              "actor": {
+                "mode": "workflow",
+                "principalId": "wf_pipeline"
+              },
+              "command": {
+                "commandId": "cmd_workflow_001",
+                "commandType": "workflow.publish"
+              },
+              "createdAt": "2026-06-06T00:05:00.000Z",
+              "eventId": "evt_activity_005",
+              "eventType": "workflow.published",
+              "record": null,
+              "sequence": {
+                "table": 4,
+                "workspace": 5
+              },
+              "target": {
+                "id": "wf_pipeline",
+                "type": "workflow"
+              }
+            },
+            {
+              "actor": {
+                "mode": "agent",
+                "principalId": "agt_sync"
+              },
+              "command": {
+                "commandId": "cmd_cell_001",
+                "commandType": "cell.set"
+              },
+              "createdAt": "2026-06-06T00:04:00.000Z",
+              "eventId": "evt_activity_004",
+              "eventType": "cell.set",
+              "record": {
+                "id": "rec_1",
+                "key": "record-1"
+              },
+              "sequence": {
+                "table": 3,
+                "workspace": 4
+              },
+              "target": {
+                "id": "rec_1",
+                "type": "record"
+              }
+            }
+          ],
+          "nextBeforeTableSequence": 3
+        },
+        "second": {
+          "entries": [
+            {
+              "actor": {
+                "mode": "user",
+                "principalId": "usr_alice"
+              },
+              "command": {
+                "commandId": "cmd_record_001",
+                "commandType": "record.create"
+              },
+              "createdAt": "2026-06-06T00:03:00.000Z",
+              "eventId": "evt_activity_003",
+              "eventType": "record.created",
+              "record": {
+                "id": "rec_1",
+                "key": "record-1"
+              },
+              "sequence": {
+                "table": 2,
+                "workspace": 3
+              },
+              "target": {
+                "id": "rec_1",
+                "type": "record"
+              }
+            },
+            {
+              "actor": {
+                "mode": "user",
+                "principalId": "usr_alice"
+              },
+              "command": {
+                "commandId": "cmd_field_001",
+                "commandType": "field.create"
+              },
+              "createdAt": "2026-06-06T00:02:00.000Z",
+              "eventId": "evt_activity_002",
+              "eventType": "field.created",
+              "record": null,
+              "sequence": {
+                "table": 1,
+                "workspace": 2
+              },
+              "target": {
+                "id": null,
+                "type": "field"
+              }
+            }
+          ],
+          "nextBeforeTableSequence": 1
+        }
+      },
+      "workspace": {
+        "first": {
+          "entries": [
+            {
+              "actor": {
+                "mode": "workflow",
+                "principalId": "wf_pipeline"
+              },
+              "command": {
+                "commandId": "cmd_workflow_001",
+                "commandType": "workflow.publish"
+              },
+              "createdAt": "2026-06-06T00:05:00.000Z",
+              "eventId": "evt_activity_005",
+              "eventType": "workflow.published",
+              "record": null,
+              "sequence": {
+                "table": 4,
+                "workspace": 5
+              },
+              "target": {
+                "id": "wf_pipeline",
+                "type": "workflow"
+              }
+            },
+            {
+              "actor": {
+                "mode": "agent",
+                "principalId": "agt_sync"
+              },
+              "command": {
+                "commandId": "cmd_cell_001",
+                "commandType": "cell.set"
+              },
+              "createdAt": "2026-06-06T00:04:00.000Z",
+              "eventId": "evt_activity_004",
+              "eventType": "cell.set",
+              "record": {
+                "id": "rec_1",
+                "key": "record-1"
+              },
+              "sequence": {
+                "table": 3,
+                "workspace": 4
+              },
+              "target": {
+                "id": "rec_1",
+                "type": "record"
+              }
+            }
+          ],
+          "nextBeforeWorkspaceSequence": 4
+        },
+        "second": {
+          "entries": [
+            {
+              "actor": {
+                "mode": "user",
+                "principalId": "usr_alice"
+              },
+              "command": {
+                "commandId": "cmd_record_001",
+                "commandType": "record.create"
+              },
+              "createdAt": "2026-06-06T00:03:00.000Z",
+              "eventId": "evt_activity_003",
+              "eventType": "record.created",
+              "record": {
+                "id": "rec_1",
+                "key": "record-1"
+              },
+              "sequence": {
+                "table": 2,
+                "workspace": 3
+              },
+              "target": {
+                "id": "rec_1",
+                "type": "record"
+              }
+            },
+            {
+              "actor": {
+                "mode": "user",
+                "principalId": "usr_alice"
+              },
+              "command": {
+                "commandId": "cmd_field_001",
+                "commandType": "field.create"
+              },
+              "createdAt": "2026-06-06T00:02:00.000Z",
+              "eventId": "evt_activity_002",
+              "eventType": "field.created",
+              "record": null,
+              "sequence": {
+                "table": 1,
+                "workspace": 2
+              },
+              "target": {
+                "id": null,
+                "type": "field"
+              }
+            }
+          ],
+          "nextBeforeWorkspaceSequence": 2
+        }
+      }
+    },
+    "category": "activity_history_reads",
+    "scenario": "activity_history_surfaces_and_cursors"
+  },
+  {
+    "actual": {
       "field": {
         "capabilities": {
           "computed": false,
@@ -476,6 +1813,37 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
     },
     "category": "view_queries",
     "scenario": "view_filter_and_sort_execution"
+  },
+  {
+    "actual": {
+      "groupMove": {
+        "allowed": true,
+        "fieldId": "fld_status",
+        "fieldType": "status.semantic",
+        "reasons": [],
+        "status": "writable"
+      }
+    },
+    "category": "view_queries",
+    "scenario": "grouped_view_move_affordance"
+  },
+  {
+    "actual": {
+      "createRecord": {
+        "allowed": true,
+        "constrainedFieldIds": [
+          "fld_status"
+        ],
+        "defaultCells": {},
+        "fieldId": "fld_status",
+        "fieldType": "status.semantic",
+        "reasons": [],
+        "requiresGroupValue": true,
+        "status": "writable"
+      }
+    },
+    "category": "view_queries",
+    "scenario": "grouped_view_create_affordance"
   },
   {
     "actual": {
@@ -541,6 +1909,125 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
           "allowed": true,
           "hiddenFieldIds": [],
           "reason": null,
+          "toolId": "inspectApp",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "inspectTableSchema",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "inspectViewDefinition",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "inspectWorkflowDefinition",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "explainPermissions",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "previewPermissionPersona",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "inspectRecord",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "queryView",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "readActivityHistory",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "readWorkspaceActivityHistory",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "readAppActivityHistory",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
           "toolId": "readWorkflowHistory",
           "visibleFieldIds": []
         },
@@ -549,6 +2036,27 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
           "hiddenFieldIds": [],
           "reason": null,
           "toolId": "readWorkflowRunDetail",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "prepareWorkflowDeadLetterReplay",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "requestWorkflowDeadLetterReplay",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "createApp",
           "visibleFieldIds": []
         },
         {
@@ -593,6 +2101,13 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
         },
         {
           "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "deleteView",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
           "hiddenFieldIds": [
             "salary",
             "customer_note"
@@ -611,11 +2126,116 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
             "customer_note"
           ],
           "reason": null,
+          "toolId": "updateField",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "archiveField",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "reorderFields",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "createRecord",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "updateRecord",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "bulkUpdateRecords",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "archiveRecord",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
+          "toolId": "updateCell",
+          "visibleFieldIds": [
+            "title",
+            "internal_note"
+          ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [
+            "salary",
+            "customer_note"
+          ],
+          "reason": null,
           "toolId": "proposeWorkflow",
           "visibleFieldIds": [
             "title",
             "internal_note"
           ]
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "updateWorkflow",
+          "visibleFieldIds": []
         },
         {
           "allowed": true,
@@ -653,6 +2273,48 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
           "visibleFieldIds": []
         }
       ],
+      "appActivity": {
+        "activity": {
+          "appId": "app_matrix",
+          "entries": [],
+          "page": {
+            "limit": 5,
+            "nextBeforeWorkspaceSequence": null
+          },
+          "workspaceId": "ws_demo"
+        },
+        "kind": "activity-history"
+      },
+      "archiveRecordDraft": {
+        "command": {
+          "actor": {
+            "mode": "agent",
+            "principalId": "usr_alice"
+          },
+          "commandId": "cmd_agent_record_archive_001",
+          "commandType": "record.archive",
+          "idempotencyKey": "idem_agent_record_archive_001",
+          "payload": {
+            "recordId": "rec_matrix_001"
+          },
+          "permissionScopeHash": "scope:table:tbl_tasks",
+          "permissionsVersion": 7,
+          "schemaEpoch": 3,
+          "scope": "table",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        },
+        "diffs": [
+          {
+            "action": "update",
+            "after": {
+              "recordId": "rec_matrix_001"
+            },
+            "path": "/tables/tbl_tasks/records/rec_matrix_001"
+          }
+        ],
+        "kind": "command-draft"
+      },
       "createFieldDraft": {
         "command": {
           "actor": {
@@ -693,6 +2355,44 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
         ],
         "kind": "command-draft"
       },
+      "createRecordDraft": {
+        "command": {
+          "actor": {
+            "mode": "agent",
+            "principalId": "usr_alice"
+          },
+          "commandId": "cmd_agent_record_001",
+          "commandType": "record.create",
+          "idempotencyKey": "idem_agent_record_001",
+          "payload": {
+            "cells": {
+              "customer_note": "hidden",
+              "title": "Q3 Renewal"
+            },
+            "recordId": "rec_matrix_001"
+          },
+          "permissionScopeHash": "scope:table:tbl_tasks",
+          "permissionsVersion": 7,
+          "schemaEpoch": 3,
+          "scope": "table",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        },
+        "diffs": [
+          {
+            "action": "create",
+            "after": {
+              "cells": {
+                "customer_note": "hidden",
+                "title": "Q3 Renewal"
+              },
+              "recordId": "rec_matrix_001"
+            },
+            "path": "/tables/tbl_tasks/records/rec_matrix_001"
+          }
+        ],
+        "kind": "command-draft"
+      },
       "dryRunTool": {
         "binding": {
           "kind": "command-bus",
@@ -729,6 +2429,15 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
         "requiresConfirmation": false,
         "scope": "app",
         "successorToolId": "executeCommand"
+      },
+      "sanitizedFieldUpdate": {
+        "diagnostics": [
+          "agent_hidden:customer_note"
+        ],
+        "hiddenFieldIds": [
+          "customer_note"
+        ],
+        "sanitized": {}
       },
       "sanitizedInput": {
         "diagnostics": [
@@ -771,6 +2480,133 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
           ]
         }
       },
+      "sanitizedRecordPatch": {
+        "diagnostics": [
+          "agent_hidden:customer_note"
+        ],
+        "hiddenFieldIds": [
+          "customer_note"
+        ],
+        "sanitized": {
+          "patch": {
+            "title": "Q3 Renewal Updated"
+          },
+          "recordId": "rec_matrix_001",
+          "tableId": "tbl_tasks"
+        }
+      },
+      "updateCellDraft": {
+        "command": {
+          "actor": {
+            "mode": "agent",
+            "principalId": "usr_alice"
+          },
+          "commandId": "cmd_agent_cell_001",
+          "commandType": "cell.set",
+          "idempotencyKey": "idem_agent_cell_001",
+          "payload": {
+            "fieldId": "title",
+            "recordId": "rec_matrix_001",
+            "value": "Renewal Won"
+          },
+          "permissionScopeHash": "scope:table:tbl_tasks",
+          "permissionsVersion": 7,
+          "schemaEpoch": 3,
+          "scope": "table",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        },
+        "diffs": [
+          {
+            "action": "update",
+            "after": {
+              "fieldId": "title",
+              "recordId": "rec_matrix_001",
+              "value": "Renewal Won"
+            },
+            "path": "/tables/tbl_tasks/records/rec_matrix_001/fields/title"
+          }
+        ],
+        "kind": "command-draft"
+      },
+      "updateFieldDraft": {
+        "command": {
+          "actor": {
+            "mode": "agent",
+            "principalId": "usr_alice"
+          },
+          "commandId": "cmd_agent_field_update_001",
+          "commandType": "field.update",
+          "idempotencyKey": "idem_agent_field_update_001",
+          "payload": {
+            "config": {
+              "display": "currency",
+              "integerOnly": true
+            },
+            "fieldId": "title",
+            "tableId": "tbl_tasks"
+          },
+          "permissionScopeHash": "scope:table:tbl_tasks",
+          "permissionsVersion": 7,
+          "schemaEpoch": 3,
+          "scope": "workspace",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        },
+        "diffs": [
+          {
+            "action": "update",
+            "after": {
+              "config": {
+                "display": "currency",
+                "integerOnly": true
+              },
+              "fieldId": "title",
+              "tableId": "tbl_tasks"
+            },
+            "path": "/tables/tbl_tasks/fields/title"
+          }
+        ],
+        "kind": "command-draft"
+      },
+      "updateRecordDraft": {
+        "command": {
+          "actor": {
+            "mode": "agent",
+            "principalId": "usr_alice"
+          },
+          "commandId": "cmd_agent_record_update_001",
+          "commandType": "record.update",
+          "idempotencyKey": "idem_agent_record_update_001",
+          "payload": {
+            "patch": {
+              "customer_note": "hidden",
+              "title": "Q3 Renewal Updated"
+            },
+            "recordId": "rec_matrix_001"
+          },
+          "permissionScopeHash": "scope:table:tbl_tasks",
+          "permissionsVersion": 7,
+          "schemaEpoch": 3,
+          "scope": "table",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        },
+        "diffs": [
+          {
+            "action": "update",
+            "after": {
+              "patch": {
+                "customer_note": "hidden",
+                "title": "Q3 Renewal Updated"
+              },
+              "recordId": "rec_matrix_001"
+            },
+            "path": "/tables/tbl_tasks/records/rec_matrix_001"
+          }
+        ],
+        "kind": "command-draft"
+      },
       "workflowHistory": {
         "history": {
           "runs": [
@@ -790,10 +2626,579 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
           "status": "dead_lettered",
           "workflowId": "wf_matrix"
         }
+      },
+      "workspaceActivity": {
+        "activity": {
+          "entries": [],
+          "page": {
+            "limit": 5,
+            "nextBeforeWorkspaceSequence": null
+          },
+          "workspaceId": "ws_demo"
+        },
+        "kind": "activity-history"
       }
     },
     "category": "agent_tool_dry_runs",
     "scenario": "agent_tool_preview_and_sanitization"
+  },
+  {
+    "actual": {
+      "accepted": {
+        "body": {
+          "aggregate": {
+            "id": "view_execute_public",
+            "type": "view"
+          },
+          "command": {
+            "actor": {
+              "mode": "user",
+              "principalId": "usr_member"
+            },
+            "commandId": "cmd_execute_public_view",
+            "commandType": "view.create",
+            "idempotencyKey": "idem_execute_public_view",
+            "payload": {
+              "filterFieldIds": [],
+              "sortFieldIds": [
+                "fld_status"
+              ],
+              "viewId": "view_execute_public",
+              "viewName": "Execute Public View",
+              "visibleFieldIds": [
+                "fld_title",
+                "fld_status"
+              ]
+            },
+            "permissionScopeHash": "scope:table:tbl_1",
+            "permissionsVersion": 0,
+            "scope": "workspace",
+            "tableId": "tbl_1",
+            "workspaceId": "ws_1"
+          },
+          "coordinator": {
+            "durableObject": "workspace-control",
+            "objectId": "ws_1",
+            "published": [
+              {
+                "outboxId": "outbox:00000000-0000-4000-8000-000000000001:event-fanout",
+                "queue": "event-fanout"
+              }
+            ]
+          },
+          "result": {
+            "accepted": true,
+            "diagnostics": [],
+            "events": [
+              {
+                "aggregateId": "view_execute_public",
+                "aggregateType": "view",
+                "commandId": "cmd_execute_public_view",
+                "commandType": "view.create",
+                "eventId": "00000000-0000-4000-8000-000000000001",
+                "eventType": "view.created",
+                "tableId": "tbl_1",
+                "workspaceId": "ws_1"
+              }
+            ],
+            "permission": {
+              "allowed": true,
+              "reasons": []
+            },
+            "replayProjection": {
+              "acceptedCommandIds": [
+                "cmd_execute_public_view"
+              ],
+              "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+              "receiptCount": 1,
+              "receipts": [
+                {
+                  "idempotencyKey": "idem_execute_public_view",
+                  "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_member\\"\\n  },\\n  \\"commandType\\": \\"view.create\\",\\n  \\"payload\\": {\\n    \\"filterFieldIds\\": [],\\n    \\"sortFieldIds\\": [\\n      \\"fld_status\\"\\n    ],\\n    \\"viewId\\": \\"view_execute_public\\",\\n    \\"viewName\\": \\"Execute Public View\\",\\n    \\"visibleFieldIds\\": [\\n      \\"fld_title\\",\\n      \\"fld_status\\"\\n    ]\\n  },\\n  \\"scope\\": \\"workspace\\",\\n  \\"tableId\\": \\"tbl_1\\",\\n  \\"workspaceId\\": \\"ws_1\\"\\n}",
+                  "status": "accepted"
+                }
+              ]
+            },
+            "sideEffects": [
+              {
+                "eventId": "00000000-0000-4000-8000-000000000001",
+                "queue": "event-fanout",
+                "reason": "view_created_fanout"
+              }
+            ],
+            "status": "accepted"
+          }
+        },
+        "status": 200
+      },
+      "acceptedEventLedgerCount": {
+        "count": 1
+      },
+      "acceptedQueues": {
+        "eventFanout": [
+          {
+            "eventId": "00000000-0000-4000-8000-000000000001",
+            "kind": "event-fanout",
+            "payload": {
+              "commandId": "cmd_execute_public_view",
+              "eventId": "00000000-0000-4000-8000-000000000001",
+              "eventType": "view.created",
+              "workspaceId": "ws_1"
+            },
+            "workspaceId": "ws_1"
+          }
+        ],
+        "projection": [],
+        "workflowDispatch": [],
+        "workflowStep": []
+      },
+      "rejected": {
+        "body": {
+          "aggregate": {
+            "id": "rec_execute_invalid",
+            "type": "record"
+          },
+          "command": {
+            "actor": {
+              "mode": "user",
+              "principalId": "usr_limited"
+            },
+            "commandId": "cmd_execute_invalid",
+            "commandType": "record.update",
+            "idempotencyKey": "idem_execute_invalid",
+            "payload": {
+              "patch": [],
+              "recordId": "rec_execute_invalid"
+            },
+            "permissionScopeHash": "scope:table:tbl_1",
+            "permissionsVersion": 0,
+            "scope": "table",
+            "tableId": "tbl_1",
+            "workspaceId": "ws_1"
+          },
+          "coordinator": {
+            "durableObject": "table-coordinator",
+            "lease": {
+              "endSequence": 256,
+              "leaseId": "lease:ws_1:ws_1:tbl_1:1",
+              "ownerKey": "ws_1:tbl_1",
+              "size": 256,
+              "startSequence": 1
+            },
+            "objectId": "ws_1:tbl_1",
+            "published": []
+          },
+          "result": {
+            "accepted": false,
+            "diagnostics": [
+              "payload_patch_must_be_object"
+            ],
+            "events": [],
+            "permission": {
+              "allowed": false,
+              "reasons": []
+            },
+            "replayProjection": {
+              "acceptedCommandIds": [],
+              "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+              "receiptCount": 0,
+              "receipts": []
+            },
+            "sideEffects": [],
+            "status": "rejected"
+          }
+        },
+        "status": 200
+      },
+      "rejectedEventLedgerCount": {
+        "count": 0
+      },
+      "rejectedQueues": {
+        "eventFanout": [],
+        "projection": [],
+        "workflowDispatch": [],
+        "workflowStep": []
+      }
+    },
+    "category": "execution_ingress",
+    "scenario": "command_execute_ingress_contract"
+  },
+  {
+    "actual": {
+      "executeCommand": {
+        "body": {
+          "access": {
+            "allowed": true,
+            "hiddenFieldIds": [],
+            "reason": null,
+            "toolId": "executeCommand",
+            "visibleFieldIds": []
+          },
+          "input": {
+            "command": {
+              "actor": {
+                "mode": "user",
+                "principalId": "usr_wrong"
+              },
+              "commandId": "cmd_execute_view",
+              "commandType": "view.create",
+              "idempotencyKey": "idem_execute_view",
+              "payload": {
+                "filterFieldIds": [],
+                "sortFieldIds": [
+                  "fld_status"
+                ],
+                "viewId": "view_public",
+                "viewName": "Public Pipeline",
+                "visibleFieldIds": [
+                  "fld_title",
+                  "fld_status"
+                ]
+              },
+              "permissionScopeHash": "scope:wrong",
+              "permissionsVersion": 999,
+              "schemaEpoch": 999,
+              "scope": "workspace",
+              "tableId": "tbl_1",
+              "workspaceId": "ws_other"
+            }
+          },
+          "inputDiagnostics": [
+            "agent_hidden:fld_customer_note"
+          ],
+          "output": {
+            "command": {
+              "actor": {
+                "mode": "agent",
+                "principalId": "agt_assist"
+              },
+              "commandId": "cmd_execute_view",
+              "commandType": "view.create",
+              "idempotencyKey": "idem_execute_view",
+              "payload": {
+                "filterFieldIds": [],
+                "sortFieldIds": [
+                  "fld_status"
+                ],
+                "viewId": "view_public",
+                "viewName": "Public Pipeline",
+                "visibleFieldIds": [
+                  "fld_title",
+                  "fld_status"
+                ]
+              },
+              "permissionScopeHash": "scope:table:tbl_1",
+              "permissionsVersion": 0,
+              "schemaEpoch": 0,
+              "scope": "workspace",
+              "tableId": "tbl_1",
+              "workspaceId": "ws_1"
+            },
+            "kind": "command-execution",
+            "result": {
+              "accepted": true,
+              "diagnostics": [],
+              "events": [
+                {
+                  "aggregateId": "view_public",
+                  "aggregateType": "view",
+                  "commandId": "cmd_execute_view",
+                  "commandType": "view.create",
+                  "eventId": "00000000-0000-4000-8000-000000000101",
+                  "eventType": "view.created",
+                  "tableId": "tbl_1",
+                  "workspaceId": "ws_1"
+                }
+              ],
+              "permission": {
+                "allowed": true,
+                "reasons": []
+              },
+              "replayProjection": {
+                "acceptedCommandIds": [
+                  "cmd_execute_view"
+                ],
+                "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+                "receiptCount": 1,
+                "receipts": [
+                  {
+                    "idempotencyKey": "idem_execute_view",
+                    "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"agent\\",\\n    \\"principalId\\": \\"agt_assist\\"\\n  },\\n  \\"commandType\\": \\"view.create\\",\\n  \\"payload\\": {\\n    \\"filterFieldIds\\": [],\\n    \\"sortFieldIds\\": [\\n      \\"fld_status\\"\\n    ],\\n    \\"viewId\\": \\"view_public\\",\\n    \\"viewName\\": \\"Public Pipeline\\",\\n    \\"visibleFieldIds\\": [\\n      \\"fld_title\\",\\n      \\"fld_status\\"\\n    ]\\n  },\\n  \\"scope\\": \\"workspace\\",\\n  \\"tableId\\": \\"tbl_1\\",\\n  \\"workspaceId\\": \\"ws_1\\"\\n}",
+                    "status": "accepted"
+                  }
+                ]
+              },
+              "sideEffects": [
+                {
+                  "eventId": "00000000-0000-4000-8000-000000000101",
+                  "queue": "event-fanout",
+                  "reason": "view_created_fanout"
+                }
+              ],
+              "status": "accepted"
+            }
+          },
+          "outputDiagnostics": [],
+          "permissionScope": {
+            "policyRevision": 0,
+            "principalId": "agt_assist",
+            "scopeHash": "scope:table:tbl_1",
+            "workspaceId": "ws_1"
+          },
+          "tool": {
+            "id": "executeCommand",
+            "phase": "execute",
+            "scope": "app",
+            "successorToolId": null
+          }
+        },
+        "metadata": {
+          "actor": {
+            "mode": "agent",
+            "principalId": "agt_assist"
+          },
+          "aggregateType": "view",
+          "commandType": "view.create",
+          "permissionScopeHash": "scope:table:tbl_1",
+          "permissionsVersion": 0,
+          "schemaEpoch": 0,
+          "scope": "workspace"
+        },
+        "status": 200
+      },
+      "manualWrapper": {
+        "execute": {
+          "body": {
+            "access": {
+              "allowed": true,
+              "hiddenFieldIds": [],
+              "reason": null,
+              "toolId": "executeCommand",
+              "visibleFieldIds": []
+            },
+            "input": {
+              "command": {
+                "actor": {
+                  "mode": "agent",
+                  "principalId": "agt_assist"
+                },
+                "commandId": "cmd_workflow_manual_00000000-0000-4000-8000-000000000102",
+                "commandType": "workflow.manual",
+                "idempotencyKey": "idem_workflow_manual_00000000-0000-4000-8000-000000000102",
+                "payload": {
+                  "input": {
+                    "trigger": "button"
+                  },
+                  "manualInvocationId": "manual_agent_execute_1",
+                  "workflowId": "wf_agent_execute"
+                },
+                "permissionScopeHash": "scope:table:tbl_1",
+                "permissionsVersion": 41,
+                "schemaEpoch": 0,
+                "scope": "workflow",
+                "tableId": "tbl_1",
+                "workspaceId": "ws_1"
+              }
+            },
+            "inputDiagnostics": [],
+            "output": {
+              "command": {
+                "actor": {
+                  "mode": "agent",
+                  "principalId": "agt_assist"
+                },
+                "commandId": "cmd_workflow_manual_00000000-0000-4000-8000-000000000102",
+                "commandType": "workflow.manual",
+                "idempotencyKey": "idem_workflow_manual_00000000-0000-4000-8000-000000000102",
+                "payload": {
+                  "input": {
+                    "trigger": "button"
+                  },
+                  "manualInvocationId": "manual_agent_execute_1",
+                  "workflowId": "wf_agent_execute"
+                },
+                "permissionScopeHash": "scope:table:tbl_1",
+                "permissionsVersion": 41,
+                "schemaEpoch": 0,
+                "scope": "workflow",
+                "tableId": "tbl_1",
+                "workspaceId": "ws_1"
+              },
+              "kind": "command-execution",
+              "result": {
+                "accepted": true,
+                "diagnostics": [],
+                "events": [
+                  {
+                    "aggregateId": "wf_agent_execute",
+                    "aggregateType": "workflow",
+                    "commandId": "cmd_workflow_manual_00000000-0000-4000-8000-000000000102",
+                    "commandType": "workflow.manual",
+                    "eventId": "00000000-0000-4000-8000-000000000103",
+                    "eventType": "workflow.manual",
+                    "tableId": "tbl_1",
+                    "workspaceId": "ws_1"
+                  }
+                ],
+                "permission": {
+                  "allowed": true,
+                  "reasons": []
+                },
+                "replayProjection": {
+                  "acceptedCommandIds": [
+                    "cmd_workflow_manual_00000000-0000-4000-8000-000000000102"
+                  ],
+                  "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+                  "receiptCount": 1,
+                  "receipts": [
+                    {
+                      "idempotencyKey": "idem_workflow_manual_00000000-0000-4000-8000-000000000102",
+                      "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"agent\\",\\n    \\"principalId\\": \\"agt_assist\\"\\n  },\\n  \\"commandType\\": \\"workflow.manual\\",\\n  \\"payload\\": {\\n    \\"input\\": {\\n      \\"trigger\\": \\"button\\"\\n    },\\n    \\"manualInvocationId\\": \\"manual_agent_execute_1\\",\\n    \\"workflowId\\": \\"wf_agent_execute\\"\\n  },\\n  \\"scope\\": \\"workflow\\",\\n  \\"tableId\\": \\"tbl_1\\",\\n  \\"workspaceId\\": \\"ws_1\\"\\n}",
+                      "status": "accepted"
+                    }
+                  ]
+                },
+                "sideEffects": [
+                  {
+                    "eventId": "00000000-0000-4000-8000-000000000103",
+                    "queue": "event-fanout",
+                    "reason": "workflow_manual_fanout"
+                  }
+                ],
+                "status": "accepted"
+              }
+            },
+            "outputDiagnostics": [],
+            "permissionScope": {
+              "policyRevision": 41,
+              "principalId": "agt_assist",
+              "scopeHash": "scope:table:tbl_1",
+              "workspaceId": "ws_1"
+            },
+            "tool": {
+              "id": "executeCommand",
+              "phase": "execute",
+              "scope": "app",
+              "successorToolId": null
+            }
+          },
+          "metadata": {
+            "actor": {
+              "mode": "agent",
+              "principalId": "agt_assist"
+            },
+            "aggregateType": "workflow",
+            "commandType": "workflow.manual",
+            "permissionScopeHash": "scope:table:tbl_1",
+            "permissionsVersion": 41,
+            "schemaEpoch": 0,
+            "scope": "workflow"
+          },
+          "status": 200
+        },
+        "preview": {
+          "body": {
+            "access": {
+              "allowed": true,
+              "hiddenFieldIds": [],
+              "reason": null,
+              "toolId": "runWorkflow",
+              "visibleFieldIds": []
+            },
+            "input": {
+              "input": {
+                "trigger": "button"
+              },
+              "manualInvocationId": "manual_agent_execute_1",
+              "tableId": "tbl_1",
+              "workflowId": "wf_agent_execute"
+            },
+            "inputDiagnostics": [],
+            "output": {
+              "command": {
+                "actor": {
+                  "mode": "agent",
+                  "principalId": "agt_assist"
+                },
+                "commandId": "cmd_workflow_manual_00000000-0000-4000-8000-000000000102",
+                "commandType": "workflow.manual",
+                "idempotencyKey": "idem_workflow_manual_00000000-0000-4000-8000-000000000102",
+                "payload": {
+                  "input": {
+                    "trigger": "button"
+                  },
+                  "manualInvocationId": "manual_agent_execute_1",
+                  "workflowId": "wf_agent_execute"
+                },
+                "permissionScopeHash": "scope:table:tbl_1",
+                "permissionsVersion": 41,
+                "schemaEpoch": 0,
+                "scope": "workflow",
+                "tableId": "tbl_1",
+                "workspaceId": "ws_1"
+              },
+              "diffs": [
+                {
+                  "action": "create",
+                  "after": {
+                    "input": {
+                      "trigger": "button"
+                    },
+                    "manualInvocationId": "manual_agent_execute_1",
+                    "workflowId": "wf_agent_execute"
+                  },
+                  "path": "/workflows/wf_agent_execute/runs/manual"
+                }
+              ],
+              "kind": "command-draft"
+            },
+            "outputDiagnostics": [],
+            "permissionScope": {
+              "policyRevision": 41,
+              "principalId": "agt_assist",
+              "scopeHash": "scope:table:tbl_1",
+              "workspaceId": "ws_1"
+            },
+            "tool": {
+              "id": "runWorkflow",
+              "phase": "preview",
+              "scope": "workflow",
+              "successorToolId": "dryRunCommand"
+            }
+          },
+          "status": 200
+        }
+      },
+      "queues": {
+        "eventFanout": [
+          {
+            "eventId": "00000000-0000-4000-8000-000000000101",
+            "kind": "event-fanout",
+            "payload": {
+              "commandId": "cmd_execute_view",
+              "eventId": "00000000-0000-4000-8000-000000000101",
+              "eventType": "view.created",
+              "workspaceId": "ws_1"
+            },
+            "workspaceId": "ws_1"
+          },
+          {
+            "eventId": "00000000-0000-4000-8000-000000000103",
+            "kind": "event-fanout",
+            "payload": {
+              "commandId": "cmd_workflow_manual_00000000-0000-4000-8000-000000000102",
+              "eventId": "00000000-0000-4000-8000-000000000103",
+              "eventType": "workflow.manual",
+              "workspaceId": "ws_1"
+            },
+            "workspaceId": "ws_1"
+          }
+        ],
+        "workflowDispatch": []
+      }
+    },
+    "category": "agent_tool_execution",
+    "scenario": "agent_tool_execute_and_manual_wrapper"
   },
   {
     "actual": {

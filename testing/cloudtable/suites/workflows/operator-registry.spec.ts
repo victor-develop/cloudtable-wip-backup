@@ -251,6 +251,21 @@ describe("workflow operator registry", () => {
             writeAllowed: true
           };
         },
+        explainFieldAccess(field, surfaces = ["direct-record-read"]) {
+          return {
+            fieldId: field.fieldId,
+            fieldType: field.fieldType,
+            surfaces: surfaces.map((surface) => ({
+              allowed: true,
+              message: "Allowed.",
+              readState: "visible" as const,
+              reasonMessages: [],
+              reasons: [],
+              surface,
+              writeAllowed: true
+            }))
+          };
+        },
         filterAgentTools(tools) {
           return tools.map((tool) => ({
             allowed: true,
@@ -403,6 +418,21 @@ describe("workflow operator registry", () => {
             readState: "visible" as const,
             reasons: [],
             writeAllowed: true
+          };
+        },
+        explainFieldAccess(field, surfaces = ["direct-record-read"]) {
+          return {
+            fieldId: field.fieldId,
+            fieldType: field.fieldType,
+            surfaces: surfaces.map((surface) => ({
+              allowed: true,
+              message: "Allowed.",
+              readState: "visible" as const,
+              reasonMessages: [],
+              reasons: [],
+              surface,
+              writeAllowed: true
+            }))
           };
         },
         filterAgentTools(tools) {

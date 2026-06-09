@@ -162,7 +162,12 @@ async function loadIndexableFields(
       `SELECT id, field_key, field_type, config_json
        FROM fields
        WHERE workspace_id = ? AND table_id = ? AND archived_at IS NULL
-       ORDER BY field_key ASC, id ASC`
+       ORDER BY
+         CASE WHEN field_order IS NULL THEN 0 ELSE 1 END ASC,
+         CASE WHEN field_order IS NULL THEN created_at ELSE NULL END ASC,
+         CASE WHEN field_order IS NULL THEN id ELSE NULL END ASC,
+         field_order ASC,
+         id ASC`
     )
     .bind(workspaceId, tableId)
     .all<FieldRow>();

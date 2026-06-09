@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "Unknown option id for status.semantic: missing."
+  ],
+  "status": "rejected"
+}

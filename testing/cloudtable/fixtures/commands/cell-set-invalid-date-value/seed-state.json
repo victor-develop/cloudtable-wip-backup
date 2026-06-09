@@ -1,0 +1,19 @@
+{
+  "persistence": {
+    "appId": "app_ops",
+    "fields": [
+      {
+        "fieldId": "fld_due_date",
+        "fieldKey": "dueDate",
+        "fieldType": "date.date",
+        "label": "Due Date"
+      }
+    ],
+    "records": [
+      {
+        "recordId": "rec_001",
+        "recordKey": "record-1"
+      }
+    ]
+  }
+}

@@ -164,6 +164,11 @@ export type WorkflowOperatorFixture =
       expectedPayload: Record<string, unknown>;
     };
 
+export type WorkflowOperatorFixtureManifest = {
+  id: string;
+  kind: WorkflowOperatorFixture["kind"];
+};
+
 type WorkflowOperatorDefinitionBase = {
   id: string;
   kind: WorkflowOperatorKind;
@@ -176,6 +181,20 @@ type WorkflowOperatorDefinitionBase = {
   timeoutClass: WorkflowOperatorTimeoutClass;
   retryClass: WorkflowOperatorRetryClass;
   fixtureContract: readonly WorkflowOperatorFixture[];
+};
+
+type WorkflowOperatorManifestBase = {
+  fixtureContract: readonly WorkflowOperatorFixtureManifest[];
+  id: string;
+  idempotencyMode: WorkflowOperatorIdempotencyMode;
+  inputSchema: JsonSchema;
+  kind: WorkflowOperatorKind;
+  outputSchema: JsonSchema;
+  purity: WorkflowOperatorPurity;
+  requiredCapabilities: readonly WorkflowOperatorCapability[];
+  retryClass: WorkflowOperatorRetryClass;
+  timeoutClass: WorkflowOperatorTimeoutClass;
+  version: number;
 };
 
 export type WorkflowTriggerDefinition = WorkflowOperatorDefinitionBase & {
@@ -197,6 +216,26 @@ export type WorkflowActionDefinition = WorkflowOperatorDefinitionBase & {
     context: WorkflowActionExecutionContext
   ): CommandEnvelope;
 };
+
+export type WorkflowTriggerManifest = WorkflowOperatorManifestBase & {
+  kind: "trigger";
+  triggerEventTypes: readonly string[];
+};
+
+export type WorkflowConditionManifest = WorkflowOperatorManifestBase & {
+  kind: "condition";
+};
+
+export type WorkflowActionManifest = WorkflowOperatorManifestBase & {
+  kind: "action";
+  commandScope: CommandScope;
+  commandType: string;
+};
+
+export type WorkflowOperatorManifest =
+  | WorkflowTriggerManifest
+  | WorkflowConditionManifest
+  | WorkflowActionManifest;
 
 export type WorkflowOperatorDefinition =
   | WorkflowTriggerDefinition

@@ -1,0 +1,14 @@
+{
+  "acceptedCommandIds": [
+    "cmd_workflow_job_enqueue_001"
+  ],
+  "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+  "receiptCount": 1,
+  "receipts": [
+    {
+      "idempotencyKey": "idem_workflow_job_enqueue_001",
+      "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"workflow\",\n    \"principalId\": \"wf_pipeline\"\n  },\n  \"commandType\": \"job.enqueue\",\n  \"payload\": {\n    \"args\": {\n      \"recordId\": \"rec_001\"\n    },\n    \"jobType\": \"projection.rebuild\",\n    \"triggerEventId\": \"evt_record_updated_001\",\n    \"workflowId\": \"wf_pipeline\",\n    \"workflowRunId\": \"wfr_001\",\n    \"workflowStepId\": \"step_enqueue_internal_job_001\"\n  },\n  \"scope\": \"workflow\",\n  \"workspaceId\": \"ws_demo\"\n}",
+      "status": "accepted"
+    }
+  ]
+}

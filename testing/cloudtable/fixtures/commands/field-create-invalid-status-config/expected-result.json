@@ -1,0 +1,8 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:status.semantic:Status option todo is missing a semantic value.",
+    "invalid_field_config:status.semantic:Status option doing has unsupported semantic: moving."
+  ],
+  "status": "rejected"
+}

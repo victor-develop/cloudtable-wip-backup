@@ -1,0 +1,22 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_admin"
+  },
+  "commandId": "cmd_field_permission_001",
+  "commandType": "field.permission.configure",
+  "idempotencyKey": "idem_field_permission_001",
+  "payload": {
+    "fieldId": "fld_title",
+    "policy": {
+      "agent": false,
+      "read": "redacted",
+      "workflow": true,
+      "write": false
+    },
+    "principalId": "usr_member"
+  },
+  "scope": "workspace",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

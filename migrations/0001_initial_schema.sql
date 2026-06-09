@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS fields (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
   table_id TEXT NOT NULL,
+  field_order INTEGER,
   field_key TEXT NOT NULL,
   label TEXT NOT NULL,
   field_type TEXT NOT NULL,

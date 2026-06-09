@@ -40,9 +40,11 @@ class FakeDurableObjectState {
 
 class FakeQueue {
   readonly sent: CloudTableQueueMessage[] = [];
+  readonly sends: Array<{ message: CloudTableQueueMessage; options?: QueueSendOptions }> = [];
 
-  async send(message: CloudTableQueueMessage): Promise<void> {
+  async send(message: CloudTableQueueMessage, options?: QueueSendOptions): Promise<void> {
     this.sent.push(message);
+    this.sends.push({ message, options });
   }
 }
 
@@ -96,6 +98,7 @@ function insertField(
   input: {
     config?: Record<string, unknown>;
     fieldId: string;
+    fieldOrder?: number | null;
     fieldKey: string;
     fieldType: string;
     label: string;
@@ -108,6 +111,7 @@ function insertField(
          id,
          workspace_id,
          table_id,
+         field_order,
          field_key,
          label,
          field_type,
@@ -117,12 +121,13 @@ function insertField(
          updated_at,
          archived_at,
          last_event_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       input.fieldId,
       "ws_1",
       input.tableId,
+      input.fieldOrder ?? null,
       input.fieldKey,
       input.label,
       input.fieldType,
@@ -610,6 +615,7 @@ function createBatch(
 describe("workflow queue consumer", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("executes only published workflows created through the command ingress and stops after pause", async () => {
@@ -1060,6 +1066,101 @@ describe("workflow queue consumer", () => {
       .bind(workflowCommandId)
       .first<{ count: number }>();
     expect(workflowCommandRows?.count).toBe(1);
+  });
+
+  it("creates one scheduled workflow run across duplicate scheduler dispatch delivery", async () => {
+    const { db, env, workflowStepQueue } = createEnv();
+
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "emit_notification_event",
+          input: {
+            channel: "ops",
+            message: "cadenced dispatch"
+          }
+        }
+      ],
+      principal: {
+        principalId: "wf_scheduler",
+        policyRevision: 7,
+        schemaEpoch: 0,
+        scopeHash: "scope:wf:status-sync"
+      },
+      trigger: {
+        operatorId: "scheduled",
+        match: {
+          schedule: {
+            cadenceMinutes: 5
+          }
+        }
+      }
+    });
+
+    const scheduledDispatch = {
+      kind: "workflow-dispatch",
+      payload: {
+        cadenceMinutes: 5,
+        scheduleWindowEnd: "2026-06-06T00:10:00.000Z",
+        scheduleWindowStart: "2026-06-06T00:05:00.000Z",
+        scheduledAt: "2026-06-06T00:10:00.000Z",
+        triggerKind: "scheduled",
+        workflowId: "wf_status_sync",
+        workflowVersionId: "wf_status_sync:v1"
+      },
+      workspaceId: "ws_1"
+    } satisfies CloudTableQueueMessage;
+
+    const dispatchBatch = createBatch([scheduledDispatch, scheduledDispatch]);
+    await handleQueueBatch(dispatchBatch.batch as never, env, {} as ExecutionContext);
+
+    expect(dispatchBatch.acked).toBe(2);
+    expect(workflowStepQueue.sent).toHaveLength(1);
+
+    const workflowRun = await db
+      .prepare(
+        `SELECT id, trigger_event_id, state_json, status
+         FROM workflow_runs
+         WHERE workflow_id = ?`
+      )
+      .bind("wf_status_sync")
+      .first<{
+        id: string;
+        state_json: string;
+        status: string;
+        trigger_event_id: string;
+      }>();
+    expect(workflowRun).toEqual({
+      id: "wfr:wf_status_sync:schedule:wf_status_sync:v1:2026-06-06T00:05:00.000Z",
+      state_json: JSON.stringify({
+        cadenceMinutes: 5,
+        principalId: "wf_scheduler",
+        scheduleWindowEnd: "2026-06-06T00:10:00.000Z",
+        scheduleWindowStart: "2026-06-06T00:05:00.000Z",
+        scheduledAt: "2026-06-06T00:10:00.000Z",
+        triggerEventId: "evt:wf_status_sync:v1:schedule:2026-06-06T00:05:00.000Z"
+      }),
+      status: "queued",
+      trigger_event_id: "evt:wf_status_sync:v1:schedule:2026-06-06T00:05:00.000Z"
+    });
+
+    const scheduledEvent = await db
+      .prepare(
+        `SELECT event_type, payload_json
+         FROM event_ledger
+         WHERE event_id = ?`
+      )
+      .bind("evt:wf_status_sync:v1:schedule:2026-06-06T00:05:00.000Z")
+      .first<{ event_type: string; payload_json: string }>();
+    expect(scheduledEvent?.event_type).toBe("workflow.scheduled");
+    expect(JSON.parse(scheduledEvent?.payload_json ?? "{}")).toEqual({
+      cadenceMinutes: 5,
+      scheduleWindowEnd: "2026-06-06T00:10:00.000Z",
+      scheduleWindowStart: "2026-06-06T00:05:00.000Z",
+      scheduledAt: "2026-06-06T00:10:00.000Z",
+      workflowId: "wf_status_sync",
+      workflowVersionId: "wf_status_sync:v1"
+    });
   });
 
   it("re-resolves the latest workflow principal snapshot before executing a step", async () => {
@@ -2058,15 +2159,221 @@ describe("workflow queue consumer", () => {
     });
   });
 
-  it("dead-letters failed webhook deliveries and replays them without duplicating the command event", async () => {
+  it("commits internal-job workflow actions through the command bus and publishes fan-out", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db);
+    insertPermissionSnapshot(db, {
+      commandTypes: ["job.enqueue"]
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "enqueue_internal_job",
+          input: {
+            args: {
+              recordId: {
+                path: "row.recordId"
+              }
+            },
+            jobType: "projection.rebuild"
+          }
+        }
+      ]
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_job_1",
+            idempotencyKey: "idem_trigger_job_1",
+            payload: {
+              fieldType: "text.single_line",
+              value: "crm"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    const workflowRun = await db
+      .prepare(`SELECT id, status FROM workflow_runs ORDER BY id ASC LIMIT 1`)
+      .bind()
+      .first<{ id: string; status: string }>();
+    expect(workflowRun?.status).toBe("completed");
+
+    const workflowStep = await db
+      .prepare(
+        `SELECT status, last_error_code, output_json
+         FROM workflow_run_steps
+         ORDER BY id ASC
+         LIMIT 1`
+      )
+      .bind()
+      .first<{ last_error_code: string | null; output_json: string; status: string }>();
+    expect(workflowStep?.status).toBe("completed");
+    expect(workflowStep?.last_error_code).toBeNull();
+    const jobOutput = JSON.parse(workflowStep?.output_json ?? "{}") as {
+      events?: Array<{ eventId?: string; commandType?: string; eventType?: string }>;
+    };
+    expect(jobOutput).toMatchObject({
+      accepted: true,
+      diagnostics: [],
+      events: [
+        {
+          commandType: "job.enqueue",
+          eventType: "job.enqueued"
+        }
+      ],
+      sideEffects: [
+        {
+          queue: "event-fanout",
+          reason: "job_enqueued_fanout"
+        }
+      ]
+    });
+
+    expect(workflowStepQueue.sent).toHaveLength(1);
+    expect(eventFanoutQueue.sent).toHaveLength(2);
+    expect(eventFanoutQueue.sent[1]).toMatchObject({
+      eventId: jobOutput.events?.[0]?.eventId,
+      kind: "event-fanout",
+      workspaceId: "ws_1"
+    });
+  });
+
+  it("commits notification workflow actions through the command bus and publishes fan-out", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db);
+    insertPermissionSnapshot(db, {
+      commandTypes: ["notification.emit"]
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "emit_notification_event",
+          input: {
+            channel: "activity",
+            details: {
+              recordId: {
+                path: "row.recordId"
+              }
+            },
+            message: "Workflow step completed."
+          }
+        }
+      ]
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_notification_1",
+            idempotencyKey: "idem_trigger_notification_1",
+            payload: {
+              fieldType: "text.single_line",
+              value: "crm"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    const workflowRun = await db
+      .prepare(`SELECT id, status FROM workflow_runs ORDER BY id ASC LIMIT 1`)
+      .bind()
+      .first<{ id: string; status: string }>();
+    expect(workflowRun?.status).toBe("completed");
+
+    const workflowStep = await db
+      .prepare(
+        `SELECT status, last_error_code, output_json
+         FROM workflow_run_steps
+         ORDER BY id ASC
+         LIMIT 1`
+      )
+      .bind()
+      .first<{ last_error_code: string | null; output_json: string; status: string }>();
+    expect(workflowStep?.status).toBe("completed");
+    expect(workflowStep?.last_error_code).toBeNull();
+    const notificationOutput = JSON.parse(workflowStep?.output_json ?? "{}") as {
+      events?: Array<{ eventId?: string; commandType?: string; eventType?: string }>;
+    };
+    expect(notificationOutput).toMatchObject({
+      accepted: true,
+      diagnostics: [],
+      events: [
+        {
+          commandType: "notification.emit",
+          eventType: "notification.emitted"
+        }
+      ],
+      sideEffects: [
+        {
+          queue: "event-fanout",
+          reason: "notification_emitted_fanout"
+        }
+      ]
+    });
+
+    expect(workflowStepQueue.sent).toHaveLength(1);
+    expect(eventFanoutQueue.sent).toHaveLength(2);
+    expect(eventFanoutQueue.sent[1]).toMatchObject({
+      eventId: notificationOutput.events?.[0]?.eventId,
+      kind: "event-fanout",
+      workspaceId: "ws_1"
+    });
+  });
+
+  it("schedules retryable webhook failures with bounded backoff and keeps duplicate delivery idempotent", async () => {
     const {
       db,
-      deadLetterQueue,
       env,
       eventFanoutQueue,
       workflowDispatchQueue,
       workflowStepQueue
     } = createEnv();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-06T00:00:00.000Z"));
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -2131,39 +2438,55 @@ describe("workflow queue consumer", () => {
     await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
     await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
 
-    let workflowRun = await db
-      .prepare(`SELECT id, status FROM workflow_runs ORDER BY id ASC LIMIT 1`)
+    const retryingWorkflowRun = await db
+      .prepare(`SELECT id, status, state_json FROM workflow_runs ORDER BY id ASC LIMIT 1`)
       .bind()
-      .first<{ id: string; status: string }>();
-    expect(workflowRun?.status).toBe("dead_lettered");
+      .first<{ id: string; state_json: string; status: string }>();
+    expect(retryingWorkflowRun?.status).toBe("waiting_retry");
 
     const workflowStep = await db
-      .prepare(`SELECT id, status, last_error_code FROM workflow_run_steps ORDER BY id ASC LIMIT 1`)
+      .prepare(
+        `SELECT id, status, last_error_code, audit_json
+         FROM workflow_run_steps
+         ORDER BY id ASC
+         LIMIT 1`
+      )
       .bind()
-      .first<{ id: string; last_error_code: string | null; status: string }>();
+      .first<{
+        audit_json: string;
+        id: string;
+        last_error_code: string | null;
+        status: string;
+      }>();
     expect(workflowStep).toMatchObject({
       last_error_code: "workflow_webhook_http_503",
-      status: "dead_lettered"
+      status: "retryable_failed"
     });
+    expect(workflowStepQueue.sends).toHaveLength(2);
+    expect(workflowStepQueue.sends[1]?.options?.delaySeconds).toBe(30);
 
-    deadLetterQueue.sent.push({
-      kind: "dead-letter-reprocessor",
-      payload: {
-        deadLetterId: `wdl:${workflowStep?.id}`
-      },
-      workspaceId: "ws_1"
+    const retryMessage = workflowStepQueue.sent[1]!;
+    expect(retryMessage.retry).toMatchObject({
+      attempt: 2,
+      delaySeconds: 30,
+      maxAttempts: 8,
+      retryClass: "network"
     });
+    const runState = JSON.parse(retryingWorkflowRun?.state_json ?? "{}") as {
+      retry?: { nextAttemptAt?: string };
+    };
+    const stepAudit = JSON.parse(workflowStep?.audit_json ?? "{}") as {
+      retry?: { nextAttemptAt?: string };
+    };
+    expect(runState.retry?.nextAttemptAt).toBe(retryMessage.retry?.nextAttemptAt);
+    expect(stepAudit.retry?.nextAttemptAt).toBe(retryMessage.retry?.nextAttemptAt);
 
-    await handleQueueBatch(createBatch([deadLetterQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
-    await handleQueueBatch(
-      createBatch([workflowStepQueue.sent.at(-1)!]).batch as never,
-      env,
-      {} as ExecutionContext
-    );
+    vi.setSystemTime(new Date(retryMessage.retry!.nextAttemptAt));
+    await handleQueueBatch(createBatch([retryMessage]).batch as never, env, {} as ExecutionContext);
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
 
-    workflowRun = await db
+    const workflowRun = await db
       .prepare(`SELECT id, status FROM workflow_runs ORDER BY id ASC LIMIT 1`)
       .bind()
       .first<{ id: string; status: string }>();
@@ -2178,5 +2501,111 @@ describe("workflow queue consumer", () => {
       .bind("workflow.webhook.enqueued")
       .first<{ count: number }>();
     expect(webhookEvents?.count).toBe(1);
+
+    await handleQueueBatch(createBatch([retryMessage]).batch as never, env, {} as ExecutionContext);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("dead-letters webhook retries after the bounded budget is exhausted", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-06T00:00:00.000Z"));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () =>
+          new Response("upstream unavailable", {
+            status: 503
+          })
+      );
+
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db);
+    insertPermissionSnapshot(db, {
+      commandTypes: ["workflow.webhook.enqueue"]
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "send_webhook",
+          input: {
+            body: {
+              event: "record.updated"
+            },
+            destination: "https://example.test/hooks/cloudtable"
+          }
+        }
+      ]
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_webhook_retry_budget_1",
+            idempotencyKey: "idem_trigger_webhook_retry_budget_1",
+            payload: {
+              fieldType: "text.single_line",
+              value: "crm"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    let pendingMessage = workflowStepQueue.sent[0]!;
+    for (let attempt = 1; attempt <= 8; attempt += 1) {
+      if (pendingMessage.retry) {
+        vi.setSystemTime(new Date(pendingMessage.retry.nextAttemptAt));
+      }
+      await handleQueueBatch(createBatch([pendingMessage]).batch as never, env, {} as ExecutionContext);
+      pendingMessage = workflowStepQueue.sent.at(-1)!;
+    }
+
+    const workflowRun = await db
+      .prepare(`SELECT status, dead_lettered_at FROM workflow_runs ORDER BY id ASC LIMIT 1`)
+      .bind()
+      .first<{ dead_lettered_at: string | null; status: string }>();
+    expect(workflowRun).toMatchObject({
+      dead_lettered_at: expect.any(String),
+      status: "dead_lettered"
+    });
+
+    const workflowStep = await db
+      .prepare(`SELECT status, last_error_code FROM workflow_run_steps ORDER BY id ASC LIMIT 1`)
+      .bind()
+      .first<{ last_error_code: string | null; status: string }>();
+    expect(workflowStep).toMatchObject({
+      last_error_code: "workflow_webhook_http_503",
+      status: "dead_lettered"
+    });
+
+    const deadLetter = await db
+      .prepare(`SELECT queue_name, attempt_count FROM workflow_dead_letters ORDER BY id ASC LIMIT 1`)
+      .bind()
+      .first<{ attempt_count: number; queue_name: string }>();
+    expect(deadLetter).toMatchObject({
+      attempt_count: 8,
+      queue_name: "workflow-step"
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(8);
+    vi.useRealTimers();
   });
 });

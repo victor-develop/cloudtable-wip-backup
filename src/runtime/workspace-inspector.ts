@@ -1,10 +1,14 @@
-import type { WorkspaceInspection, WorkspaceInspector } from "../core/agent-tools/types";
+import { serializeAgentToolManifest } from "../core/agent-tools/manifest";
+import type { AgentToolRegistry, WorkspaceInspection, WorkspaceInspector } from "../core/agent-tools/types";
+import { serializeFieldTypeManifest } from "../core/field-types/manifest";
 import type { FieldTypeRegistry } from "../core/field-types/types";
+import { serializeWorkflowOperatorManifest } from "../core/workflows/manifest";
 import type { WorkflowOperatorRegistry } from "../core/workflows/types";
 
 type AppRow = {
   app_id: string;
   app_name: string;
+  app_slug: string;
   created_at: string;
 };
 
@@ -17,6 +21,7 @@ type TableRow = {
 
 type FieldRow = {
   field_id: string;
+  field_order?: number | null;
   table_id: string;
   created_at: string;
 };
@@ -39,7 +44,8 @@ type WorkflowRow = {
 export function createWorkspaceInspector(
   db: D1Database,
   fieldTypeRegistry: FieldTypeRegistry,
-  workflowOperatorRegistry: WorkflowOperatorRegistry
+  workflowOperatorRegistry: WorkflowOperatorRegistry,
+  getAgentToolRegistry: () => AgentToolRegistry
 ): WorkspaceInspector {
   return {
     async inspect(input) {
@@ -66,17 +72,15 @@ export function createWorkspaceInspector(
           ? apps.map((app) => ({
               appId: app.app_id,
               name: app.app_name,
+              slug: app.app_slug,
               tableIds: tableIdsByAppId.get(app.app_id) ?? []
             }))
           : [],
         catalog: catalogIncluded
           ? {
-              fieldTypes: fieldTypeRegistry.list().map((fieldType) => fieldType.type),
-              workflowOperators: workflowOperatorRegistry.list().map((operator) => ({
-                id: operator.id,
-                kind: operator.kind,
-                requiredCapabilities: operator.requiredCapabilities
-              }))
+              agentTools: getAgentToolRegistry().list().map(serializeAgentToolManifest),
+              fieldTypes: fieldTypeRegistry.list().map(serializeFieldTypeManifest),
+              workflowOperators: workflowOperatorRegistry.list().map(serializeWorkflowOperatorManifest)
             }
           : undefined,
         tables: tablesIncluded
@@ -112,6 +116,7 @@ async function loadApps(db: D1Database, workspaceId: string): Promise<AppRow[]> 
   const rows = await db
     .prepare(
       `SELECT id AS app_id, name AS app_name, created_at
+             , slug AS app_slug
        FROM apps
        WHERE workspace_id = ? AND archived_at IS NULL
        ORDER BY created_at ASC, id ASC`
@@ -142,10 +147,15 @@ async function loadFieldIdsByTable(
 ): Promise<Map<string, string[]>> {
   const rows = await db
     .prepare(
-      `SELECT id AS field_id, table_id, created_at
+      `SELECT id AS field_id, table_id, created_at, field_order
        FROM fields
        WHERE workspace_id = ? AND archived_at IS NULL
-       ORDER BY created_at ASC, id ASC`
+       ORDER BY
+         CASE WHEN field_order IS NULL THEN 0 ELSE 1 END ASC,
+         CASE WHEN field_order IS NULL THEN created_at ELSE NULL END ASC,
+         CASE WHEN field_order IS NULL THEN id ELSE NULL END ASC,
+         field_order ASC,
+         id ASC`
     )
     .bind(workspaceId)
     .all<FieldRow>();

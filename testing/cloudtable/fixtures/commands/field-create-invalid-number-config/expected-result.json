@@ -1,0 +1,8 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:number.decimal:Field configuration precision must be a non-negative integer.",
+    "invalid_field_config:number.decimal:Field configuration display must be one of: plain, currency, percent."
+  ],
+  "status": "rejected"
+}

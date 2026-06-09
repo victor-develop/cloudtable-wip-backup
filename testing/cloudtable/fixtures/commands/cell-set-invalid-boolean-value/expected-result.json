@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "Expected boolean.checkbox value to be a boolean or null."
+  ],
+  "status": "rejected"
+}

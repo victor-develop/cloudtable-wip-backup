@@ -1,0 +1,19 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_workflow_manual_001",
+  "commandType": "workflow.manual",
+  "idempotencyKey": "idem_workflow_manual_001",
+  "payload": {
+    "input": {
+      "recordId": "rec_001",
+      "source": "button"
+    },
+    "manualInvocationId": "manual_run_001",
+    "workflowId": "wf_pipeline"
+  },
+  "scope": "workflow",
+  "workspaceId": "ws_demo"
+}

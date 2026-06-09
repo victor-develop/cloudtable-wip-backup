@@ -1,0 +1,19 @@
+{
+  "persistence": {
+    "appId": "app_ops",
+    "fields": [
+      {
+        "fieldId": "fld_done",
+        "fieldKey": "done",
+        "fieldType": "boolean.checkbox",
+        "label": "Done"
+      }
+    ],
+    "records": [
+      {
+        "recordId": "rec_001",
+        "recordKey": "record-1"
+      }
+    ]
+  }
+}

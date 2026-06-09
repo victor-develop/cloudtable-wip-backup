@@ -8,9 +8,12 @@ export type JsonValue =
 
 export type JsonSchema = {
   type: string;
+  additionalProperties?: boolean;
   description?: string;
+  enum?: readonly JsonValue[];
   items?: JsonSchema;
   properties?: Record<string, JsonSchema>;
+  required?: readonly string[];
   default?: JsonValue;
 };
 
@@ -138,6 +141,32 @@ export type FieldTypeFixture =
     }
   | {
       id: string;
+      kind: "invalid_config";
+      config: unknown;
+      expectedErrors: readonly string[];
+    }
+  | {
+      id: string;
+      kind: "invalid_value";
+      fieldConfig?: JsonValue;
+    } & (
+      | {
+          input: unknown;
+          expected: {
+            value: NormalizedCellValue | null;
+            warnings?: readonly NormalizeWarning[];
+            errors: readonly string[];
+          };
+        }
+      | {
+          value: NormalizedCellValue | null;
+          expected: {
+            errors: readonly string[];
+          };
+        }
+    )
+  | {
+      id: string;
       kind: "operators";
       expectedConditionOperators: readonly string[];
       expectedSortModes: readonly string[];
@@ -168,6 +197,18 @@ export type FieldTypeDefinition = {
   getSupportedSortModes(context: SortContext): readonly string[];
   getPermissionBehavior(context: PermissionContext): FieldPermissionBehavior;
   fixtures: readonly FieldTypeFixture[];
+};
+
+export type FieldTypeManifest = {
+  type: string;
+  version: number;
+  capabilities: FieldTypeCapabilities;
+  configSchema: JsonSchema;
+  valueSchema: JsonSchema;
+  defaultConfig: JsonValue;
+  supportedConditionOperators: readonly string[];
+  supportedSortModes: readonly string[];
+  permissionBehavior: FieldPermissionBehavior;
 };
 
 export type FieldTypeRegistry = {

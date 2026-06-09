@@ -1,0 +1,8 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:relation.record:Field configuration targetTableId must be a non-empty string.",
+    "invalid_field_config:relation.record:Field configuration allowMultiple must be a boolean."
+  ],
+  "status": "rejected"
+}

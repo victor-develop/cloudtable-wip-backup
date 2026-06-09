@@ -1,0 +1,18 @@
+{
+  "actor": {
+    "mode": "workflow",
+    "principalId": "wf_pipeline"
+  },
+  "commandId": "cmd_workflow_job_enqueue_invalid_001",
+  "commandType": "job.enqueue",
+  "idempotencyKey": "idem_workflow_job_enqueue_invalid_001",
+  "payload": {
+    "args": [],
+    "triggerEventId": "evt_record_updated_001",
+    "workflowId": "wf_pipeline",
+    "workflowRunId": "wfr_001",
+    "workflowStepId": "step_enqueue_internal_job_001"
+  },
+  "scope": "workflow",
+  "workspaceId": "ws_demo"
+}

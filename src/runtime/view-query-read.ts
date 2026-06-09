@@ -48,6 +48,7 @@ type ParsedViewSchema = {
   filterFieldIds: string[];
   filters: ViewFilterDefinition[];
   groupByFieldId: string | null;
+  showEmptyGroups: boolean;
   sortFieldIds: string[];
   sorts: ViewSortDefinition[];
   visibleFieldIds: string[];
@@ -96,6 +97,25 @@ export type ReadViewQueryResult = {
   groups?: ViewQueryGroupResult[];
   rows: ViewQueryRowResult[];
   view: {
+    actions?: {
+      createRecord: {
+        allowed: boolean;
+        constrainedFieldIds: string[];
+        defaultCells: Record<string, JsonValue>;
+        fieldId: string | null;
+        fieldType: string | null;
+        reasons: string[];
+        requiresGroupValue: boolean;
+        status: "writable" | "read_only" | "hidden" | "denied";
+      };
+      groupMove: {
+        allowed: boolean;
+        fieldId: string | null;
+        fieldType: string | null;
+        reasons: string[];
+        status: "writable" | "read_only" | "hidden" | "denied";
+      };
+    };
     allowed: boolean;
     blockedFieldIds: string[];
     consistencyModel: "view_eventual";
@@ -116,8 +136,14 @@ export type ReadViewQueryResult = {
 export type ViewQueryGroupResult = {
   bucketKey: string;
   groupLabel: string;
+  groupValue?: JsonValue;
   rowCount: number;
   rows: ViewQueryRowResult[];
+};
+
+type ConfiguredGroupBucket = {
+  bucketKey: string;
+  groupLabel: string;
 };
 
 type ViewRecordQuery = {
@@ -129,6 +155,7 @@ type MaterializedViewRow = {
   filterInputs: PermissionProjectionInput[];
   groupBucketKey: string;
   groupLabel: string;
+  groupValue: JsonValue;
   indexedValues: Map<string, IndexedFieldValue>;
   recordId: string;
   recordKey: string;
@@ -196,6 +223,7 @@ function parseViewSchema(raw: string): ParsedViewSchema {
             operatorId: "is_not_empty"
           })),
     groupByFieldId: typeof parsed.groupByFieldId === "string" ? parsed.groupByFieldId : null,
+    showEmptyGroups: parsed.showEmptyGroups === true,
     sortFieldIds,
     sorts:
       sorts.length > 0
@@ -206,6 +234,38 @@ function parseViewSchema(raw: string): ParsedViewSchema {
           })),
     visibleFieldIds: asFieldIdArray("visibleFieldIds")
   };
+}
+
+function listConfiguredGroupBuckets(field: FieldRow | null): ConfiguredGroupBucket[] {
+  if (
+    field == null ||
+    (field.field_type !== "select.single" && field.field_type !== "status.semantic")
+  ) {
+    return [];
+  }
+
+  const parsedConfig = JSON.parse(field.config_json) as Record<string, unknown>;
+  if (!Array.isArray(parsedConfig.options)) {
+    return [];
+  }
+
+  return parsedConfig.options.flatMap((entry) => {
+    if (
+      typeof entry !== "object" ||
+      entry == null ||
+      Array.isArray(entry) ||
+      typeof entry.id !== "string"
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        bucketKey: JSON.stringify(entry.id),
+        groupLabel: typeof entry.label === "string" ? entry.label : entry.id
+      }
+    ];
+  });
 }
 
 function buildViewRecordQuery(input: ReadViewQueryInput, schema: ParsedViewSchema): ViewRecordQuery {
@@ -571,6 +631,201 @@ function buildFilterMetadata(
   });
 }
 
+function buildGroupMoveAffordance(
+  groupField: FieldRow | null,
+  schema: ParsedViewSchema,
+  viewPlanner: ViewPlanner,
+  snapshot: EffectivePermissionSnapshot | undefined
+): NonNullable<ReadViewQueryResult["view"]["actions"]>["groupMove"] {
+  if (!schema.groupByFieldId || !groupField) {
+    return {
+      allowed: false,
+      fieldId: schema.groupByFieldId ?? null,
+      fieldType: groupField?.field_type ?? null,
+      reasons: ["view_group_move_unavailable"],
+      status: "denied"
+    };
+  }
+
+  const fieldConfig = JSON.parse(groupField.config_json);
+  const readState = snapshot?.fields[groupField.id]?.read ?? "visible";
+  if (readState !== "visible") {
+    return {
+      allowed: false,
+      fieldId: groupField.id,
+      fieldType: groupField.field_type,
+      reasons: [`view_group_field_${readState}:${groupField.id}`],
+      status: "hidden"
+    };
+  }
+
+  const plan = viewPlanner.planQuery(
+    [
+      {
+        fieldConfig,
+        fieldId: groupField.id,
+        fieldType: groupField.field_type
+      }
+    ],
+    [
+      {
+        fieldConfig,
+        fieldId: groupField.id,
+        fieldType: groupField.field_type,
+        kind: "group"
+      }
+    ],
+    snapshot
+  );
+  if (!plan.allowed) {
+    return {
+      allowed: false,
+      fieldId: groupField.id,
+      fieldType: groupField.field_type,
+      reasons: plan.diagnostics,
+      status: "denied"
+    };
+  }
+
+  const writeAllowed = snapshot?.fields[groupField.id]?.write ?? true;
+  if (!writeAllowed) {
+    return {
+      allowed: false,
+      fieldId: groupField.id,
+      fieldType: groupField.field_type,
+      reasons: [`field_read_only:${groupField.id}`],
+      status: "read_only"
+    };
+  }
+
+  return {
+    allowed: true,
+    fieldId: groupField.id,
+    fieldType: groupField.field_type,
+    reasons: [],
+    status: "writable"
+  };
+}
+
+function buildCreateRecordAffordance(
+  fieldIndex: ReadonlyMap<string, FieldRow>,
+  schema: ParsedViewSchema,
+  viewPlanner: ViewPlanner,
+  snapshot: EffectivePermissionSnapshot | undefined
+): NonNullable<ReadViewQueryResult["view"]["actions"]>["createRecord"] {
+  const reasons = new Set<string>();
+  const defaultCells = new Map<string, JsonValue>();
+  const constrainedFieldIds = new Set<string>();
+  let status: "writable" | "read_only" | "hidden" | "denied" = "writable";
+  const groupField = schema.groupByFieldId ? fieldIndex.get(schema.groupByFieldId) ?? null : null;
+
+  const tightenStatus = (next: typeof status) => {
+    const rank = {
+      writable: 0,
+      denied: 1,
+      read_only: 2,
+      hidden: 3
+    } as const;
+    if (rank[next] > rank[status]) {
+      status = next;
+    }
+  };
+
+  const registerFieldAccess = (field: FieldRow, kind: "filter" | "group") => {
+    const readState = snapshot?.fields[field.id]?.read ?? "visible";
+    if (readState !== "visible") {
+      reasons.add(`view_create_${kind}_field_${readState}:${field.id}`);
+      tightenStatus("hidden");
+      return;
+    }
+
+    const fieldConfig = JSON.parse(field.config_json);
+    const plan = viewPlanner.planQuery(
+      [
+        {
+          fieldConfig,
+          fieldId: field.id,
+          fieldType: field.field_type
+        }
+      ],
+      [
+        {
+          fieldConfig,
+          fieldId: field.id,
+          fieldType: field.field_type,
+          kind
+        }
+      ],
+      snapshot
+    );
+    if (!plan.allowed) {
+      for (const diagnostic of plan.diagnostics) {
+        reasons.add(diagnostic);
+      }
+      tightenStatus("denied");
+      return;
+    }
+
+    const writeAllowed = snapshot?.fields[field.id]?.write ?? true;
+    if (!writeAllowed) {
+      reasons.add(`field_read_only:${field.id}`);
+      tightenStatus("read_only");
+    }
+  };
+
+  const registerDefault = (fieldId: string, value: JsonValue, reason: string) => {
+    constrainedFieldIds.add(fieldId);
+    if (!defaultCells.has(fieldId)) {
+      defaultCells.set(fieldId, value);
+      return;
+    }
+
+    if (JSON.stringify(defaultCells.get(fieldId)) !== JSON.stringify(value)) {
+      reasons.add(reason);
+      tightenStatus("denied");
+    }
+  };
+
+  for (const filter of schema.filters) {
+    const field = fieldIndex.get(filter.fieldId);
+    if (!field) {
+      reasons.add(`view_unknown_field:${filter.fieldId}`);
+      tightenStatus("denied");
+      continue;
+    }
+
+    registerFieldAccess(field, "filter");
+    switch (filter.operatorId) {
+      case "equals":
+        registerDefault(field.id, (filter.value ?? null) as JsonValue, `view_create_filter_conflict:${field.id}`);
+        break;
+      case "is_empty":
+        registerDefault(field.id, null, `view_create_filter_conflict:${field.id}`);
+        break;
+      default:
+        reasons.add(`view_create_filter_operator_unsupported:${field.id}:${filter.operatorId}`);
+        tightenStatus("denied");
+        break;
+    }
+  }
+
+  if (groupField) {
+    constrainedFieldIds.add(groupField.id);
+    registerFieldAccess(groupField, "group");
+  }
+
+  return {
+    allowed: status === "writable",
+    constrainedFieldIds: Array.from(constrainedFieldIds),
+    defaultCells: Object.fromEntries(defaultCells),
+    fieldId: groupField?.id ?? null,
+    fieldType: groupField?.field_type ?? null,
+    reasons: Array.from(reasons),
+    requiresGroupValue: groupField != null,
+    status
+  };
+}
+
 export async function readViewQuery(
   db: D1Database,
   fieldTypeRegistry: FieldTypeRegistry,
@@ -619,7 +874,12 @@ export async function readViewQuery(
              , config_json
        FROM fields
        WHERE workspace_id = ? AND table_id = ? AND archived_at IS NULL
-       ORDER BY field_key ASC, id ASC`
+       ORDER BY
+         CASE WHEN field_order IS NULL THEN 0 ELSE 1 END ASC,
+         CASE WHEN field_order IS NULL THEN created_at ELSE NULL END ASC,
+         CASE WHEN field_order IS NULL THEN id ELSE NULL END ASC,
+         field_order ASC,
+         id ASC`
     )
     .bind(input.workspaceId, input.tableId)
     .all<FieldRow>();
@@ -718,6 +978,10 @@ export async function readViewQuery(
     fieldType: field.field_type,
     label: field.label
   }));
+  const groupField =
+    schema.groupByFieldId != null ? fieldIndex.get(schema.groupByFieldId) ?? null : null;
+  const createRecord = buildCreateRecordAffordance(fieldIndex, schema, viewPlanner, snapshot);
+  const groupMove = buildGroupMoveAffordance(groupField, schema, viewPlanner, snapshot);
   const blockedFieldIds = Array.from(
     new Set([...executionPlan.blockedFieldIds, ...Array.from(filterBlockedFieldIds)])
   );
@@ -730,6 +994,10 @@ export async function readViewQuery(
       fields,
       rows: [],
       view: {
+        actions: {
+          createRecord,
+          groupMove: buildGroupMoveAffordance(groupField, schema, viewPlanner, snapshot)
+        },
         allowed: false,
         blockedFieldIds,
         consistencyModel: "view_eventual",
@@ -797,7 +1065,6 @@ export async function readViewQuery(
           .filter((fieldId): fieldId is string => fieldId !== null)
       : filterConstraints.map((constraint) => constraint.fieldId)
   );
-
   const materializedRows = (recordRows.results ?? []).map((row) => {
     const projection = JSON.parse(row.projection_json) as {
       fields?: Record<string, unknown>;
@@ -832,8 +1099,6 @@ export async function readViewQuery(
           projection.fields?.[field.field_key] ?? null
         ) ?? null
     }));
-    const groupField =
-      schema.groupByFieldId != null ? fieldIndex.get(schema.groupByFieldId) ?? null : null;
     const groupFieldValue =
       groupField != null ? projection.fields?.[groupField.field_key] ?? null : null;
     const groupFieldDefinition =
@@ -857,6 +1122,7 @@ export async function readViewQuery(
       filterInputs,
       groupBucketKey: groupIndexValue?.valueHash ?? "null",
       groupLabel: groupIndexValue?.displayValue ?? "",
+      groupValue: (groupNormalized?.raw ?? null) as JsonValue,
       indexedValues: recordIndexValues,
       recordId: row.record_id,
       recordKey: row.record_key,
@@ -897,6 +1163,10 @@ export async function readViewQuery(
       fields,
       rows,
       view: {
+        actions: {
+          createRecord,
+          groupMove
+        },
         allowed: true,
         blockedFieldIds: [],
         consistencyModel: "view_eventual",
@@ -961,6 +1231,7 @@ export async function readViewQuery(
       groups.push({
         bucketKey: row.groupBucketKey,
         groupLabel: row.groupLabel,
+        groupValue: row.groupValue,
         rowCount: 1,
         rows: [row.row]
       });
@@ -971,11 +1242,45 @@ export async function readViewQuery(
     currentGroup.rowCount += 1;
   }
 
+  const configuredGroups =
+    schema.showEmptyGroups && groupField != null ? listConfiguredGroupBuckets(groupField) : [];
+  const mergedGroups =
+    configuredGroups.length === 0
+      ? groups
+      : (() => {
+          const remaining = new Map(groups.map((group) => [group.bucketKey, group]));
+          const ordered: ViewQueryGroupResult[] = [];
+
+          for (const configuredGroup of configuredGroups) {
+            ordered.push(
+              remaining.get(configuredGroup.bucketKey) ?? {
+                bucketKey: configuredGroup.bucketKey,
+                groupLabel: configuredGroup.groupLabel,
+                rowCount: 0,
+                rows: []
+              }
+            );
+            remaining.delete(configuredGroup.bucketKey);
+          }
+
+          for (const group of groups) {
+            if (remaining.has(group.bucketKey)) {
+              ordered.push(group);
+            }
+          }
+
+          return ordered;
+        })();
+
   return {
     fields,
-    groups,
+    groups: mergedGroups,
     rows: [],
     view: {
+      actions: {
+        createRecord,
+        groupMove
+      },
       allowed: true,
       blockedFieldIds: [],
       consistencyModel: "view_eventual",

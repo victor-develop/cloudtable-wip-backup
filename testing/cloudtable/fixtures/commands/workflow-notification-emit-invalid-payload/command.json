@@ -1,0 +1,19 @@
+{
+  "actor": {
+    "mode": "workflow",
+    "principalId": "wf_pipeline"
+  },
+  "commandId": "cmd_workflow_notification_emit_invalid_001",
+  "commandType": "notification.emit",
+  "idempotencyKey": "idem_workflow_notification_emit_invalid_001",
+  "payload": {
+    "channel": "",
+    "details": [],
+    "triggerEventId": "evt_record_updated_001",
+    "workflowId": "wf_pipeline",
+    "workflowRunId": "wfr_001",
+    "workflowStepId": "step_emit_notification_event_001"
+  },
+  "scope": "workflow",
+  "workspaceId": "ws_demo"
+}

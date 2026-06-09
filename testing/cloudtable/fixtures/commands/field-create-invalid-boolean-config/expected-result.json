@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:boolean.checkbox:Field configuration contains unsupported property: unexpected."
+  ],
+  "status": "rejected"
+}

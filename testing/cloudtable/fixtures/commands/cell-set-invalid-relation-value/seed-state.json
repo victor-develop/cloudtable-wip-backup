@@ -1,0 +1,23 @@
+{
+  "persistence": {
+    "appId": "app_ops",
+    "fields": [
+      {
+        "config": {
+          "allowMultiple": false,
+          "targetTableId": "tbl_related"
+        },
+        "fieldId": "fld_related_task",
+        "fieldKey": "relatedTask",
+        "fieldType": "relation.record",
+        "label": "Related Task"
+      }
+    ],
+    "records": [
+      {
+        "recordId": "rec_001",
+        "recordKey": "record-1"
+      }
+    ]
+  }
+}

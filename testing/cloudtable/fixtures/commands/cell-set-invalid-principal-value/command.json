@@ -1,0 +1,20 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_alice"
+  },
+  "commandId": "cmd_cell_set_invalid_principal_001",
+  "commandType": "cell.set",
+  "idempotencyKey": "idem_cell_set_invalid_principal_001",
+  "payload": {
+    "fieldId": "fld_assignee",
+    "recordId": "rec_001",
+    "value": [
+      "user_1",
+      "user_1"
+    ]
+  },
+  "scope": "table",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "Unknown option id for select.multi: missing."
+  ],
+  "status": "rejected"
+}
