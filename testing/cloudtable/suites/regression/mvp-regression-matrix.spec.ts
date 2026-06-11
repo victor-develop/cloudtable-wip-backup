@@ -4217,7 +4217,53 @@ describe("cloudtable MVP regression matrix", () => {
         },
         tableSchemaInspector: {
           read() {
-            return null;
+            return {
+              appId: "app_matrix",
+              fields: [
+                {
+                  config: {},
+                  fieldId: "title",
+                  fieldKey: "title",
+                  fieldType: "text.single_line",
+                  fieldTypeVersion: 1,
+                  label: "Title"
+                }
+              ],
+              schemaEpoch: snapshot.schemaEpoch,
+              tableId: "tbl_tasks",
+              tableName: "Tasks",
+              tableSchemaVersion: 1,
+              tableSlug: "tasks",
+              workflow: {
+                bindings: {
+                  "row.fields.title": {
+                    binding: "row.fields.title",
+                    fieldId: "title",
+                    fieldKey: "title",
+                    fieldType: "text.single_line",
+                    proposalHints: [
+                      {
+                        operatorId: "is_empty",
+                        matchFieldPhrases: ["without {field}", "{field} missing"],
+                        matchPhrases: ["missing", "empty", "blank", "not set", "unset"]
+                      },
+                      {
+                        operatorId: "is_not_empty",
+                        matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+                      }
+                    ],
+                    supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+                    supportedOperators: [],
+                    template: {
+                      fieldIdPath: "row.fields.title.fieldId",
+                      fieldTypePath: "row.fields.title.fieldType",
+                      valuePath: "row.fields.title.value"
+                    }
+                  }
+                }
+              },
+              workspaceId: "ws_demo"
+            };
           }
         },
         viewDefinitionInspector: {
@@ -4435,6 +4481,28 @@ describe("cloudtable MVP regression matrix", () => {
         },
         toolId: "readAppActivityHistory"
       });
+      const workflowProposalDraft = await agentToolRegistry.invoke({
+        input: {
+          actionIds: ["update_record"],
+          actor: {
+            mode: "agent",
+            principalId: "usr_alice"
+          },
+          businessRule: "Notify sales ops when the title is set.",
+          commandId: "cmd_agent_workflow_001",
+          fieldIds: ["title"],
+          idempotencyKey: "idem_agent_workflow_001",
+          name: "Title set follow-up",
+          permissionScopeHash: snapshot.scopeHash,
+          permissionsVersion: snapshot.policyRevision,
+          schemaEpoch: snapshot.schemaEpoch,
+          tableId: "tbl_tasks",
+          triggerId: "field_changed",
+          workflowId: "wf_title_set",
+          workspaceId: "ws_demo"
+        },
+        toolId: "proposeWorkflow"
+      });
 
       matrix.push({
         actual: {
@@ -4509,6 +4577,7 @@ describe("cloudtable MVP regression matrix", () => {
           updateFieldDraft,
           updateRecordDraft,
           updateCellDraft,
+          workflowProposalDraft,
           workspaceActivity,
           workflowHistory,
           workflowRunDetail

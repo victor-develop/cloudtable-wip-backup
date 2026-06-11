@@ -6906,6 +6906,236 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
         },
         "kind": "workflow-history"
       },
+      "workflowProposalDraft": {
+        "command": {
+          "actor": {
+            "mode": "agent",
+            "principalId": "usr_alice"
+          },
+          "commandId": "cmd_agent_workflow_001",
+          "commandType": "workflow.create",
+          "idempotencyKey": "idem_agent_workflow_001",
+          "payload": {
+            "definition": {
+              "actions": [
+                {
+                  "input": {},
+                  "operatorId": "update_record"
+                }
+              ],
+              "conditions": [
+                {
+                  "input": {
+                    "fieldId": {
+                      "path": "row.fields.title.fieldId"
+                    },
+                    "fieldType": {
+                      "path": "row.fields.title.fieldType"
+                    },
+                    "value": {
+                      "path": "row.fields.title.value"
+                    }
+                  },
+                  "operatorId": "is_not_empty"
+                }
+              ],
+              "metadata": {
+                "businessRule": "Notify sales ops when the title is set.",
+                "name": "Title set follow-up",
+                "status": "draft",
+                "tableId": "tbl_tasks"
+              },
+              "principal": {
+                "policyRevision": 7,
+                "principalId": "usr_alice",
+                "schemaEpoch": 3,
+                "scopeHash": "scope:table:tbl_tasks"
+              },
+              "trigger": {
+                "match": {
+                  "fieldIds": [
+                    "title"
+                  ],
+                  "tableId": "tbl_tasks"
+                },
+                "operatorId": "field_changed"
+              },
+              "workflowId": "wf_title_set"
+            },
+            "name": "Title set follow-up",
+            "tableId": "tbl_tasks",
+            "workflowId": "wf_title_set",
+            "workflowKey": "title-set"
+          },
+          "permissionScopeHash": "scope:table:tbl_tasks",
+          "permissionsVersion": 7,
+          "schemaEpoch": 3,
+          "scope": "workflow",
+          "tableId": "tbl_tasks",
+          "workspaceId": "ws_demo"
+        },
+        "diagnostics": [],
+        "diffs": [
+          {
+            "action": "propose",
+            "after": {
+              "actions": [
+                {
+                  "commandScope": "table",
+                  "commandType": "record.update",
+                  "fixtureContract": [
+                    {
+                      "id": "update_record.action.sample",
+                      "kind": "action"
+                    }
+                  ],
+                  "id": "update_record",
+                  "idempotencyMode": "command_idempotency_key",
+                  "inputSchema": {
+                    "description": "Inputs for update_record.",
+                    "type": "object"
+                  },
+                  "kind": "action",
+                  "outputSchema": {
+                    "description": "Command result emitted through the normal command bus.",
+                    "type": "object"
+                  },
+                  "purity": "impure",
+                  "requiredCapabilities": [
+                    "records.write"
+                  ],
+                  "retryClass": "standard",
+                  "timeoutClass": "standard",
+                  "version": 1
+                }
+              ],
+              "businessRule": "Notify sales ops when the title is set.",
+              "conditions": [
+                {
+                  "input": {
+                    "fieldId": {
+                      "path": "row.fields.title.fieldId"
+                    },
+                    "fieldType": {
+                      "path": "row.fields.title.fieldType"
+                    },
+                    "value": {
+                      "path": "row.fields.title.value"
+                    }
+                  },
+                  "operatorId": "is_not_empty"
+                }
+              ],
+              "name": "Title set follow-up",
+              "tableId": "tbl_tasks",
+              "trigger": {
+                "fixtureContract": [],
+                "id": "field_changed",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Workflow trigger input envelope.",
+                  "type": "object"
+                },
+                "kind": "trigger",
+                "outputSchema": {
+                  "description": "Normalized workflow trigger context.",
+                  "type": "object"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "workflows.execute"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "triggerEventTypes": [
+                  "cell.set"
+                ],
+                "version": 1
+              },
+              "workflowId": "wf_title_set"
+            },
+            "note": "Uses 1 workflow action operator(s).",
+            "path": "/workflows/wf_title_set"
+          }
+        ],
+        "kind": "workflow-proposal",
+        "proposal": {
+          "actions": [
+            {
+              "commandScope": "table",
+              "commandType": "record.update",
+              "fixtureContract": [
+                {
+                  "id": "update_record.action.sample",
+                  "kind": "action"
+                }
+              ],
+              "id": "update_record",
+              "idempotencyMode": "command_idempotency_key",
+              "inputSchema": {
+                "description": "Inputs for update_record.",
+                "type": "object"
+              },
+              "kind": "action",
+              "outputSchema": {
+                "description": "Command result emitted through the normal command bus.",
+                "type": "object"
+              },
+              "purity": "impure",
+              "requiredCapabilities": [
+                "records.write"
+              ],
+              "retryClass": "standard",
+              "timeoutClass": "standard",
+              "version": 1
+            }
+          ],
+          "businessRule": "Notify sales ops when the title is set.",
+          "conditions": [
+            {
+              "input": {
+                "fieldId": {
+                  "path": "row.fields.title.fieldId"
+                },
+                "fieldType": {
+                  "path": "row.fields.title.fieldType"
+                },
+                "value": {
+                  "path": "row.fields.title.value"
+                }
+              },
+              "operatorId": "is_not_empty"
+            }
+          ],
+          "name": "Title set follow-up",
+          "tableId": "tbl_tasks",
+          "trigger": {
+            "fixtureContract": [],
+            "id": "field_changed",
+            "idempotencyMode": "deterministic",
+            "inputSchema": {
+              "description": "Workflow trigger input envelope.",
+              "type": "object"
+            },
+            "kind": "trigger",
+            "outputSchema": {
+              "description": "Normalized workflow trigger context.",
+              "type": "object"
+            },
+            "purity": "pure",
+            "requiredCapabilities": [
+              "workflows.execute"
+            ],
+            "retryClass": "none",
+            "timeoutClass": "fast",
+            "triggerEventTypes": [
+              "cell.set"
+            ],
+            "version": 1
+          },
+          "workflowId": "wf_title_set"
+        }
+      },
       "workflowRunDetail": {
         "kind": "workflow-run-detail",
         "run": {
