@@ -12380,47 +12380,35 @@ describe("cloudtable runtime ingress", () => {
     expect(workflowDispatchQueue.sent).toEqual([]);
   });
 
-  it("creates a row.owner workflow through the audited agent-tool execute ingress", async () => {
+  it("creates a generic field workflow through the audited agent-tool execute ingress", async () => {
     const { db, env, eventFanoutQueue } = createEnv();
 
     insertField(db, {
       config: {
-        rowOwner: true
+        options: [
+          { id: "open", label: "Open", semantic: "todo" },
+          { id: "qualified", label: "Qualified", semantic: "done" }
+        ]
       },
-      fieldId: "fld_owner",
-      fieldKey: "owner",
-      fieldType: "principal.user",
-      label: "Owner",
-      tableId: "tbl_1"
-    });
-    insertField(db, {
       fieldId: "fld_status",
       fieldKey: "status",
-      fieldType: "text.single_line",
+      fieldType: "status.semantic",
       label: "Status",
       tableId: "tbl_1"
     });
     insertPermissionSnapshot(db, {
-      snapshotId: "snap_owner_workflow_execute",
+      snapshotId: "snap_status_workflow_execute",
       workspaceId: "ws_1",
-      principalId: "agt_owner_workflow_execute",
+      principalId: "agt_status_workflow_execute",
       policyRevision: 48,
       schemaEpoch: 0,
       scopeHash: "scope:table:tbl_1",
       commandTypes: ["workflow.create", "workflow.publish"],
       fields: {
-        fld_owner: {
-          agent: true,
-          fieldId: "fld_owner",
-          fieldType: "principal.user",
-          read: "visible",
-          workflow: true,
-          write: true
-        },
         fld_status: {
           agent: true,
           fieldId: "fld_status",
-          fieldType: "text.single_line",
+          fieldType: "status.semantic",
           read: "visible",
           workflow: true,
           write: true
@@ -12437,16 +12425,16 @@ describe("cloudtable runtime ingress", () => {
         body: JSON.stringify({
           input: {
             actionIds: ["update_record"],
-            businessRule: "Notify sales ops when the owner is assigned.",
-            fieldIds: ["fld_owner"],
-            name: "Owner assigned execute",
+            businessRule: "When status changes to Qualified, notify sales ops.",
+            fieldIds: ["fld_status"],
+            name: "Qualified execute",
             tableId: "tbl_1",
             triggerId: "field_changed",
-            workflowId: "wf_owner_assigned_execute"
+            workflowId: "wf_status_qualified_execute"
           },
           permissionScopeHash: "scope:table:tbl_1",
           policyRevision: 48,
-          principalId: "agt_owner_workflow_execute",
+          principalId: "agt_status_workflow_execute",
           toolId: "proposeWorkflow",
           workspaceId: "ws_1"
         })
@@ -12481,16 +12469,20 @@ describe("cloudtable runtime ingress", () => {
       {
         input: {
           fieldId: {
-            path: "row.owner.fieldId"
+            path: "row.fields.status.fieldId"
           },
           fieldType: {
-            path: "row.owner.fieldType"
+            path: "row.fields.status.fieldType"
           },
           value: {
-            path: "row.owner.value"
-          }
+            path: "row.fields.status.value"
+          },
+          left: {
+            path: "row.fields.status.value"
+          },
+          right: "qualified"
         },
-        operatorId: "is_not_empty"
+        operatorId: "equals"
       }
     ]);
 
@@ -12504,7 +12496,7 @@ describe("cloudtable runtime ingress", () => {
           input: {
             command: previewBody.output.command
           },
-          principalId: "agt_owner_workflow_execute",
+          principalId: "agt_status_workflow_execute",
           toolId: "executeCommand",
           workspaceId: "ws_1"
         })
@@ -12540,7 +12532,7 @@ describe("cloudtable runtime ingress", () => {
     expect(executeBody.output.command).toMatchObject({
       actor: {
         mode: "agent",
-        principalId: "agt_owner_workflow_execute"
+        principalId: "agt_status_workflow_execute"
       },
       commandType: "workflow.create",
       permissionScopeHash: "scope:table:tbl_1",
@@ -12554,22 +12546,26 @@ describe("cloudtable runtime ingress", () => {
           {
             input: {
               fieldId: {
-                path: "row.owner.fieldId"
+                path: "row.fields.status.fieldId"
               },
               fieldType: {
-                path: "row.owner.fieldType"
+                path: "row.fields.status.fieldType"
               },
               value: {
-                path: "row.owner.value"
-              }
+                path: "row.fields.status.value"
+              },
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "qualified"
             },
-            operatorId: "is_not_empty"
+            operatorId: "equals"
           }
         ],
-        workflowId: "wf_owner_assigned_execute"
+        workflowId: "wf_status_qualified_execute"
       },
-      workflowId: "wf_owner_assigned_execute",
-      workflowKey: "owner-assigned-execute"
+      workflowId: "wf_status_qualified_execute",
+      workflowKey: "status-qualified-execute"
     });
     expect(executeBody.output.result).toMatchObject({
       accepted: true,
@@ -12585,7 +12581,7 @@ describe("cloudtable runtime ingress", () => {
 
     const definitionResponse = await handleFetch(
       new Request(
-        "https://example.test/v1/workflows/wf_owner_assigned_execute/definition?workspaceId=ws_1&principalId=agt_owner_workflow_execute&permissionScopeHash=scope:table:tbl_1&policyRevision=48"
+        "https://example.test/v1/workflows/wf_status_qualified_execute/definition?workspaceId=ws_1&principalId=agt_status_workflow_execute&permissionScopeHash=scope:table:tbl_1&policyRevision=48"
       ),
       env,
       {} as ExecutionContext
@@ -12598,37 +12594,41 @@ describe("cloudtable runtime ingress", () => {
           {
             input: {
               fieldId: {
-                path: "row.owner.fieldId"
+                path: "row.fields.status.fieldId"
               },
               fieldType: {
-                path: "row.owner.fieldType"
+                path: "row.fields.status.fieldType"
               },
               value: {
-                path: "row.owner.value"
-              }
+                path: "row.fields.status.value"
+              },
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "qualified"
             },
-            operatorId: "is_not_empty"
+            operatorId: "equals"
           }
         ]
       },
       workflow: {
         bindings: {
-          "row.owner": {
-            binding: "row.owner",
-            fieldId: "fld_owner",
-            fieldKey: "owner",
-            fieldType: "principal.user",
+          "row.fields.status": {
+            binding: "row.fields.status",
+            fieldId: "fld_status",
+            fieldKey: "status",
+            fieldType: "status.semantic",
             template: {
-              fieldIdPath: "row.owner.fieldId",
-              fieldTypePath: "row.owner.fieldType",
-              valuePath: "row.owner.value"
+              fieldIdPath: "row.fields.status.fieldId",
+              fieldTypePath: "row.fields.status.fieldType",
+              valuePath: "row.fields.status.value"
             }
           }
         }
       },
-      workflowId: "wf_owner_assigned_execute",
-      workflowKey: "owner-assigned-execute",
-      workflowName: "Owner assigned execute"
+      workflowId: "wf_status_qualified_execute",
+      workflowKey: "status-qualified-execute",
+      workflowName: "Qualified execute"
     });
   });
 
