@@ -2795,6 +2795,514 @@ describe("cloudtable MVP regression matrix", () => {
     }
 
     {
+      const { db, env } = createRuntimeEnv();
+
+      insertField(db, {
+        config: {
+          rowOwner: true
+        },
+        fieldId: "fld_owner",
+        fieldKey: "owner",
+        fieldType: "principal.user",
+        label: "Owner",
+        tableId: "tbl_1"
+      });
+      insertField(db, {
+        fieldId: "fld_assignee",
+        fieldKey: "assignee",
+        fieldType: "principal.user",
+        label: "Assignee",
+        tableId: "tbl_1"
+      });
+      insertField(db, {
+        config: {
+          options: [
+            { id: "open", label: "Open", semantic: "todo" },
+            { id: "qualified", label: "Qualified", semantic: "done" }
+          ]
+        },
+        fieldId: "fld_status",
+        fieldKey: "status",
+        fieldType: "status.semantic",
+        label: "Status",
+        tableId: "tbl_1"
+      });
+      insertField(db, {
+        fieldId: "fld_title",
+        fieldKey: "title",
+        fieldType: "text.single_line",
+        label: "Title",
+        tableId: "tbl_1"
+      });
+
+      insertRecord(db, {
+        recordId: "rec_owner_matrix_1",
+        recordKey: "owner-matrix-1",
+        tableId: "tbl_1"
+      });
+      insertRecord(db, {
+        recordId: "rec_owner_matrix_2",
+        recordKey: "owner-matrix-2",
+        tableId: "tbl_1"
+      });
+      db.inner
+        .prepare(
+          `INSERT INTO record_projection (
+            workspace_id,
+            table_id,
+            record_id,
+            projection_json,
+            search_document,
+            projection_version,
+            last_event_id,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "ws_1",
+          "tbl_1",
+          "rec_owner_matrix_1",
+          JSON.stringify({
+            fields: {
+              assignee: ["usr_delegate"],
+              owner: ["usr_owner"],
+              status: "open",
+              title: "Owned by owner"
+            }
+          }),
+          "",
+          1,
+          "evt_projection_rec_owner_matrix_1",
+          logicalTime
+        );
+      db.inner
+        .prepare(
+          `INSERT INTO record_projection (
+            workspace_id,
+            table_id,
+            record_id,
+            projection_json,
+            search_document,
+            projection_version,
+            last_event_id,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "ws_1",
+          "tbl_1",
+          "rec_owner_matrix_2",
+          JSON.stringify({
+            fields: {
+              assignee: ["usr_owner"],
+              owner: ["usr_member"],
+              status: "qualified",
+              title: "Owned by member"
+            }
+          }),
+          "",
+          1,
+          "evt_projection_rec_owner_matrix_2",
+          logicalTime
+        );
+      db.inner
+        .prepare(
+          `INSERT INTO field_index_entries (
+            workspace_id,
+            table_id,
+            field_id,
+            record_id,
+            index_value_text,
+            index_value_number,
+            index_value_datetime,
+            index_value_bool,
+            last_event_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "ws_1",
+          "tbl_1",
+          "fld_owner",
+          "rec_owner_matrix_1",
+          "usr_owner",
+          null,
+          null,
+          null,
+          "evt_index_rec_owner_matrix_1_fld_owner"
+        );
+      db.inner
+        .prepare(
+          `INSERT INTO field_index_entries (
+            workspace_id,
+            table_id,
+            field_id,
+            record_id,
+            index_value_text,
+            index_value_number,
+            index_value_datetime,
+            index_value_bool,
+            last_event_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "ws_1",
+          "tbl_1",
+          "fld_owner",
+          "rec_owner_matrix_2",
+          "usr_member",
+          null,
+          null,
+          null,
+          "evt_index_rec_owner_matrix_2_fld_owner"
+        );
+      db.inner
+        .prepare(
+          `INSERT INTO views (
+            id,
+            workspace_id,
+            table_id,
+            view_key,
+            name,
+            current_schema_version,
+            created_at,
+            updated_at,
+            archived_at,
+            last_event_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "view_owner_matrix",
+          "ws_1",
+          "tbl_1",
+          "owner-matrix",
+          "Owner Matrix",
+          1,
+          logicalTime,
+          logicalTime,
+          null,
+          null
+        );
+      db.inner
+        .prepare(
+          `INSERT INTO view_schema_versions (
+            id,
+            workspace_id,
+            view_id,
+            schema_version,
+            schema_json,
+            created_at,
+            created_by_principal_id,
+            last_event_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          "view_owner_matrix:v1",
+          "ws_1",
+          "view_owner_matrix",
+          1,
+          JSON.stringify({
+            filterFieldIds: ["fld_owner"],
+            filters: [
+              {
+                fieldId: "fld_owner",
+                operatorId: "equals",
+                value: "usr_owner"
+              }
+            ],
+            groupByFieldId: null,
+            showEmptyGroups: false,
+            sortFieldIds: ["fld_title"],
+            sorts: [
+              {
+                fieldId: "fld_title",
+                mode: "ascending"
+              }
+            ],
+            visibleFieldIds: ["fld_title", "fld_owner", "fld_status"]
+          }),
+          logicalTime,
+          "usr_owner",
+          null
+        );
+      insertRuntimeWorkflowDefinition(db, {
+        conditions: [
+          {
+            operatorId: "is_not_empty",
+            input: {
+              fieldId: {
+                path: "row.owner.fieldId"
+              },
+              fieldType: {
+                path: "row.owner.fieldType"
+              },
+              value: {
+                path: "row.owner.value"
+              }
+            }
+          },
+          {
+            operatorId: "equals",
+            input: {
+              fieldId: {
+                path: "row.fields.status.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.status.fieldType"
+              },
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "open"
+            }
+          }
+        ],
+        metadata: {
+          status: "paused"
+        },
+        trigger: {
+          operatorId: "manual",
+          match: {
+            tableId: "tbl_1"
+          }
+        },
+        workflowId: "wf_owner_matrix",
+        workflowKey: "owner-matrix",
+        workflowName: "Owner Matrix"
+      });
+      insertRuntimePermissionSnapshot(db, {
+        commandTypes: ["workflow.publish"],
+        fields: {
+          fld_assignee: {
+            agent: true,
+            fieldId: "fld_assignee",
+            fieldType: "principal.user",
+            read: "visible",
+            workflow: true,
+            write: true
+          },
+          fld_owner: {
+            agent: true,
+            fieldId: "fld_owner",
+            fieldType: "principal.user",
+            read: "visible",
+            workflow: true,
+            write: true
+          },
+          fld_status: {
+            agent: true,
+            fieldId: "fld_status",
+            fieldType: "status.semantic",
+            read: "visible",
+            workflow: true,
+            write: true
+          },
+          fld_title: {
+            agent: true,
+            fieldId: "fld_title",
+            fieldType: "text.single_line",
+            read: "visible",
+            workflow: true,
+            write: true
+          }
+        },
+        policyRevision: 44,
+        principalId: "usr_owner_matrix",
+        scopeHash: "scope:table:tbl_1",
+        snapshotId: "snap_owner_matrix_table"
+      });
+      insertRuntimePermissionSnapshot(db, {
+        commandTypes: ["workflow.publish"],
+        fields: {},
+        policyRevision: 45,
+        principalId: "ops_owner_matrix",
+        scopeHash: "scope:workspace",
+        snapshotId: "snap_owner_matrix_workspace"
+      });
+      insertRuntimePermissionSnapshot(db, {
+        fields: {
+          fld_owner: {
+            agent: true,
+            fieldId: "fld_owner",
+            fieldType: "principal.user",
+            read: "visible",
+            workflow: true,
+            write: true
+          },
+          fld_status: {
+            agent: true,
+            fieldId: "fld_status",
+            fieldType: "status.semantic",
+            read: "visible",
+            workflow: true,
+            write: true
+          },
+          fld_title: {
+            agent: true,
+            fieldId: "fld_title",
+            fieldType: "text.single_line",
+            read: "visible",
+            workflow: true,
+            write: true
+          }
+        },
+        policyRevision: 46,
+        principalId: "usr_owner",
+        scopeHash: "scope:view:view_owner_matrix",
+        snapshotId: "snap_owner_matrix_view"
+      });
+
+      const schemaResponse = await handleFetch(
+        new Request(
+          "https://example.test/v1/tables/tbl_1/schema?workspaceId=ws_1&principalId=usr_owner_matrix&permissionScopeHash=scope:table:tbl_1&policyRevision=44"
+        ),
+        env,
+        {} as ExecutionContext
+      );
+      const workflowResponse = await handleFetch(
+        new Request(
+          "https://example.test/v1/workflows/wf_owner_matrix/definition?workspaceId=ws_1&principalId=usr_owner_matrix&permissionScopeHash=scope:table:tbl_1&policyRevision=44"
+        ),
+        env,
+        {} as ExecutionContext
+      );
+      const workspaceResponse = await handleFetch(
+        new Request("https://example.test/v1/agent-tools/preview", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            input: {
+              include: ["tables"],
+              workspaceId: "ws_1"
+            },
+            permissionScopeHash: "scope:workspace",
+            policyRevision: 45,
+            principalId: "ops_owner_matrix",
+            toolId: "inspectWorkspace",
+            workspaceId: "ws_1"
+          })
+        }),
+        env,
+        {} as ExecutionContext
+      );
+      const viewQueryResponse = await handleFetch(
+        new Request(
+          "https://example.test/v1/tables/tbl_1/views/view_owner_matrix?workspaceId=ws_1&principalId=usr_owner&permissionScopeHash=scope:view:view_owner_matrix&policyRevision=46"
+        ),
+        env,
+        {} as ExecutionContext
+      );
+      const viewAgentQueryResponse = await handleFetch(
+        new Request("https://example.test/v1/agent-tools/preview", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            input: {
+              tableId: "tbl_1",
+              viewId: "view_owner_matrix"
+            },
+            permissionScopeHash: "scope:view:view_owner_matrix",
+            policyRevision: 46,
+            principalId: "usr_owner",
+            toolId: "queryView",
+            workspaceId: "ws_1"
+          })
+        }),
+        env,
+        {} as ExecutionContext
+      );
+      const viewDefinitionResponse = await handleFetch(
+        new Request(
+          "https://example.test/v1/tables/tbl_1/views/view_owner_matrix/definition?workspaceId=ws_1&principalId=usr_owner&permissionScopeHash=scope:view:view_owner_matrix&policyRevision=46"
+        ),
+        env,
+        {} as ExecutionContext
+      );
+      const viewAgentDefinitionResponse = await handleFetch(
+        new Request("https://example.test/v1/agent-tools/preview", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            input: {
+              tableId: "tbl_1",
+              viewId: "view_owner_matrix"
+            },
+            permissionScopeHash: "scope:view:view_owner_matrix",
+            policyRevision: 46,
+            principalId: "usr_owner",
+            toolId: "inspectViewDefinition",
+            workspaceId: "ws_1"
+          })
+        }),
+        env,
+        {} as ExecutionContext
+      );
+
+      const schemaBody = (await schemaResponse.json()) as {
+        view: Record<string, unknown>;
+        workflow: {
+          bindings: Record<string, unknown>;
+        };
+      };
+      const workflowBody = (await workflowResponse.json()) as {
+        conditionMetadata: unknown[];
+        workflow: {
+          bindings: Record<string, unknown>;
+        };
+      };
+      const workspaceBody = (await workspaceResponse.json()) as {
+        output: {
+          workspace: {
+            tables: Array<Record<string, unknown>>;
+          };
+        };
+      };
+      const viewQueryBody = (await viewQueryResponse.json()) as Record<string, unknown>;
+      const viewAgentQueryBody = (await viewAgentQueryResponse.json()) as {
+        output: Record<string, unknown>;
+      };
+      const viewDefinitionBody = (await viewDefinitionResponse.json()) as Record<string, unknown>;
+      const viewAgentDefinitionBody = (await viewAgentDefinitionResponse.json()) as {
+        output: Record<string, unknown>;
+      };
+
+      matrix.push({
+        actual: {
+          schema: {
+            view: schemaBody.view,
+            workflowBindings: schemaBody.workflow.bindings
+          },
+          statuses: {
+            schema: schemaResponse.status,
+            viewAgentDefinition: viewAgentDefinitionResponse.status,
+            viewAgentQuery: viewAgentQueryResponse.status,
+            viewDefinition: viewDefinitionResponse.status,
+            viewQuery: viewQueryResponse.status,
+            workflow: workflowResponse.status,
+            workspace: workspaceResponse.status
+          },
+          viewDefinition: viewDefinitionBody,
+          viewDefinitionAgent: viewAgentDefinitionBody.output,
+          viewQuery: viewQueryBody,
+          viewQueryAgent: viewAgentQueryBody.output,
+          workflowDefinition: {
+            conditionMetadata: workflowBody.conditionMetadata,
+            workflowBindings: workflowBody.workflow.bindings
+          },
+          workspaceTable:
+            workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1") ?? null
+        },
+        category: "metadata_parity",
+        scenario: "owner_metadata_parity_across_schema_workspace_workflow_and_views"
+      });
+    }
+
+    {
       const permissionEngine = createPermissionEngine(fieldTypeRegistry, {
         snapshot
       });

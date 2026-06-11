@@ -1396,6 +1396,4190 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
   },
   {
     "actual": {
+      "schema": {
+        "view": {
+          "fieldIds": [
+            "fld_assignee",
+            "fld_owner",
+            "fld_status",
+            "fld_title"
+          ],
+          "fields": {
+            "fld_assignee": {
+              "capabilities": {
+                "supportsFiltering": true,
+                "supportsGrouping": true,
+                "supportsSorting": true
+              },
+              "fieldId": "fld_assignee",
+              "fieldKey": "assignee",
+              "fieldType": "principal.user",
+              "supportedFilterOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedFilterOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "supportedSortModes": [
+                "ascending",
+                "descending"
+              ]
+            },
+            "fld_owner": {
+              "capabilities": {
+                "supportsFiltering": true,
+                "supportsGrouping": true,
+                "supportsSorting": true
+              },
+              "fieldId": "fld_owner",
+              "fieldKey": "owner",
+              "fieldType": "principal.user",
+              "supportedFilterOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedFilterOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "supportedSortModes": [
+                "ascending",
+                "descending"
+              ]
+            },
+            "fld_status": {
+              "capabilities": {
+                "supportsFiltering": true,
+                "supportsGrouping": true,
+                "supportsSorting": true
+              },
+              "fieldId": "fld_status",
+              "fieldKey": "status",
+              "fieldType": "status.semantic",
+              "supportedFilterOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedFilterOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "supportedSortModes": [
+                "ascending",
+                "descending"
+              ]
+            },
+            "fld_title": {
+              "capabilities": {
+                "supportsFiltering": true,
+                "supportsGrouping": true,
+                "supportsSorting": true
+              },
+              "fieldId": "fld_title",
+              "fieldKey": "title",
+              "fieldType": "text.single_line",
+              "supportedFilterOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedFilterOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "supportedSortModes": [
+                "ascending",
+                "descending"
+              ]
+            }
+          },
+          "filterableFieldIds": [
+            "fld_assignee",
+            "fld_owner",
+            "fld_status",
+            "fld_title"
+          ],
+          "groupableFieldIds": [
+            "fld_assignee",
+            "fld_owner",
+            "fld_status",
+            "fld_title"
+          ],
+          "sortableFieldIds": [
+            "fld_assignee",
+            "fld_owner",
+            "fld_status",
+            "fld_title"
+          ]
+        },
+        "workflowBindings": {
+          "row.fields.assignee": {
+            "binding": "row.fields.assignee",
+            "fieldId": "fld_assignee",
+            "fieldKey": "assignee",
+            "fieldType": "principal.user",
+            "proposalHints": [
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "missing",
+                  "empty",
+                  "blank",
+                  "not set",
+                  "unset"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "present",
+                  "populated",
+                  "filled",
+                  "has value",
+                  "is set",
+                  "set"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.fields.assignee.fieldId",
+              "fieldTypePath": "row.fields.assignee.fieldType",
+              "valuePath": "row.fields.assignee.value"
+            }
+          },
+          "row.fields.owner": {
+            "binding": "row.fields.owner",
+            "fieldId": "fld_owner",
+            "fieldKey": "owner",
+            "fieldType": "principal.user",
+            "proposalHints": [
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "missing",
+                  "empty",
+                  "blank",
+                  "not set",
+                  "unset"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "present",
+                  "populated",
+                  "filled",
+                  "has value",
+                  "is set",
+                  "set"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.fields.owner.fieldId",
+              "fieldTypePath": "row.fields.owner.fieldType",
+              "valuePath": "row.fields.owner.value"
+            }
+          },
+          "row.fields.status": {
+            "binding": "row.fields.status",
+            "fieldId": "fld_status",
+            "fieldKey": "status",
+            "fieldType": "status.semantic",
+            "proposalHints": [
+              {
+                "draftInput": {
+                  "left": {
+                    "path": "row.fields.status.value"
+                  },
+                  "right": "open"
+                },
+                "matchFieldPhrases": [
+                  "{field} changes to Open",
+                  "{field} becomes Open",
+                  "{field} is Open",
+                  "{field} set to Open",
+                  "{field} equals Open"
+                ],
+                "matchPhrases": [
+                  "changes to open",
+                  "becomes open",
+                  "is open",
+                  "set to open",
+                  "equals open",
+                  "changes to todo",
+                  "becomes todo",
+                  "is todo",
+                  "set to todo",
+                  "equals todo"
+                ],
+                "operatorId": "equals"
+              },
+              {
+                "draftInput": {
+                  "left": {
+                    "path": "row.fields.status.value"
+                  },
+                  "right": "qualified"
+                },
+                "matchFieldPhrases": [
+                  "{field} changes to Qualified",
+                  "{field} becomes Qualified",
+                  "{field} is Qualified",
+                  "{field} set to Qualified",
+                  "{field} equals Qualified"
+                ],
+                "matchPhrases": [
+                  "changes to qualified",
+                  "becomes qualified",
+                  "is qualified",
+                  "set to qualified",
+                  "equals qualified",
+                  "changes to done",
+                  "becomes done",
+                  "is done",
+                  "set to done",
+                  "equals done"
+                ],
+                "operatorId": "equals"
+              },
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "missing",
+                  "empty",
+                  "blank",
+                  "not set",
+                  "unset"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "present",
+                  "populated",
+                  "filled",
+                  "has value",
+                  "is set",
+                  "set"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.fields.status.fieldId",
+              "fieldTypePath": "row.fields.status.fieldType",
+              "valuePath": "row.fields.status.value"
+            }
+          },
+          "row.fields.title": {
+            "binding": "row.fields.title",
+            "fieldId": "fld_title",
+            "fieldKey": "title",
+            "fieldType": "text.single_line",
+            "proposalHints": [
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "missing",
+                  "empty",
+                  "blank",
+                  "not set",
+                  "unset"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "present",
+                  "populated",
+                  "filled",
+                  "has value",
+                  "is set",
+                  "set"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.fields.title.fieldId",
+              "fieldTypePath": "row.fields.title.fieldType",
+              "valuePath": "row.fields.title.value"
+            }
+          },
+          "row.owner": {
+            "binding": "row.owner",
+            "fieldId": "fld_owner",
+            "fieldKey": "owner",
+            "fieldType": "principal.user",
+            "proposalHints": [
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "unassigned"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "assigned"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.owner.fieldId",
+              "fieldTypePath": "row.owner.fieldType",
+              "valuePath": "row.owner.value"
+            }
+          }
+        }
+      },
+      "statuses": {
+        "schema": 200,
+        "viewAgentDefinition": 200,
+        "viewAgentQuery": 200,
+        "viewDefinition": 200,
+        "viewQuery": 200,
+        "workflow": 200,
+        "workspace": 200
+      },
+      "viewDefinition": {
+        "definition": {
+          "filterFieldIds": [
+            "fld_owner"
+          ],
+          "filters": [
+            {
+              "fieldId": "fld_owner",
+              "operatorId": "equals",
+              "protected": false,
+              "value": "usr_owner"
+            }
+          ],
+          "groupByFieldId": null,
+          "showEmptyGroups": false,
+          "sortFieldIds": [
+            "fld_title"
+          ],
+          "sorts": [
+            {
+              "fieldId": "fld_title",
+              "mode": "ascending"
+            }
+          ],
+          "visibleFieldIds": [
+            "fld_title",
+            "fld_owner",
+            "fld_status"
+          ]
+        },
+        "tableId": "tbl_1",
+        "viewId": "view_owner_matrix",
+        "viewKey": "owner-matrix",
+        "viewName": "Owner Matrix",
+        "viewSchemaVersion": 1,
+        "workspaceId": "ws_1"
+      },
+      "viewDefinitionAgent": {
+        "kind": "view-definition-inspection",
+        "view": {
+          "definition": {
+            "filterFieldIds": [
+              "fld_owner"
+            ],
+            "filters": [
+              {
+                "fieldId": "fld_owner",
+                "operatorId": "equals",
+                "protected": false,
+                "value": "usr_owner"
+              }
+            ],
+            "groupByFieldId": null,
+            "showEmptyGroups": false,
+            "sortFieldIds": [
+              "fld_title"
+            ],
+            "sorts": [
+              {
+                "fieldId": "fld_title",
+                "mode": "ascending"
+              }
+            ],
+            "visibleFieldIds": [
+              "fld_title",
+              "fld_owner",
+              "fld_status"
+            ]
+          },
+          "tableId": "tbl_1",
+          "viewId": "view_owner_matrix",
+          "viewKey": "owner-matrix",
+          "viewName": "Owner Matrix",
+          "viewSchemaVersion": 1,
+          "workspaceId": "ws_1"
+        }
+      },
+      "viewQuery": {
+        "fields": [
+          {
+            "fieldId": "fld_title",
+            "fieldKey": "title",
+            "fieldType": "text.single_line",
+            "label": "Title"
+          },
+          {
+            "fieldId": "fld_owner",
+            "fieldKey": "owner",
+            "fieldType": "principal.user",
+            "label": "Owner"
+          },
+          {
+            "fieldId": "fld_status",
+            "fieldKey": "status",
+            "fieldType": "status.semantic",
+            "label": "Status"
+          }
+        ],
+        "rows": [
+          {
+            "cells": {
+              "fld_owner": [
+                "usr_owner"
+              ],
+              "fld_status": "open",
+              "fld_title": "Owned by owner"
+            },
+            "hiddenFieldIds": [],
+            "recordId": "rec_owner_matrix_1",
+            "recordKey": "owner-matrix-1",
+            "redactedFieldIds": [],
+            "states": {
+              "fld_owner": "visible",
+              "fld_status": "visible",
+              "fld_title": "visible"
+            }
+          }
+        ],
+        "view": {
+          "actions": {
+            "createRecord": {
+              "allowed": true,
+              "constrainedFieldIds": [
+                "fld_owner"
+              ],
+              "defaultCells": {
+                "fld_owner": "usr_owner"
+              },
+              "fieldId": null,
+              "fieldType": null,
+              "reasons": [],
+              "requiresGroupValue": false,
+              "status": "writable"
+            },
+            "groupMove": {
+              "allowed": false,
+              "fieldId": null,
+              "fieldType": null,
+              "reasons": [
+                "view_group_move_unavailable"
+              ],
+              "status": "denied"
+            }
+          },
+          "allowed": true,
+          "blockedFieldIds": [],
+          "consistencyModel": "view_eventual",
+          "deniedFieldIds": [],
+          "diagnostics": [],
+          "filters": [
+            {
+              "fieldId": "fld_owner",
+              "operatorId": "equals",
+              "protected": false,
+              "value": "usr_owner"
+            }
+          ],
+          "redactedFieldIds": [],
+          "redactionApplied": false,
+          "tableId": "tbl_1",
+          "viewId": "view_owner_matrix",
+          "viewKey": "owner-matrix",
+          "viewName": "Owner Matrix",
+          "viewSchemaVersion": 1,
+          "visibleFieldIds": [
+            "fld_title",
+            "fld_owner",
+            "fld_status"
+          ]
+        }
+      },
+      "viewQueryAgent": {
+        "kind": "view-query",
+        "view": {
+          "fields": [
+            {
+              "fieldId": "fld_title",
+              "fieldKey": "title",
+              "fieldType": "text.single_line",
+              "label": "Title"
+            },
+            {
+              "fieldId": "fld_owner",
+              "fieldKey": "owner",
+              "fieldType": "principal.user",
+              "label": "Owner"
+            },
+            {
+              "fieldId": "fld_status",
+              "fieldKey": "status",
+              "fieldType": "status.semantic",
+              "label": "Status"
+            }
+          ],
+          "rows": [
+            {
+              "cells": {
+                "fld_owner": [
+                  "usr_owner"
+                ],
+                "fld_status": "open",
+                "fld_title": "Owned by owner"
+              },
+              "hiddenFieldIds": [],
+              "recordId": "rec_owner_matrix_1",
+              "recordKey": "owner-matrix-1",
+              "redactedFieldIds": [],
+              "states": {
+                "fld_owner": "visible",
+                "fld_status": "visible",
+                "fld_title": "visible"
+              }
+            }
+          ],
+          "view": {
+            "actions": {
+              "createRecord": {
+                "allowed": true,
+                "constrainedFieldIds": [
+                  "fld_owner"
+                ],
+                "defaultCells": {
+                  "fld_owner": "usr_owner"
+                },
+                "fieldId": null,
+                "fieldType": null,
+                "reasons": [],
+                "requiresGroupValue": false,
+                "status": "writable"
+              },
+              "groupMove": {
+                "allowed": false,
+                "fieldId": null,
+                "fieldType": null,
+                "reasons": [
+                  "view_group_move_unavailable"
+                ],
+                "status": "denied"
+              }
+            },
+            "allowed": true,
+            "blockedFieldIds": [],
+            "consistencyModel": "view_eventual",
+            "deniedFieldIds": [],
+            "diagnostics": [],
+            "filters": [
+              {
+                "fieldId": "fld_owner",
+                "operatorId": "equals",
+                "protected": false,
+                "value": "usr_owner"
+              }
+            ],
+            "redactedFieldIds": [],
+            "redactionApplied": false,
+            "tableId": "tbl_1",
+            "viewId": "view_owner_matrix",
+            "viewKey": "owner-matrix",
+            "viewName": "Owner Matrix",
+            "viewSchemaVersion": 1,
+            "visibleFieldIds": [
+              "fld_title",
+              "fld_owner",
+              "fld_status"
+            ]
+          }
+        }
+      },
+      "workflowDefinition": {
+        "conditionMetadata": [
+          {
+            "diagnostics": [],
+            "index": 0,
+            "operator": {
+              "fixtureContract": [
+                {
+                  "id": "is_not_empty.condition.sample",
+                  "kind": "condition"
+                }
+              ],
+              "id": "is_not_empty",
+              "idempotencyMode": "deterministic",
+              "inputSchema": {
+                "description": "Inputs for is_not_empty.",
+                "type": "object"
+              },
+              "kind": "condition",
+              "outputSchema": {
+                "description": "Boolean result for is_not_empty.",
+                "type": "boolean"
+              },
+              "purity": "pure",
+              "requiredCapabilities": [
+                "fields.read"
+              ],
+              "retryClass": "none",
+              "timeoutClass": "fast",
+              "version": 1
+            },
+            "operatorId": "is_not_empty",
+            "referencedBindingNames": [
+              "row.owner"
+            ],
+            "resolvedBindings": [
+              {
+                "binding": "row.owner",
+                "fieldId": "fld_owner",
+                "fieldKey": "owner",
+                "fieldType": "principal.user",
+                "proposalHints": [
+                  {
+                    "matchFieldPhrases": [
+                      "without {field}",
+                      "{field} missing"
+                    ],
+                    "matchPhrases": [
+                      "unassigned"
+                    ],
+                    "operatorId": "is_empty"
+                  },
+                  {
+                    "matchPhrases": [
+                      "assigned"
+                    ],
+                    "operatorId": "is_not_empty"
+                  }
+                ],
+                "supportedOperatorIds": [
+                  "equals",
+                  "not_equals",
+                  "is_empty",
+                  "is_not_empty"
+                ],
+                "supportedOperators": [
+                  {
+                    "fixtureContract": [
+                      {
+                        "id": "equals.condition.sample",
+                        "kind": "condition"
+                      }
+                    ],
+                    "id": "equals",
+                    "idempotencyMode": "deterministic",
+                    "inputSchema": {
+                      "description": "Inputs for equals.",
+                      "type": "object"
+                    },
+                    "kind": "condition",
+                    "outputSchema": {
+                      "description": "Boolean result for equals.",
+                      "type": "boolean"
+                    },
+                    "purity": "pure",
+                    "requiredCapabilities": [
+                      "fields.read"
+                    ],
+                    "retryClass": "none",
+                    "timeoutClass": "fast",
+                    "version": 1
+                  },
+                  {
+                    "fixtureContract": [
+                      {
+                        "id": "not_equals.condition.sample",
+                        "kind": "condition"
+                      }
+                    ],
+                    "id": "not_equals",
+                    "idempotencyMode": "deterministic",
+                    "inputSchema": {
+                      "description": "Inputs for not_equals.",
+                      "type": "object"
+                    },
+                    "kind": "condition",
+                    "outputSchema": {
+                      "description": "Boolean result for not_equals.",
+                      "type": "boolean"
+                    },
+                    "purity": "pure",
+                    "requiredCapabilities": [
+                      "fields.read"
+                    ],
+                    "retryClass": "none",
+                    "timeoutClass": "fast",
+                    "version": 1
+                  },
+                  {
+                    "fixtureContract": [
+                      {
+                        "id": "is_empty.condition.sample",
+                        "kind": "condition"
+                      }
+                    ],
+                    "id": "is_empty",
+                    "idempotencyMode": "deterministic",
+                    "inputSchema": {
+                      "description": "Inputs for is_empty.",
+                      "type": "object"
+                    },
+                    "kind": "condition",
+                    "outputSchema": {
+                      "description": "Boolean result for is_empty.",
+                      "type": "boolean"
+                    },
+                    "purity": "pure",
+                    "requiredCapabilities": [
+                      "fields.read"
+                    ],
+                    "retryClass": "none",
+                    "timeoutClass": "fast",
+                    "version": 1
+                  },
+                  {
+                    "fixtureContract": [
+                      {
+                        "id": "is_not_empty.condition.sample",
+                        "kind": "condition"
+                      }
+                    ],
+                    "id": "is_not_empty",
+                    "idempotencyMode": "deterministic",
+                    "inputSchema": {
+                      "description": "Inputs for is_not_empty.",
+                      "type": "object"
+                    },
+                    "kind": "condition",
+                    "outputSchema": {
+                      "description": "Boolean result for is_not_empty.",
+                      "type": "boolean"
+                    },
+                    "purity": "pure",
+                    "requiredCapabilities": [
+                      "fields.read"
+                    ],
+                    "retryClass": "none",
+                    "timeoutClass": "fast",
+                    "version": 1
+                  }
+                ],
+                "template": {
+                  "fieldIdPath": "row.owner.fieldId",
+                  "fieldTypePath": "row.owner.fieldType",
+                  "valuePath": "row.owner.value"
+                }
+              }
+            ]
+          },
+          {
+            "diagnostics": [],
+            "index": 1,
+            "operator": {
+              "fixtureContract": [
+                {
+                  "id": "equals.condition.sample",
+                  "kind": "condition"
+                }
+              ],
+              "id": "equals",
+              "idempotencyMode": "deterministic",
+              "inputSchema": {
+                "description": "Inputs for equals.",
+                "type": "object"
+              },
+              "kind": "condition",
+              "outputSchema": {
+                "description": "Boolean result for equals.",
+                "type": "boolean"
+              },
+              "purity": "pure",
+              "requiredCapabilities": [
+                "fields.read"
+              ],
+              "retryClass": "none",
+              "timeoutClass": "fast",
+              "version": 1
+            },
+            "operatorId": "equals",
+            "referencedBindingNames": [
+              "row.fields.status"
+            ],
+            "resolvedBindings": [
+              {
+                "binding": "row.fields.status",
+                "fieldId": "fld_status",
+                "fieldKey": "status",
+                "fieldType": "status.semantic",
+                "proposalHints": [
+                  {
+                    "draftInput": {
+                      "left": {
+                        "path": "row.fields.status.value"
+                      },
+                      "right": "open"
+                    },
+                    "matchFieldPhrases": [
+                      "{field} changes to Open",
+                      "{field} becomes Open",
+                      "{field} is Open",
+                      "{field} set to Open",
+                      "{field} equals Open"
+                    ],
+                    "matchPhrases": [
+                      "changes to open",
+                      "becomes open",
+                      "is open",
+                      "set to open",
+                      "equals open",
+                      "changes to todo",
+                      "becomes todo",
+                      "is todo",
+                      "set to todo",
+                      "equals todo"
+                    ],
+                    "operatorId": "equals"
+                  },
+                  {
+                    "draftInput": {
+                      "left": {
+                        "path": "row.fields.status.value"
+                      },
+                      "right": "qualified"
+                    },
+                    "matchFieldPhrases": [
+                      "{field} changes to Qualified",
+                      "{field} becomes Qualified",
+                      "{field} is Qualified",
+                      "{field} set to Qualified",
+                      "{field} equals Qualified"
+                    ],
+                    "matchPhrases": [
+                      "changes to qualified",
+                      "becomes qualified",
+                      "is qualified",
+                      "set to qualified",
+                      "equals qualified",
+                      "changes to done",
+                      "becomes done",
+                      "is done",
+                      "set to done",
+                      "equals done"
+                    ],
+                    "operatorId": "equals"
+                  },
+                  {
+                    "matchFieldPhrases": [
+                      "without {field}",
+                      "{field} missing"
+                    ],
+                    "matchPhrases": [
+                      "missing",
+                      "empty",
+                      "blank",
+                      "not set",
+                      "unset"
+                    ],
+                    "operatorId": "is_empty"
+                  },
+                  {
+                    "matchPhrases": [
+                      "present",
+                      "populated",
+                      "filled",
+                      "has value",
+                      "is set",
+                      "set"
+                    ],
+                    "operatorId": "is_not_empty"
+                  }
+                ],
+                "supportedOperatorIds": [
+                  "equals",
+                  "not_equals",
+                  "is_empty",
+                  "is_not_empty"
+                ],
+                "supportedOperators": [
+                  {
+                    "fixtureContract": [
+                      {
+                        "id": "equals.condition.sample",
+                        "kind": "condition"
+                      }
+                    ],
+                    "id": "equals",
+                    "idempotencyMode": "deterministic",
+                    "inputSchema": {
+                      "description": "Inputs for equals.",
+                      "type": "object"
+                    },
+                    "kind": "condition",
+                    "outputSchema": {
+                      "description": "Boolean result for equals.",
+                      "type": "boolean"
+                    },
+                    "purity": "pure",
+                    "requiredCapabilities": [
+                      "fields.read"
+                    ],
+                    "retryClass": "none",
+                    "timeoutClass": "fast",
+                    "version": 1
+                  },
+                  {
+                    "fixtureContract": [
+                      {
+                        "id": "not_equals.condition.sample",
+                        "kind": "condition"
+                      }
+                    ],
+                    "id": "not_equals",
+                    "idempotencyMode": "deterministic",
+                    "inputSchema": {
+                      "description": "Inputs for not_equals.",
+                      "type": "object"
+                    },
+                    "kind": "condition",
+                    "outputSchema": {
+                      "description": "Boolean result for not_equals.",
+                      "type": "boolean"
+                    },
+                    "purity": "pure",
+                    "requiredCapabilities": [
+                      "fields.read"
+                    ],
+                    "retryClass": "none",
+                    "timeoutClass": "fast",
+                    "version": 1
+                  },
+                  {
+                    "fixtureContract": [
+                      {
+                        "id": "is_empty.condition.sample",
+                        "kind": "condition"
+                      }
+                    ],
+                    "id": "is_empty",
+                    "idempotencyMode": "deterministic",
+                    "inputSchema": {
+                      "description": "Inputs for is_empty.",
+                      "type": "object"
+                    },
+                    "kind": "condition",
+                    "outputSchema": {
+                      "description": "Boolean result for is_empty.",
+                      "type": "boolean"
+                    },
+                    "purity": "pure",
+                    "requiredCapabilities": [
+                      "fields.read"
+                    ],
+                    "retryClass": "none",
+                    "timeoutClass": "fast",
+                    "version": 1
+                  },
+                  {
+                    "fixtureContract": [
+                      {
+                        "id": "is_not_empty.condition.sample",
+                        "kind": "condition"
+                      }
+                    ],
+                    "id": "is_not_empty",
+                    "idempotencyMode": "deterministic",
+                    "inputSchema": {
+                      "description": "Inputs for is_not_empty.",
+                      "type": "object"
+                    },
+                    "kind": "condition",
+                    "outputSchema": {
+                      "description": "Boolean result for is_not_empty.",
+                      "type": "boolean"
+                    },
+                    "purity": "pure",
+                    "requiredCapabilities": [
+                      "fields.read"
+                    ],
+                    "retryClass": "none",
+                    "timeoutClass": "fast",
+                    "version": 1
+                  }
+                ],
+                "template": {
+                  "fieldIdPath": "row.fields.status.fieldId",
+                  "fieldTypePath": "row.fields.status.fieldType",
+                  "valuePath": "row.fields.status.value"
+                }
+              }
+            ]
+          }
+        ],
+        "workflowBindings": {
+          "row.fields.assignee": {
+            "binding": "row.fields.assignee",
+            "fieldId": "fld_assignee",
+            "fieldKey": "assignee",
+            "fieldType": "principal.user",
+            "proposalHints": [
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "missing",
+                  "empty",
+                  "blank",
+                  "not set",
+                  "unset"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "present",
+                  "populated",
+                  "filled",
+                  "has value",
+                  "is set",
+                  "set"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.fields.assignee.fieldId",
+              "fieldTypePath": "row.fields.assignee.fieldType",
+              "valuePath": "row.fields.assignee.value"
+            }
+          },
+          "row.fields.owner": {
+            "binding": "row.fields.owner",
+            "fieldId": "fld_owner",
+            "fieldKey": "owner",
+            "fieldType": "principal.user",
+            "proposalHints": [
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "missing",
+                  "empty",
+                  "blank",
+                  "not set",
+                  "unset"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "present",
+                  "populated",
+                  "filled",
+                  "has value",
+                  "is set",
+                  "set"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.fields.owner.fieldId",
+              "fieldTypePath": "row.fields.owner.fieldType",
+              "valuePath": "row.fields.owner.value"
+            }
+          },
+          "row.fields.status": {
+            "binding": "row.fields.status",
+            "fieldId": "fld_status",
+            "fieldKey": "status",
+            "fieldType": "status.semantic",
+            "proposalHints": [
+              {
+                "draftInput": {
+                  "left": {
+                    "path": "row.fields.status.value"
+                  },
+                  "right": "open"
+                },
+                "matchFieldPhrases": [
+                  "{field} changes to Open",
+                  "{field} becomes Open",
+                  "{field} is Open",
+                  "{field} set to Open",
+                  "{field} equals Open"
+                ],
+                "matchPhrases": [
+                  "changes to open",
+                  "becomes open",
+                  "is open",
+                  "set to open",
+                  "equals open",
+                  "changes to todo",
+                  "becomes todo",
+                  "is todo",
+                  "set to todo",
+                  "equals todo"
+                ],
+                "operatorId": "equals"
+              },
+              {
+                "draftInput": {
+                  "left": {
+                    "path": "row.fields.status.value"
+                  },
+                  "right": "qualified"
+                },
+                "matchFieldPhrases": [
+                  "{field} changes to Qualified",
+                  "{field} becomes Qualified",
+                  "{field} is Qualified",
+                  "{field} set to Qualified",
+                  "{field} equals Qualified"
+                ],
+                "matchPhrases": [
+                  "changes to qualified",
+                  "becomes qualified",
+                  "is qualified",
+                  "set to qualified",
+                  "equals qualified",
+                  "changes to done",
+                  "becomes done",
+                  "is done",
+                  "set to done",
+                  "equals done"
+                ],
+                "operatorId": "equals"
+              },
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "missing",
+                  "empty",
+                  "blank",
+                  "not set",
+                  "unset"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "present",
+                  "populated",
+                  "filled",
+                  "has value",
+                  "is set",
+                  "set"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.fields.status.fieldId",
+              "fieldTypePath": "row.fields.status.fieldType",
+              "valuePath": "row.fields.status.value"
+            }
+          },
+          "row.fields.title": {
+            "binding": "row.fields.title",
+            "fieldId": "fld_title",
+            "fieldKey": "title",
+            "fieldType": "text.single_line",
+            "proposalHints": [
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "missing",
+                  "empty",
+                  "blank",
+                  "not set",
+                  "unset"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "present",
+                  "populated",
+                  "filled",
+                  "has value",
+                  "is set",
+                  "set"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.fields.title.fieldId",
+              "fieldTypePath": "row.fields.title.fieldType",
+              "valuePath": "row.fields.title.value"
+            }
+          },
+          "row.owner": {
+            "binding": "row.owner",
+            "fieldId": "fld_owner",
+            "fieldKey": "owner",
+            "fieldType": "principal.user",
+            "proposalHints": [
+              {
+                "matchFieldPhrases": [
+                  "without {field}",
+                  "{field} missing"
+                ],
+                "matchPhrases": [
+                  "unassigned"
+                ],
+                "operatorId": "is_empty"
+              },
+              {
+                "matchPhrases": [
+                  "assigned"
+                ],
+                "operatorId": "is_not_empty"
+              }
+            ],
+            "supportedOperatorIds": [
+              "equals",
+              "not_equals",
+              "is_empty",
+              "is_not_empty"
+            ],
+            "supportedOperators": [
+              {
+                "fixtureContract": [
+                  {
+                    "id": "equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "not_equals.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "not_equals",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for not_equals.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for not_equals.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              },
+              {
+                "fixtureContract": [
+                  {
+                    "id": "is_not_empty.condition.sample",
+                    "kind": "condition"
+                  }
+                ],
+                "id": "is_not_empty",
+                "idempotencyMode": "deterministic",
+                "inputSchema": {
+                  "description": "Inputs for is_not_empty.",
+                  "type": "object"
+                },
+                "kind": "condition",
+                "outputSchema": {
+                  "description": "Boolean result for is_not_empty.",
+                  "type": "boolean"
+                },
+                "purity": "pure",
+                "requiredCapabilities": [
+                  "fields.read"
+                ],
+                "retryClass": "none",
+                "timeoutClass": "fast",
+                "version": 1
+              }
+            ],
+            "template": {
+              "fieldIdPath": "row.owner.fieldId",
+              "fieldTypePath": "row.owner.fieldType",
+              "valuePath": "row.owner.value"
+            }
+          }
+        }
+      },
+      "workspaceTable": {
+        "fieldIds": [
+          "fld_assignee",
+          "fld_owner",
+          "fld_status",
+          "fld_title"
+        ],
+        "name": "Table 1",
+        "tableId": "tbl_1",
+        "view": {
+          "fieldIds": [
+            "fld_assignee",
+            "fld_owner",
+            "fld_status",
+            "fld_title"
+          ],
+          "fields": {
+            "fld_assignee": {
+              "capabilities": {
+                "supportsFiltering": true,
+                "supportsGrouping": true,
+                "supportsSorting": true
+              },
+              "fieldId": "fld_assignee",
+              "fieldKey": "assignee",
+              "fieldType": "principal.user",
+              "supportedFilterOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedFilterOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "supportedSortModes": [
+                "ascending",
+                "descending"
+              ]
+            },
+            "fld_owner": {
+              "capabilities": {
+                "supportsFiltering": true,
+                "supportsGrouping": true,
+                "supportsSorting": true
+              },
+              "fieldId": "fld_owner",
+              "fieldKey": "owner",
+              "fieldType": "principal.user",
+              "supportedFilterOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedFilterOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "supportedSortModes": [
+                "ascending",
+                "descending"
+              ]
+            },
+            "fld_status": {
+              "capabilities": {
+                "supportsFiltering": true,
+                "supportsGrouping": true,
+                "supportsSorting": true
+              },
+              "fieldId": "fld_status",
+              "fieldKey": "status",
+              "fieldType": "status.semantic",
+              "supportedFilterOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedFilterOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "supportedSortModes": [
+                "ascending",
+                "descending"
+              ]
+            },
+            "fld_title": {
+              "capabilities": {
+                "supportsFiltering": true,
+                "supportsGrouping": true,
+                "supportsSorting": true
+              },
+              "fieldId": "fld_title",
+              "fieldKey": "title",
+              "fieldType": "text.single_line",
+              "supportedFilterOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedFilterOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "supportedSortModes": [
+                "ascending",
+                "descending"
+              ]
+            }
+          },
+          "filterableFieldIds": [
+            "fld_assignee",
+            "fld_owner",
+            "fld_status",
+            "fld_title"
+          ],
+          "groupableFieldIds": [
+            "fld_assignee",
+            "fld_owner",
+            "fld_status",
+            "fld_title"
+          ],
+          "sortableFieldIds": [
+            "fld_assignee",
+            "fld_owner",
+            "fld_status",
+            "fld_title"
+          ]
+        },
+        "viewIds": [
+          "view_owner_matrix"
+        ],
+        "workflow": {
+          "bindings": {
+            "row.fields.assignee": {
+              "binding": "row.fields.assignee",
+              "fieldId": "fld_assignee",
+              "fieldKey": "assignee",
+              "fieldType": "principal.user",
+              "proposalHints": [
+                {
+                  "matchFieldPhrases": [
+                    "without {field}",
+                    "{field} missing"
+                  ],
+                  "matchPhrases": [
+                    "missing",
+                    "empty",
+                    "blank",
+                    "not set",
+                    "unset"
+                  ],
+                  "operatorId": "is_empty"
+                },
+                {
+                  "matchPhrases": [
+                    "present",
+                    "populated",
+                    "filled",
+                    "has value",
+                    "is set",
+                    "set"
+                  ],
+                  "operatorId": "is_not_empty"
+                }
+              ],
+              "supportedOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "template": {
+                "fieldIdPath": "row.fields.assignee.fieldId",
+                "fieldTypePath": "row.fields.assignee.fieldType",
+                "valuePath": "row.fields.assignee.value"
+              }
+            },
+            "row.fields.owner": {
+              "binding": "row.fields.owner",
+              "fieldId": "fld_owner",
+              "fieldKey": "owner",
+              "fieldType": "principal.user",
+              "proposalHints": [
+                {
+                  "matchFieldPhrases": [
+                    "without {field}",
+                    "{field} missing"
+                  ],
+                  "matchPhrases": [
+                    "missing",
+                    "empty",
+                    "blank",
+                    "not set",
+                    "unset"
+                  ],
+                  "operatorId": "is_empty"
+                },
+                {
+                  "matchPhrases": [
+                    "present",
+                    "populated",
+                    "filled",
+                    "has value",
+                    "is set",
+                    "set"
+                  ],
+                  "operatorId": "is_not_empty"
+                }
+              ],
+              "supportedOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "template": {
+                "fieldIdPath": "row.fields.owner.fieldId",
+                "fieldTypePath": "row.fields.owner.fieldType",
+                "valuePath": "row.fields.owner.value"
+              }
+            },
+            "row.fields.status": {
+              "binding": "row.fields.status",
+              "fieldId": "fld_status",
+              "fieldKey": "status",
+              "fieldType": "status.semantic",
+              "proposalHints": [
+                {
+                  "draftInput": {
+                    "left": {
+                      "path": "row.fields.status.value"
+                    },
+                    "right": "open"
+                  },
+                  "matchFieldPhrases": [
+                    "{field} changes to Open",
+                    "{field} becomes Open",
+                    "{field} is Open",
+                    "{field} set to Open",
+                    "{field} equals Open"
+                  ],
+                  "matchPhrases": [
+                    "changes to open",
+                    "becomes open",
+                    "is open",
+                    "set to open",
+                    "equals open",
+                    "changes to todo",
+                    "becomes todo",
+                    "is todo",
+                    "set to todo",
+                    "equals todo"
+                  ],
+                  "operatorId": "equals"
+                },
+                {
+                  "draftInput": {
+                    "left": {
+                      "path": "row.fields.status.value"
+                    },
+                    "right": "qualified"
+                  },
+                  "matchFieldPhrases": [
+                    "{field} changes to Qualified",
+                    "{field} becomes Qualified",
+                    "{field} is Qualified",
+                    "{field} set to Qualified",
+                    "{field} equals Qualified"
+                  ],
+                  "matchPhrases": [
+                    "changes to qualified",
+                    "becomes qualified",
+                    "is qualified",
+                    "set to qualified",
+                    "equals qualified",
+                    "changes to done",
+                    "becomes done",
+                    "is done",
+                    "set to done",
+                    "equals done"
+                  ],
+                  "operatorId": "equals"
+                },
+                {
+                  "matchFieldPhrases": [
+                    "without {field}",
+                    "{field} missing"
+                  ],
+                  "matchPhrases": [
+                    "missing",
+                    "empty",
+                    "blank",
+                    "not set",
+                    "unset"
+                  ],
+                  "operatorId": "is_empty"
+                },
+                {
+                  "matchPhrases": [
+                    "present",
+                    "populated",
+                    "filled",
+                    "has value",
+                    "is set",
+                    "set"
+                  ],
+                  "operatorId": "is_not_empty"
+                }
+              ],
+              "supportedOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "template": {
+                "fieldIdPath": "row.fields.status.fieldId",
+                "fieldTypePath": "row.fields.status.fieldType",
+                "valuePath": "row.fields.status.value"
+              }
+            },
+            "row.fields.title": {
+              "binding": "row.fields.title",
+              "fieldId": "fld_title",
+              "fieldKey": "title",
+              "fieldType": "text.single_line",
+              "proposalHints": [
+                {
+                  "matchFieldPhrases": [
+                    "without {field}",
+                    "{field} missing"
+                  ],
+                  "matchPhrases": [
+                    "missing",
+                    "empty",
+                    "blank",
+                    "not set",
+                    "unset"
+                  ],
+                  "operatorId": "is_empty"
+                },
+                {
+                  "matchPhrases": [
+                    "present",
+                    "populated",
+                    "filled",
+                    "has value",
+                    "is set",
+                    "set"
+                  ],
+                  "operatorId": "is_not_empty"
+                }
+              ],
+              "supportedOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "template": {
+                "fieldIdPath": "row.fields.title.fieldId",
+                "fieldTypePath": "row.fields.title.fieldType",
+                "valuePath": "row.fields.title.value"
+              }
+            },
+            "row.owner": {
+              "binding": "row.owner",
+              "fieldId": "fld_owner",
+              "fieldKey": "owner",
+              "fieldType": "principal.user",
+              "proposalHints": [
+                {
+                  "matchFieldPhrases": [
+                    "without {field}",
+                    "{field} missing"
+                  ],
+                  "matchPhrases": [
+                    "unassigned"
+                  ],
+                  "operatorId": "is_empty"
+                },
+                {
+                  "matchPhrases": [
+                    "assigned"
+                  ],
+                  "operatorId": "is_not_empty"
+                }
+              ],
+              "supportedOperatorIds": [
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ],
+              "supportedOperators": [
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "not_equals.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "not_equals",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for not_equals.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for not_equals.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                },
+                {
+                  "fixtureContract": [
+                    {
+                      "id": "is_not_empty.condition.sample",
+                      "kind": "condition"
+                    }
+                  ],
+                  "id": "is_not_empty",
+                  "idempotencyMode": "deterministic",
+                  "inputSchema": {
+                    "description": "Inputs for is_not_empty.",
+                    "type": "object"
+                  },
+                  "kind": "condition",
+                  "outputSchema": {
+                    "description": "Boolean result for is_not_empty.",
+                    "type": "boolean"
+                  },
+                  "purity": "pure",
+                  "requiredCapabilities": [
+                    "fields.read"
+                  ],
+                  "retryClass": "none",
+                  "timeoutClass": "fast",
+                  "version": 1
+                }
+              ],
+              "template": {
+                "fieldIdPath": "row.owner.fieldId",
+                "fieldTypePath": "row.owner.fieldType",
+                "valuePath": "row.owner.value"
+              }
+            }
+          }
+        }
+      }
+    },
+    "category": "metadata_parity",
+    "scenario": "owner_metadata_parity_across_schema_workspace_workflow_and_views"
+  },
+  {
+    "actual": {
       "directRead": {
         "diagnostics": [
           "field_hidden:salary",
