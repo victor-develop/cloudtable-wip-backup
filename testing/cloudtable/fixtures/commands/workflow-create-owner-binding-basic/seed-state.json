@@ -1,0 +1,27 @@
+{
+  "workflowAuthoringMetadata": {
+    "bindings": {
+      "row.owner": {
+        "aliasOf": "row.fields.owner",
+        "binding": "row.owner",
+        "fieldId": "fld_owner",
+        "fieldKey": "owner",
+        "fieldType": "principal.user",
+        "isCanonical": true,
+        "proposalHints": [],
+        "supportedOperatorIds": [
+          "equals",
+          "not_equals",
+          "is_empty",
+          "is_not_empty"
+        ],
+        "supportedOperators": [],
+        "template": {
+          "fieldIdPath": "row.owner.fieldId",
+          "fieldTypePath": "row.owner.fieldType",
+          "valuePath": "row.owner.value"
+        }
+      }
+    }
+  }
+}

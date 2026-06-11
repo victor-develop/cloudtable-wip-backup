@@ -1,0 +1,25 @@
+{
+  "workflowAuthoringMetadata": {
+    "bindings": {
+      "row.fields.status": {
+        "binding": "row.fields.status",
+        "fieldId": "fld_status",
+        "fieldKey": "status",
+        "fieldType": "status.semantic",
+        "proposalHints": [],
+        "supportedOperatorIds": [
+          "equals",
+          "not_equals",
+          "is_empty",
+          "is_not_empty"
+        ],
+        "supportedOperators": [],
+        "template": {
+          "fieldIdPath": "row.fields.status.fieldId",
+          "fieldTypePath": "row.fields.status.fieldType",
+          "valuePath": "row.fields.status.value"
+        }
+      }
+    }
+  }
+}

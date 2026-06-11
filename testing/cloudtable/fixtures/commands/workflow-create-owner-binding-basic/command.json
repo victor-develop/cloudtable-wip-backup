@@ -1,0 +1,62 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_workflow_create_owner_binding_001",
+  "commandType": "workflow.create",
+  "idempotencyKey": "idem_workflow_create_owner_binding_001",
+  "payload": {
+    "definition": {
+      "actions": [
+        {
+          "input": {},
+          "operatorId": "set_cell"
+        }
+      ],
+      "conditions": [
+        {
+          "input": {
+            "fieldId": {
+              "path": "row.owner.fieldId"
+            },
+            "fieldType": {
+              "path": "row.owner.fieldType"
+            },
+            "left": {
+              "path": "row.owner.value"
+            },
+            "right": [
+              "usr_owner"
+            ]
+          },
+          "operatorId": "equals"
+        }
+      ],
+      "metadata": {
+        "status": "draft",
+        "tableId": "tbl_accounts"
+      },
+      "principal": {
+        "policyRevision": 7,
+        "principalId": "wf_service",
+        "schemaEpoch": 1,
+        "scopeHash": "scope:wf:accounts"
+      },
+      "trigger": {
+        "match": {
+          "tableId": "tbl_accounts"
+        },
+        "operatorId": "record_updated"
+      },
+      "workflowId": "wf_owner_assignment_guard"
+    },
+    "name": "Owner assignment guard",
+    "tableId": "tbl_accounts",
+    "workflowId": "wf_owner_assignment_guard",
+    "workflowKey": "owner-assignment-guard"
+  },
+  "scope": "workflow",
+  "tableId": "tbl_accounts",
+  "workspaceId": "ws_demo"
+}

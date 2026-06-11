@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "workflow_condition_binding_field_id_mismatch:0:row.fields.status"
+  ],
+  "status": "rejected"
+}

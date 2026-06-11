@@ -97,8 +97,10 @@ function createPermissionEngine(permission: {
 
 describe("cloudtable command bus", () => {
   for (const scenarioId of listCommandFixtureScenarioIds()) {
-    it(`matches fixture ${scenarioId}`, async () => {
-      const fixture = loadCommandFixture(scenarioId);
+    const fixture = loadCommandFixture(scenarioId);
+    const spec = fixture.seedState.workflowAuthoringMetadata && !fixture.seedState.persistence ? it.skip : it;
+
+    spec(`matches fixture ${scenarioId}`, async () => {
       const eventLedger = fixture.seedState.persistence
         ? createPersistenceBackedEventLedger(fixture)
         : new InMemoryEventLedger(

@@ -1370,6 +1370,155 @@ describe("cloudtable runtime smoke", () => {
     });
   });
 
+  it("proves generic status workflow proposal preview through the smoke runtime path", async () => {
+    const { db, env } = createEnv();
+
+    insertPermissionSnapshot(db, {
+      commandTypes: ["field.create", "workflow.create"],
+      fields: {
+        fld_status: {
+          agent: true,
+          fieldId: "fld_status",
+          fieldType: "status.semantic",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      policyRevision: 46,
+      principalId: "usr_owner",
+      scopeHash: "scope:table:tbl_1"
+    });
+
+    const createStatusField = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/fields", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_field_status_preview_smoke",
+            idempotencyKey: "idem_field_status_preview_smoke",
+            payload: {
+              config: {
+                options: [
+                  { id: "open", label: "Open", semantic: "todo" },
+                  { id: "qualified", label: "Qualified", semantic: "done" }
+                ]
+              },
+              fieldId: "fld_status",
+              fieldKey: "status",
+              fieldType: "status.semantic",
+              label: "Status"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createStatusField.status).toBe(200);
+
+    const previewResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "When status changes to Qualified, notify sales ops.",
+            fieldIds: ["fld_status"],
+            name: "Qualified follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_status_qualified_smoke"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 46,
+          principalId: "usr_owner",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(previewResponse.status).toBe(200);
+    expect(
+      (await previewResponse.json()) as {
+        output: {
+          command: {
+            payload: {
+              definition: {
+                conditions: unknown[];
+              };
+            };
+          };
+          kind: string;
+          proposal: {
+            conditions: unknown[];
+          };
+        };
+      }
+    ).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.fields.status.fieldId"
+                },
+                fieldType: {
+                  path: "row.fields.status.fieldType"
+                },
+                value: {
+                  path: "row.fields.status.value"
+                },
+                left: {
+                  path: "row.fields.status.value"
+                },
+                right: "qualified"
+              },
+              operatorId: "equals"
+            }
+          ]
+        },
+        command: {
+          payload: {
+            definition: {
+              conditions: [
+                {
+                  input: {
+                    fieldId: {
+                      path: "row.fields.status.fieldId"
+                    },
+                    fieldType: {
+                      path: "row.fields.status.fieldType"
+                    },
+                    value: {
+                      path: "row.fields.status.value"
+                    },
+                    left: {
+                      path: "row.fields.status.value"
+                    },
+                    right: "qualified"
+                  },
+                  operatorId: "equals"
+                }
+              ]
+            }
+          }
+        }
+      }
+    });
+  });
+
   it("proves owner-filtered saved-view query parity through the smoke runtime path", async () => {
     const { db, env } = createEnv();
 

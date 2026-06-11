@@ -1,6 +1,10 @@
 import type { CommandEnvelope } from "../../../../src/core/commands/types";
 import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
+import {
+  normalizeWorkflowAuthoringMetadata
+} from "../../../../src/core/workflows/binding-metadata";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
+import { validateWorkflowConditionBindings } from "../../../../src/core/workflows/authoring";
 import { validateDomainCommand } from "../../../../src/core/commands/domain";
 import {
   buildAcceptedEvent,
@@ -112,13 +116,29 @@ function replayProjectionFromEvents(
 }
 
 export function executeCommandFixture(fixture: CommandFixture): CommandTranscriptResult {
+  const workflowAuthoringMetadata = normalizeWorkflowAuthoringMetadata(
+    fixture.seedState.workflowAuthoringMetadata ?? null
+  );
+  const workflowBindingDiagnostics =
+    (fixture.command.commandType === "workflow.create" ||
+      fixture.command.commandType === "workflow.update") &&
+    typeof fixture.command.payload.definition === "object" &&
+    fixture.command.payload.definition !== null &&
+    !Array.isArray(fixture.command.payload.definition) &&
+    Object.keys(workflowAuthoringMetadata.bindings).length > 0
+      ? validateWorkflowConditionBindings(
+          fixture.command.payload.definition,
+          workflowAuthoringMetadata
+        )
+      : [];
   const diagnostics = [
     ...validateCommand(fixture.command),
     ...validateDomainCommand(
       fixture.command,
       fieldTypeRegistry,
       workflowOperatorRegistry
-    )
+    ),
+    ...workflowBindingDiagnostics
   ];
 
   if (diagnostics.length > 0) {

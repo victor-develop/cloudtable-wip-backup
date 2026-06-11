@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type { CommandEnvelope } from "../../../../src/core/commands/types";
+import type { WorkflowAuthoringMetadata } from "../../../../src/core/workflows/types";
 import { parseCanonicalJson } from "../serializers/canonical-json";
 
 export type CommandFixtureMeta = {
@@ -48,6 +49,7 @@ export type CommandFixtureSeedState = {
   permission?: PermissionExpectation;
   persistence?: CommandFixturePersistenceSeed;
   receipts?: SeedReceipt[];
+  workflowAuthoringMetadata?: WorkflowAuthoringMetadata;
 };
 
 export type CommandProjection = {

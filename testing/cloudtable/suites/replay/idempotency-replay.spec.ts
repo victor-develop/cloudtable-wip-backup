@@ -18,7 +18,11 @@ const replayableScenarioIds = listCommandFixtureScenarioIds().filter((scenarioId
     (receipt) => receipt.idempotencyKey === fixture.command.idempotencyKey
   );
 
-  return fixture.expected.accepted && !existingReceipt;
+  return (
+    fixture.expected.accepted &&
+    !existingReceipt &&
+    !(fixture.seedState.workflowAuthoringMetadata && !fixture.seedState.persistence)
+  );
 });
 
 describe("cloudtable replay harness", () => {

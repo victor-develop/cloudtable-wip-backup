@@ -1,0 +1,58 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_workflow_create_status_binding_mismatch_001",
+  "commandType": "workflow.create",
+  "idempotencyKey": "idem_workflow_create_status_binding_mismatch_001",
+  "payload": {
+    "definition": {
+      "actions": [
+        {
+          "input": {},
+          "operatorId": "set_cell"
+        }
+      ],
+      "conditions": [
+        {
+          "input": {
+            "fieldId": "fld_status_secondary",
+            "fieldType": {
+              "path": "row.fields.status.fieldType"
+            },
+            "left": {
+              "path": "row.fields.status.value"
+            },
+            "right": "qualified"
+          },
+          "operatorId": "equals"
+        }
+      ],
+      "metadata": {
+        "status": "draft",
+        "tableId": "tbl_accounts"
+      },
+      "principal": {
+        "policyRevision": 7,
+        "principalId": "wf_service",
+        "schemaEpoch": 1,
+        "scopeHash": "scope:wf:accounts"
+      },
+      "trigger": {
+        "match": {
+          "tableId": "tbl_accounts"
+        },
+        "operatorId": "record_updated"
+      },
+      "workflowId": "wf_status_qualified_guard_mismatch"
+    },
+    "name": "Qualified status mismatch guard",
+    "tableId": "tbl_accounts",
+    "workflowId": "wf_status_qualified_guard_mismatch",
+    "workflowKey": "status-qualified-guard-mismatch"
+  },
+  "scope": "workflow",
+  "tableId": "tbl_accounts",
+  "workspaceId": "ws_demo"
+}
