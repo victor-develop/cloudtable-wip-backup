@@ -106,6 +106,8 @@ function createEnv(): {
   env: CloudTableEnv;
   eventFanoutQueue: FakeQueue;
   projectionQueue: FakeQueue;
+  workflowDispatchQueue: FakeQueue;
+  workflowStepQueue: FakeQueue;
 } {
   const db = new SqliteD1Database();
   seedWorkspace(db, "ws_1");
@@ -152,7 +154,9 @@ function createEnv(): {
     db,
     env,
     eventFanoutQueue,
-    projectionQueue
+    projectionQueue,
+    workflowDispatchQueue: workflowQueue,
+    workflowStepQueue
   };
 }
 
@@ -186,6 +190,52 @@ function createScheduledController(scheduledTime: number): ScheduledController {
     noRetry() {},
     scheduledTime
   } as ScheduledController;
+}
+
+function insertPermissionSnapshot(
+  db: SqliteD1Database,
+  input: {
+    commandTypes: string[];
+    fields: Record<string, unknown>;
+    policyRevision?: number;
+    principalId: string;
+    scopeHash: string;
+    snapshotId?: string;
+  }
+): void {
+  const policyRevision = input.policyRevision ?? 7;
+  const snapshotId = input.snapshotId ?? `snap_${input.principalId}_${policyRevision}`;
+
+  db.inner
+    .prepare(
+      `INSERT INTO permission_snapshots (
+         id,
+         workspace_id,
+         principal_id,
+         policy_revision,
+         scope_hash,
+         snapshot_json,
+         created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      snapshotId,
+      "ws_1",
+      input.principalId,
+      policyRevision,
+      input.scopeHash,
+      JSON.stringify({
+        snapshotId,
+        workspaceId: "ws_1",
+        principalId: input.principalId,
+        policyRevision,
+        schemaEpoch: 0,
+        scopeHash: input.scopeHash,
+        commandTypes: input.commandTypes,
+        fields: input.fields
+      }),
+      "2026-06-06T00:00:00.000Z"
+    );
 }
 
 describe("cloudtable runtime smoke", () => {
@@ -324,6 +374,301 @@ describe("cloudtable runtime smoke", () => {
     expect(readBody.projection.fields.name).toBe("Acme");
     expect(readBody.projectionVersion).toBe(2);
     expect(readBody.record.record_revision).toBe(1);
+  });
+
+  it("proves the canonical row.owner workflow contract through the smoke runtime path", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    const ownerFieldAccess = {
+      agent: true,
+      fieldId: "fld_owner",
+      fieldType: "principal.user",
+      read: "visible",
+      workflow: true,
+      write: true
+    };
+    const sourceFieldAccess = {
+      agent: true,
+      fieldId: "fld_source",
+      fieldType: "text.single_line",
+      read: "visible",
+      workflow: true,
+      write: true
+    };
+
+    insertPermissionSnapshot(db, {
+      commandTypes: ["workflow.create", "workflow.publish"],
+      fields: {
+        fld_owner: ownerFieldAccess,
+        fld_source: sourceFieldAccess
+      },
+      policyRevision: 44,
+      principalId: "usr_owner",
+      scopeHash: "scope:table:tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["notification.emit"],
+      fields: {
+        fld_owner: ownerFieldAccess,
+        fld_source: sourceFieldAccess
+      },
+      principalId: "wf_service",
+      scopeHash: "scope:wf:owner-smoke"
+    });
+
+    const createOwnerField = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/fields", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_field_owner_smoke",
+            idempotencyKey: "idem_field_owner_smoke",
+            payload: {
+              config: {
+                rowOwner: true
+              },
+              fieldId: "fld_owner",
+              fieldKey: "owner",
+              fieldType: "principal.user",
+              label: "Owner"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createOwnerField.status).toBe(200);
+
+    const createSourceField = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/fields", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_field_source_smoke",
+            idempotencyKey: "idem_field_source_smoke",
+            payload: {
+              fieldId: "fld_source",
+              fieldKey: "source",
+              fieldType: "text.single_line",
+              label: "Source"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createSourceField.status).toBe(200);
+
+    const schemaResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/schema?workspaceId=ws_1&principalId=usr_owner&permissionScopeHash=scope:table:tbl_1&policyRevision=44"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(schemaResponse.status).toBe(200);
+    const schemaBody = (await schemaResponse.json()) as {
+      workflow: {
+        bindings: Record<string, { fieldId: string; template: { valuePath: string } }>;
+      };
+    };
+    expect(schemaBody.workflow.bindings["row.owner"]).toMatchObject({
+      fieldId: "fld_owner",
+      template: {
+        valuePath: "row.owner.value"
+      }
+    });
+
+    const createRecord = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_record_owner_smoke",
+            idempotencyKey: "idem_record_owner_smoke",
+            payload: {
+              recordId: "rec_owner_smoke"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createRecord.status).toBe(200);
+
+    const createWorkflow = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflows", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_workflow_owner_smoke",
+            idempotencyKey: "idem_workflow_owner_smoke",
+            payload: {
+              definition: {
+                actions: [
+                  {
+                    input: {
+                      channel: "activity",
+                      details: {
+                        owner: {
+                          path: "row.owner.value"
+                        },
+                        recordId: {
+                          path: "row.recordId"
+                        }
+                      },
+                      message: "Owner workflow step completed."
+                    },
+                    operatorId: "emit_notification_event"
+                  }
+                ],
+                conditions: [
+                  {
+                    input: {
+                      left: {
+                        path: "row.owner.value"
+                      },
+                      right: ["usr_owner"]
+                    },
+                    operatorId: "equals"
+                  }
+                ],
+                principal: {
+                  policyRevision: 7,
+                  principalId: "wf_service",
+                  schemaEpoch: 0,
+                  scopeHash: "scope:wf:owner-smoke"
+                },
+                trigger: {
+                  match: {
+                    fieldId: "fld_source",
+                    fromWorkflow: false,
+                    tableId: "tbl_1"
+                  },
+                  operatorId: "field_changed"
+                },
+                workflowId: "wf_owner_smoke"
+              },
+              name: "Owner Smoke",
+              workflowId: "wf_owner_smoke",
+              workflowKey: "owner-smoke"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createWorkflow.status).toBe(200);
+    expect((await createWorkflow.json()) as { result: { accepted: boolean; diagnostics: string[] } }).toMatchObject({
+      result: {
+        accepted: true,
+        diagnostics: []
+      }
+    });
+
+    const publishWorkflow = await handleFetch(
+      new Request("https://example.test/v1/workflows/wf_owner_smoke/publish", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_workflow_owner_smoke_publish",
+            idempotencyKey: "idem_workflow_owner_smoke_publish"
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(publishWorkflow.status).toBe(200);
+    expect((await publishWorkflow.json()) as { result: { accepted: boolean; diagnostics: string[] } }).toMatchObject({
+      result: {
+        accepted: true,
+        diagnostics: []
+      }
+    });
+
+    eventFanoutQueue.sent.length = 0;
+
+    const setSource = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_owner_smoke/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_owner_smoke_trigger",
+            idempotencyKey: "idem_owner_smoke_trigger",
+            payload: {
+              fieldType: "text.single_line",
+              value: "crm"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(setSource.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(
+      createBatch([workflowDispatchQueue.sent[0]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+    await handleQueueBatch(
+      createBatch([workflowStepQueue.sent[0]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    const workflowRun = await db
+      .prepare(
+        `SELECT id
+         FROM workflow_runs
+         WHERE workflow_id = ?
+         ORDER BY id ASC
+         LIMIT 1`
+      )
+      .bind("wf_owner_smoke")
+      .first<{ id: string }>();
+    const notificationCommand = await db
+      .prepare(
+        `SELECT payload_json
+         FROM event_ledger
+         WHERE command_id = ?`
+      )
+      .bind(`${workflowRun?.id}:action:0`)
+      .first<{ payload_json: string }>();
+
+    expect(JSON.parse(notificationCommand?.payload_json ?? "{}")).toMatchObject({
+      channel: "activity",
+      details: {
+        owner: ["usr_owner"],
+        recordId: "rec_owner_smoke"
+      },
+      message: "Owner workflow step completed."
+    });
   });
 
   it("fans committed events into projection maintenance queue work", async () => {
