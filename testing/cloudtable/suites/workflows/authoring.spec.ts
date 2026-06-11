@@ -8,13 +8,17 @@ import {
 } from "../../../../src/core/workflows/authoring";
 import { serializeWorkflowOperatorManifest } from "../../../../src/core/workflows/manifest";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
+import type { WorkflowConditionManifest } from "../../../../src/core/workflows/types";
 
 const fieldTypeRegistry = createFieldTypeRegistry();
 const workflowOperatorRegistry = createWorkflowOperatorRegistry();
 
-function supportedOperators(operatorIds: readonly string[]) {
-  return operatorIds.map((operatorId) =>
-    serializeWorkflowOperatorManifest(workflowOperatorRegistry.require(operatorId))
+function supportedOperators(operatorIds: readonly string[]): WorkflowConditionManifest[] {
+  return operatorIds.map(
+    (operatorId) =>
+      serializeWorkflowOperatorManifest(
+        workflowOperatorRegistry.require(operatorId)
+      ) as WorkflowConditionManifest
   );
 }
 
@@ -240,6 +244,82 @@ describe("workflow authoring", () => {
         operatorId: "equals",
         referencedBindingNames: ["row.fields.status"],
         resolvedBindings: [metadata.bindings["row.fields.status"]]
+      }
+    ]);
+  });
+
+  it("resolves canonical aliases from binding metadata instead of hard-coded row.owner handling", () => {
+    const metadata = {
+      bindings: {
+        "row.canonical.assignee": {
+          aliasOf: "row.fields.assignee",
+          binding: "row.canonical.assignee",
+          fieldId: "fld_assignee",
+          fieldKey: "assignee",
+          fieldType: "principal.user",
+          isCanonical: true,
+          proposalHints: [],
+          supportedOperatorIds: ["is_not_empty"],
+          supportedOperators: supportedOperators(["is_not_empty"]),
+          template: {
+            fieldIdPath: "row.canonical.assignee.fieldId",
+            fieldTypePath: "row.canonical.assignee.fieldType",
+            valuePath: "row.canonical.assignee.value"
+          }
+        },
+        "row.fields.assignee": {
+          binding: "row.fields.assignee",
+          fieldId: "fld_assignee",
+          fieldKey: "assignee",
+          fieldType: "principal.user",
+          proposalHints: [],
+          supportedOperatorIds: ["is_not_empty"],
+          supportedOperators: supportedOperators(["is_not_empty"]),
+          template: {
+            fieldIdPath: "row.fields.assignee.fieldId",
+            fieldTypePath: "row.fields.assignee.fieldType",
+            valuePath: "row.fields.assignee.value"
+          }
+        }
+      }
+    };
+
+    expect(
+      inspectWorkflowConditionsFromMetadata(
+        {
+          actions: [],
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.canonical.assignee.fieldId"
+                },
+                fieldType: {
+                  path: "row.canonical.assignee.fieldType"
+                },
+                value: {
+                  path: "row.canonical.assignee.value"
+                }
+              },
+              operatorId: "is_not_empty"
+            }
+          ],
+          trigger: {
+            operatorId: "record_updated"
+          },
+          workflowId: "wf_canonical_alias_metadata"
+        },
+        metadata,
+        workflowOperatorRegistry
+      )
+    ).toEqual([
+      {
+        diagnostics: [],
+        index: 0,
+        operator: supportedOperators(["is_not_empty"])[0],
+        operatorId: "is_not_empty",
+        referencedBindingNames: ["row.canonical.assignee"],
+        resolvedBindings: [metadata.bindings["row.canonical.assignee"]]
       }
     ]);
   });

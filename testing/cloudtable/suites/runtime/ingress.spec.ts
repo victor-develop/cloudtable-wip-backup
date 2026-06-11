@@ -9252,10 +9252,12 @@ describe("cloudtable runtime ingress", () => {
     expect(workspaceResponse.status).toBe(200);
 
     const expectedRowOwner = {
+      aliasOf: "row.fields.owner",
       binding: "row.owner",
       fieldId: "fld_owner",
       fieldKey: "owner",
       fieldType: "principal.user",
+      isCanonical: true,
       proposalHints: [
         {
           operatorId: "is_empty",

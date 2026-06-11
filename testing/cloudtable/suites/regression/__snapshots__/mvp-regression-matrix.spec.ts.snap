@@ -2587,10 +2587,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
             }
           },
           "row.owner": {
+            "aliasOf": "row.fields.owner",
             "binding": "row.owner",
             "fieldId": "fld_owner",
             "fieldKey": "owner",
             "fieldType": "principal.user",
+            "isCanonical": true,
             "proposalHints": [
               {
                 "matchFieldPhrases": [
@@ -3043,10 +3045,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
             ],
             "resolvedBindings": [
               {
+                "aliasOf": "row.fields.owner",
                 "binding": "row.owner",
                 "fieldId": "fld_owner",
                 "fieldKey": "owner",
                 "fieldType": "principal.user",
+                "isCanonical": true,
                 "proposalHints": [
                   {
                     "matchFieldPhrases": [
@@ -4086,10 +4090,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
             }
           },
           "row.owner": {
+            "aliasOf": "row.fields.owner",
             "binding": "row.owner",
             "fieldId": "fld_owner",
             "fieldKey": "owner",
             "fieldType": "principal.user",
+            "isCanonical": true,
             "proposalHints": [
               {
                 "matchFieldPhrases": [
@@ -5431,10 +5437,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
               }
             },
             "row.owner": {
+              "aliasOf": "row.fields.owner",
               "binding": "row.owner",
               "fieldId": "fld_owner",
               "fieldKey": "owner",
               "fieldType": "principal.user",
+              "isCanonical": true,
               "proposalHints": [
                 {
                   "matchFieldPhrases": [

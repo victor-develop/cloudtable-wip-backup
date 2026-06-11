@@ -107,6 +107,7 @@ function resolveBindingsByFieldId(
     return referencedBindingNames;
   }
 
+  const conditionPaths = collectConditionTemplatePaths(condition);
   const bindingNames = new Set(referencedBindingNames);
   const candidates = Object.values(authoringMetadata.bindings).filter(
     (metadata) => metadata.fieldId === condition.input.fieldId
@@ -123,14 +124,21 @@ function resolveBindingsByFieldId(
     return Array.from(bindingNames).sort();
   }
 
-  const ownerAliasReferenced = collectConditionTemplatePaths(condition).some((path) =>
-    path.startsWith("row.owner")
+  const canonicalAlias = candidates.find(
+    (candidate) =>
+      candidate.aliasOf &&
+      candidate.isCanonical === true &&
+      conditionPaths.some(
+        (path) =>
+          path === candidate.binding ||
+          path === candidate.template.fieldIdPath ||
+          path === candidate.template.fieldTypePath ||
+          path === candidate.template.valuePath ||
+          path.startsWith(`${candidate.binding}.`)
+      )
   );
-  if (ownerAliasReferenced) {
-    const canonicalOwner = candidates.find((candidate) => candidate.binding === "row.owner");
-    if (canonicalOwner) {
-      return [canonicalOwner.binding];
-    }
+  if (canonicalAlias) {
+    return [canonicalAlias.binding];
   }
 
   const genericFieldBinding = candidates.find((candidate) => candidate.binding.startsWith("row.fields."));

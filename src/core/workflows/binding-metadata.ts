@@ -72,10 +72,12 @@ function buildBindingMetadata({
   });
 
   return {
+    aliasOf,
     binding,
     fieldId: field.fieldId,
     fieldKey: field.fieldKey,
     fieldType: field.fieldType,
+    isCanonical,
     proposalHints: [...proposalHints],
     supportedOperatorIds: [...supportedOperatorIds],
     supportedOperators,
@@ -141,9 +143,11 @@ function normalizeBindingMetadata(
   }
 
   const binding = asString(value.binding) ?? bindingName;
+  const aliasOf = asString(value.aliasOf) ?? undefined;
   const fieldId = asString(value.fieldId);
   const fieldKey = asString(value.fieldKey);
   const fieldType = asString(value.fieldType);
+  const isCanonical = value.isCanonical === true ? true : undefined;
   const template = isRecord(value.template) ? value.template : null;
   const fieldIdPath = asString(template?.fieldIdPath);
   const fieldTypePath = asString(template?.fieldTypePath);
@@ -184,10 +188,12 @@ function normalizeBindingMetadata(
     : [];
 
   return {
+    aliasOf,
     binding,
     fieldId,
     fieldKey,
     fieldType,
+    isCanonical,
     proposalHints,
     supportedOperatorIds,
     supportedOperators,

@@ -240,10 +240,12 @@ export type WorkflowOperatorManifest =
   | WorkflowActionManifest;
 
 export type WorkflowConditionBindingMetadata = {
+  aliasOf?: string;
   binding: string;
   fieldId: string;
   fieldKey: string;
   fieldType: string;
+  isCanonical?: boolean;
   proposalHints: FieldWorkflowProposalHint[];
   supportedOperatorIds: string[];
   supportedOperators: WorkflowConditionManifest[];
