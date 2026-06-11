@@ -2427,19 +2427,9 @@ describe("workflow queue consumer", () => {
     });
   });
 
-  it("delivers canonical row.owner bindings through published workflow action delivery", async () => {
+  it("delivers generic row.fields bindings through published workflow action delivery", async () => {
     const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
 
-    insertField(db, {
-      fieldId: "fld_owner",
-      fieldKey: "owner",
-      fieldType: "principal.user",
-      label: "Owner",
-      tableId: "tbl_1",
-      config: {
-        rowOwner: true
-      }
-    });
     insertField(db, {
       fieldId: "fld_source",
       fieldKey: "source",
@@ -2447,13 +2437,26 @@ describe("workflow queue consumer", () => {
       label: "Source",
       tableId: "tbl_1"
     });
+    insertField(db, {
+      config: {
+        options: [
+          { id: "open", label: "Open", semantic: "todo" },
+          { id: "qualified", label: "Qualified", semantic: "done" }
+        ]
+      },
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "status.semantic",
+      label: "Status",
+      tableId: "tbl_1"
+    });
     insertRecordProjection(db);
     insertCellCurrent(db, {
-      fieldId: "fld_owner",
-      fieldType: "principal.user",
+      fieldId: "fld_status",
+      fieldType: "status.semantic",
       recordId: "rec_1",
       tableId: "tbl_1",
-      value: ["usr_owner"]
+      value: "open"
     });
     insertPermissionSnapshot(db, {
       commandTypes: ["notification.emit"]
@@ -2465,14 +2468,14 @@ describe("workflow queue consumer", () => {
           input: {
             channel: "activity",
             details: {
-              owner: {
-                path: "row.owner.value"
+              recordStatus: {
+                path: "row.fields.status.value"
               },
               recordId: {
                 path: "row.recordId"
               }
             },
-            message: "Owner workflow step completed."
+            message: "Status workflow step completed."
           }
         }
       ],
@@ -2481,9 +2484,9 @@ describe("workflow queue consumer", () => {
           operatorId: "equals",
           input: {
             left: {
-              path: "row.owner.value"
+              path: "row.fields.status.value"
             },
-            right: ["usr_owner"]
+            right: "open"
           }
         }
       ]
@@ -2546,10 +2549,10 @@ describe("workflow queue consumer", () => {
     expect(JSON.parse(notificationCommand?.payload_json ?? "{}")).toMatchObject({
       channel: "activity",
       details: {
-        owner: ["usr_owner"],
+        recordStatus: "open",
         recordId: "rec_1"
       },
-      message: "Owner workflow step completed."
+      message: "Status workflow step completed."
     });
   });
 

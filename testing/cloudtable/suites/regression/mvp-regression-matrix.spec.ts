@@ -2657,29 +2657,32 @@ describe("cloudtable MVP regression matrix", () => {
         createRuntimeEnv();
 
       insertField(db, {
-        fieldId: "fld_owner",
-        fieldKey: "owner",
-        fieldType: "principal.user",
-        label: "Owner",
-        tableId: "tbl_1",
-        config: {
-          rowOwner: true
-        }
-      });
-      insertField(db, {
         fieldId: "fld_source",
         fieldKey: "source",
         fieldType: "text.single_line",
         label: "Source",
         tableId: "tbl_1"
       });
+      insertField(db, {
+        config: {
+          options: [
+            { id: "open", label: "Open", semantic: "todo" },
+            { id: "qualified", label: "Qualified", semantic: "done" }
+          ]
+        },
+        fieldId: "fld_status",
+        fieldKey: "status",
+        fieldType: "status.semantic",
+        label: "Status",
+        tableId: "tbl_1"
+      });
       insertRuntimeRecordProjection(db);
       insertRuntimeCellCurrent(db, {
-        fieldId: "fld_owner",
-        fieldType: "principal.user",
+        fieldId: "fld_status",
+        fieldType: "status.semantic",
         recordId: "rec_1",
         tableId: "tbl_1",
-        value: ["usr_owner"]
+        value: "open"
       });
       insertRuntimePermissionSnapshot(db, {
         commandTypes: ["notification.emit"]
@@ -2691,14 +2694,14 @@ describe("cloudtable MVP regression matrix", () => {
             input: {
               channel: "activity",
               details: {
-                owner: {
-                  path: "row.owner.value"
+                recordStatus: {
+                  path: "row.fields.status.value"
                 },
                 recordId: {
                   path: "row.recordId"
                 }
               },
-              message: "Owner workflow step completed."
+              message: "Status workflow step completed."
             }
           }
         ],
@@ -2707,9 +2710,9 @@ describe("cloudtable MVP regression matrix", () => {
             operatorId: "equals",
             input: {
               left: {
-                path: "row.owner.value"
+                path: "row.fields.status.value"
               },
-              right: ["usr_owner"]
+              right: "open"
             }
           }
         ]
@@ -2790,7 +2793,7 @@ describe("cloudtable MVP regression matrix", () => {
           workflowStep
         },
         category: "workflow_execution",
-        scenario: "workflow_row_owner_notification_delivery"
+        scenario: "workflow_field_binding_notification_delivery"
       });
     }
 

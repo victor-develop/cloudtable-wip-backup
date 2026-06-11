@@ -1302,13 +1302,11 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
       "notificationCommand": {
         "channel": "activity",
         "details": {
-          "owner": [
-            "usr_owner"
-          ],
-          "recordId": "rec_1"
+          "recordId": "rec_1",
+          "recordStatus": "open"
         },
         "fieldType": "text.single_line",
-        "message": "Owner workflow step completed.",
+        "message": "Status workflow step completed.",
         "triggerEventId": "00000000-0000-4000-8000-000000000201",
         "workflowId": "wf_status_sync",
         "workflowRunId": "wfr:wf_status_sync:00000000-0000-4000-8000-000000000201",
@@ -1392,7 +1390,7 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
       }
     },
     "category": "workflow_execution",
-    "scenario": "workflow_row_owner_notification_delivery"
+    "scenario": "workflow_field_binding_notification_delivery"
   },
   {
     "actual": {
