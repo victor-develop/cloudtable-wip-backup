@@ -724,15 +724,85 @@ describe("cloudtable runtime smoke", () => {
         >;
       };
       workflow: {
-        bindings: Record<string, { fieldId: string; template: { valuePath: string } }>;
+        bindings: Record<
+          string,
+          {
+            aliasOf?: string;
+            binding: string;
+            fieldId: string;
+            fieldKey: string;
+            fieldType: string;
+            isCanonical?: boolean;
+            proposalHints: Array<Record<string, unknown>>;
+            supportedOperatorIds: string[];
+            supportedOperators: Record<string, unknown>[];
+            template: {
+              fieldIdPath: string;
+              fieldTypePath: string;
+              valuePath: string;
+            };
+          }
+        >;
       };
     };
-    expect(schemaBody.workflow.bindings["row.owner"]).toMatchObject({
+    const expectedOwnerOperators = supportedConditionOperatorManifests([
+      "equals",
+      "not_equals",
+      "is_empty",
+      "is_not_empty"
+    ]);
+    const expectedRowOwnerBinding = {
+      aliasOf: "row.fields.owner",
+      binding: "row.owner",
       fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      isCanonical: true,
+      proposalHints: [
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["unassigned"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["assigned"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: expectedOwnerOperators,
       template: {
+        fieldIdPath: "row.owner.fieldId",
+        fieldTypePath: "row.owner.fieldType",
         valuePath: "row.owner.value"
       }
-    });
+    };
+    const expectedOwnerFieldBinding = {
+      binding: "row.fields.owner",
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      proposalHints: [
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: expectedOwnerOperators,
+      template: {
+        fieldIdPath: "row.fields.owner.fieldId",
+        fieldTypePath: "row.fields.owner.fieldType",
+        valuePath: "row.fields.owner.value"
+      }
+    };
+    expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwnerBinding);
+    expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
     expect(schemaBody.view.fields["fld_owner"]).toEqual({
       capabilities: {
         supportsFiltering: true,
