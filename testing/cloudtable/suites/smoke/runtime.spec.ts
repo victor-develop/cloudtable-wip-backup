@@ -605,12 +605,20 @@ describe("cloudtable runtime smoke", () => {
     expect(readBody.record.record_revision).toBe(1);
   });
 
-  it("proves the canonical row.owner workflow contract through the smoke runtime path", async () => {
+  it("proves generic workflow field-binding metadata through the smoke runtime path", async () => {
     const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
 
     const ownerFieldAccess = {
       agent: true,
       fieldId: "fld_owner",
+      fieldType: "principal.user",
+      read: "visible",
+      workflow: true,
+      write: true
+    };
+    const assigneeFieldAccess = {
+      agent: true,
+      fieldId: "fld_assignee",
       fieldType: "principal.user",
       read: "visible",
       workflow: true,
@@ -624,12 +632,22 @@ describe("cloudtable runtime smoke", () => {
       workflow: true,
       write: true
     };
+    const statusFieldAccess = {
+      agent: true,
+      fieldId: "fld_status",
+      fieldType: "status.semantic",
+      read: "visible",
+      workflow: true,
+      write: true
+    };
 
     insertPermissionSnapshot(db, {
       commandTypes: ["workflow.create", "workflow.publish"],
       fields: {
         fld_owner: ownerFieldAccess,
-        fld_source: sourceFieldAccess
+        fld_assignee: assigneeFieldAccess,
+        fld_source: sourceFieldAccess,
+        fld_status: statusFieldAccess
       },
       policyRevision: 44,
       principalId: "usr_owner",
@@ -639,7 +657,9 @@ describe("cloudtable runtime smoke", () => {
       commandTypes: ["notification.emit"],
       fields: {
         fld_owner: ownerFieldAccess,
-        fld_source: sourceFieldAccess
+        fld_assignee: assigneeFieldAccess,
+        fld_source: sourceFieldAccess,
+        fld_status: statusFieldAccess
       },
       principalId: "wf_service",
       scopeHash: "scope:wf:owner-smoke"
@@ -672,6 +692,30 @@ describe("cloudtable runtime smoke", () => {
     );
     expect(createOwnerField.status).toBe(200);
 
+    const createAssigneeField = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/fields", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_field_assignee_smoke",
+            idempotencyKey: "idem_field_assignee_smoke",
+            payload: {
+              fieldId: "fld_assignee",
+              fieldKey: "assignee",
+              fieldType: "principal.user",
+              label: "Assignee"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createAssigneeField.status).toBe(200);
+
     const createSourceField = await handleFetch(
       new Request("https://example.test/v1/tables/tbl_1/fields", {
         method: "POST",
@@ -695,6 +739,36 @@ describe("cloudtable runtime smoke", () => {
       {} as ExecutionContext
     );
     expect(createSourceField.status).toBe(200);
+
+    const createStatusField = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/fields", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_field_status_smoke",
+            idempotencyKey: "idem_field_status_smoke",
+            payload: {
+              config: {
+                options: [
+                  { id: "open", label: "Open", semantic: "todo" },
+                  { id: "qualified", label: "Qualified", semantic: "done" }
+                ]
+              },
+              fieldId: "fld_status",
+              fieldKey: "status",
+              fieldType: "status.semantic",
+              label: "Status"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createStatusField.status).toBe(200);
 
     const schemaResponse = await handleFetch(
       new Request(
@@ -801,8 +875,120 @@ describe("cloudtable runtime smoke", () => {
         valuePath: "row.fields.owner.value"
       }
     };
+    const expectedAssigneeFieldBinding = {
+      binding: "row.fields.assignee",
+      fieldId: "fld_assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      proposalHints: [
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: expectedOwnerOperators,
+      template: {
+        fieldIdPath: "row.fields.assignee.fieldId",
+        fieldTypePath: "row.fields.assignee.fieldType",
+        valuePath: "row.fields.assignee.value"
+      }
+    };
+    const expectedStatusOperators = supportedConditionOperatorManifests([
+      "equals",
+      "not_equals",
+      "is_empty",
+      "is_not_empty"
+    ]);
+    const expectedStatusFieldBinding = {
+      binding: "row.fields.status",
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "status.semantic",
+      proposalHints: [
+        {
+          operatorId: "equals",
+          matchPhrases: [
+            "changes to open",
+            "becomes open",
+            "is open",
+            "set to open",
+            "equals open",
+            "changes to todo",
+            "becomes todo",
+            "is todo",
+            "set to todo",
+            "equals todo"
+          ],
+          matchFieldPhrases: [
+            "{field} changes to Open",
+            "{field} becomes Open",
+            "{field} is Open",
+            "{field} set to Open",
+            "{field} equals Open"
+          ],
+          draftInput: {
+            left: {
+              path: "row.fields.status.value"
+            },
+            right: "open"
+          }
+        },
+        {
+          operatorId: "equals",
+          matchPhrases: [
+            "changes to qualified",
+            "becomes qualified",
+            "is qualified",
+            "set to qualified",
+            "equals qualified",
+            "changes to done",
+            "becomes done",
+            "is done",
+            "set to done",
+            "equals done"
+          ],
+          matchFieldPhrases: [
+            "{field} changes to Qualified",
+            "{field} becomes Qualified",
+            "{field} is Qualified",
+            "{field} set to Qualified",
+            "{field} equals Qualified"
+          ],
+          draftInput: {
+            left: {
+              path: "row.fields.status.value"
+            },
+            right: "qualified"
+          }
+        },
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: expectedStatusOperators,
+      template: {
+        fieldIdPath: "row.fields.status.fieldId",
+        fieldTypePath: "row.fields.status.fieldType",
+        valuePath: "row.fields.status.value"
+      }
+    };
     expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwnerBinding);
     expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
+    expect(schemaBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedAssigneeFieldBinding);
+    expect(schemaBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
     expect(schemaBody.view.fields["fld_owner"]).toEqual({
       capabilities: {
         supportsFiltering: true,
@@ -819,6 +1005,24 @@ describe("cloudtable runtime smoke", () => {
         "is_empty",
         "is_not_empty"
       ]),
+      supportedSortModes: ["ascending", "descending"]
+    });
+    expect(schemaBody.view.fields["fld_assignee"]).toEqual({
+      ...schemaBody.view.fields["fld_owner"],
+      fieldId: "fld_assignee",
+      fieldKey: "assignee"
+    });
+    expect(schemaBody.view.fields["fld_status"]).toEqual({
+      capabilities: {
+        supportsFiltering: true,
+        supportsGrouping: true,
+        supportsSorting: true
+      },
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "status.semantic",
+      supportedFilterOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedFilterOperators: expectedStatusOperators,
       supportedSortModes: ["ascending", "descending"]
     });
 
@@ -843,6 +1047,28 @@ describe("cloudtable runtime smoke", () => {
     );
     expect(createRecord.status).toBe(200);
 
+    const setStatus = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_owner_smoke/cells/fld_status", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_status_smoke_seed",
+            idempotencyKey: "idem_status_smoke_seed",
+            payload: {
+              fieldType: "status.semantic",
+              value: "open"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(setStatus.status).toBe(200);
+
     const createWorkflow = await handleFetch(
       new Request("https://example.test/v1/tables/tbl_1/workflows", {
         method: "POST",
@@ -860,14 +1086,14 @@ describe("cloudtable runtime smoke", () => {
                     input: {
                       channel: "activity",
                       details: {
-                        owner: {
-                          path: "row.owner.value"
-                        },
                         recordId: {
                           path: "row.recordId"
+                        },
+                        status: {
+                          path: "row.fields.status.value"
                         }
                       },
-                      message: "Owner workflow step completed."
+                      message: "Status workflow step completed."
                     },
                     operatorId: "emit_notification_event"
                   }
@@ -876,9 +1102,9 @@ describe("cloudtable runtime smoke", () => {
                   {
                     input: {
                       left: {
-                        path: "row.owner.value"
+                        path: "row.fields.status.value"
                       },
-                      right: ["usr_owner"]
+                      right: "open"
                     },
                     operatorId: "equals"
                   }
@@ -999,10 +1225,10 @@ describe("cloudtable runtime smoke", () => {
     expect(JSON.parse(notificationCommand?.payload_json ?? "{}")).toMatchObject({
       channel: "activity",
       details: {
-        owner: ["usr_owner"],
-        recordId: "rec_owner_smoke"
+        recordId: "rec_owner_smoke",
+        status: "open"
       },
-      message: "Owner workflow step completed."
+      message: "Status workflow step completed."
     });
   });
 
@@ -1300,16 +1526,16 @@ describe("cloudtable runtime smoke", () => {
     });
   });
 
-  it("proves the canonical row.owner workflow creation through the audited execute smoke path", async () => {
+  it("proves generic workflow field-binding creation through the audited execute smoke path", async () => {
     const { db, env } = createEnv();
 
     insertPermissionSnapshot(db, {
       commandTypes: ["field.create", "workflow.create", "workflow.publish"],
       fields: {
-        fld_owner: {
+        fld_title: {
           agent: true,
-          fieldId: "fld_owner",
-          fieldType: "principal.user",
+          fieldId: "fld_title",
+          fieldType: "text.single_line",
           read: "visible",
           workflow: true,
           write: true
@@ -1320,7 +1546,7 @@ describe("cloudtable runtime smoke", () => {
       scopeHash: "scope:table:tbl_1"
     });
 
-    const createOwnerField = await handleFetch(
+    const createTitleField = await handleFetch(
       new Request("https://example.test/v1/tables/tbl_1/fields", {
         method: "POST",
         headers: {
@@ -1328,16 +1554,13 @@ describe("cloudtable runtime smoke", () => {
         },
         body: JSON.stringify(
           createRouteBody({
-            commandId: "cmd_field_owner_execute_smoke",
-            idempotencyKey: "idem_field_owner_execute_smoke",
+            commandId: "cmd_field_title_execute_smoke",
+            idempotencyKey: "idem_field_title_execute_smoke",
             payload: {
-              config: {
-                rowOwner: true
-              },
-              fieldId: "fld_owner",
-              fieldKey: "owner",
-              fieldType: "principal.user",
-              label: "Owner"
+              fieldId: "fld_title",
+              fieldKey: "title",
+              fieldType: "text.single_line",
+              label: "Title"
             }
           })
         )
@@ -1345,7 +1568,7 @@ describe("cloudtable runtime smoke", () => {
       env,
       {} as ExecutionContext
     );
-    expect(createOwnerField.status).toBe(200);
+    expect(createTitleField.status).toBe(200);
 
     const previewResponse = await handleFetch(
       new Request("https://example.test/v1/agent-tools/preview", {
@@ -1356,12 +1579,12 @@ describe("cloudtable runtime smoke", () => {
         body: JSON.stringify({
           input: {
             actionIds: ["update_record"],
-            businessRule: "Notify sales ops when the owner is assigned.",
-            fieldIds: ["fld_owner"],
-            name: "Owner assigned execute smoke",
+            businessRule: "Notify sales ops when the title is set.",
+            fieldIds: ["fld_title"],
+            name: "Title set execute smoke",
             tableId: "tbl_1",
             triggerId: "field_changed",
-            workflowId: "wf_owner_assigned_execute_smoke"
+            workflowId: "wf_title_set_execute_smoke"
           },
           permissionScopeHash: "scope:table:tbl_1",
           policyRevision: 46,
@@ -1425,20 +1648,20 @@ describe("cloudtable runtime smoke", () => {
                 {
                   input: {
                     fieldId: {
-                      path: "row.owner.fieldId"
+                      path: "row.fields.title.fieldId"
                     },
                     fieldType: {
-                      path: "row.owner.fieldType"
+                      path: "row.fields.title.fieldType"
                     },
                     value: {
-                      path: "row.owner.value"
+                      path: "row.fields.title.value"
                     }
                   },
                   operatorId: "is_not_empty"
                 }
               ]
             },
-            workflowId: "wf_owner_assigned_execute_smoke"
+            workflowId: "wf_title_set_execute_smoke"
           }
         },
         result: {
@@ -1455,7 +1678,7 @@ describe("cloudtable runtime smoke", () => {
     });
     const definitionResponse = await handleFetch(
       new Request(
-        "https://example.test/v1/workflows/wf_owner_assigned_execute_smoke/definition?workspaceId=ws_1&principalId=usr_owner_execute&permissionScopeHash=scope:table:tbl_1&policyRevision=46"
+        "https://example.test/v1/workflows/wf_title_set_execute_smoke/definition?workspaceId=ws_1&principalId=usr_owner_execute&permissionScopeHash=scope:table:tbl_1&policyRevision=46"
       ),
       env,
       {} as ExecutionContext
@@ -1467,13 +1690,13 @@ describe("cloudtable runtime smoke", () => {
           {
             input: {
               fieldId: {
-                path: "row.owner.fieldId"
+                path: "row.fields.title.fieldId"
               },
               fieldType: {
-                path: "row.owner.fieldType"
+                path: "row.fields.title.fieldType"
               },
               value: {
-                path: "row.owner.value"
+                path: "row.fields.title.value"
               }
             },
             operatorId: "is_not_empty"
@@ -1482,19 +1705,19 @@ describe("cloudtable runtime smoke", () => {
       },
       workflow: {
         bindings: {
-          "row.owner": {
-            binding: "row.owner",
-            fieldId: "fld_owner",
-            fieldType: "principal.user",
+          "row.fields.title": {
+            binding: "row.fields.title",
+            fieldId: "fld_title",
+            fieldType: "text.single_line",
             template: {
-              fieldIdPath: "row.owner.fieldId",
-              fieldTypePath: "row.owner.fieldType",
-              valuePath: "row.owner.value"
+              fieldIdPath: "row.fields.title.fieldId",
+              fieldTypePath: "row.fields.title.fieldType",
+              valuePath: "row.fields.title.value"
             }
           }
         }
       },
-      workflowId: "wf_owner_assigned_execute_smoke"
+      workflowId: "wf_title_set_execute_smoke"
     });
   });
 
