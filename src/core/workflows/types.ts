@@ -254,6 +254,15 @@ export type WorkflowConditionBindingMetadata = {
   };
 };
 
+export type WorkflowConditionInspectionMetadata = {
+  diagnostics: string[];
+  index: number;
+  operator: WorkflowConditionManifest | null;
+  operatorId: string;
+  referencedBindingNames: string[];
+  resolvedBindings: WorkflowConditionBindingMetadata[];
+};
+
 export type WorkflowAuthoringMetadata = {
   bindings: Record<string, WorkflowConditionBindingMetadata>;
 };

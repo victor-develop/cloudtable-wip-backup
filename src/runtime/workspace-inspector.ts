@@ -3,6 +3,8 @@ import type { AgentToolRegistry, WorkspaceInspection, WorkspaceInspector } from 
 import { serializeFieldTypeManifest } from "../core/field-types/manifest";
 import type { FieldTypeRegistry } from "../core/field-types/types";
 import type { JsonValue } from "../core/field-types/types";
+import { buildViewAuthoringMetadata } from "../core/views/authoring";
+import type { ViewPlanner } from "../core/views/planner";
 import { buildWorkflowAuthoringMetadataForFields } from "../core/workflows/binding-metadata";
 import { serializeWorkflowOperatorManifest } from "../core/workflows/manifest";
 import type { WorkflowOperatorRegistry } from "../core/workflows/types";
@@ -49,6 +51,7 @@ type WorkflowRow = {
 export function createWorkspaceInspector(
   db: D1Database,
   fieldTypeRegistry: FieldTypeRegistry,
+  viewPlanner: ViewPlanner,
   workflowOperatorRegistry: WorkflowOperatorRegistry,
   getAgentToolRegistry: () => AgentToolRegistry
 ): WorkspaceInspector {
@@ -99,6 +102,16 @@ export function createWorkspaceInspector(
               ),
               name: table.table_name,
               tableId: table.table_id,
+              view: buildViewAuthoringMetadata(
+                viewPlanner,
+                fieldsByTableId.get(table.table_id) ?? [],
+                (field) => ({
+                  fieldId: field.field_id,
+                  fieldKey: field.field_key,
+                  fieldType: field.field_type
+                }),
+                workflowOperatorRegistry
+              ),
               workflow: buildWorkflowAuthoringMetadataForFields(
                 fieldTypeRegistry,
                 fieldsByTableId.get(table.table_id) ?? [],

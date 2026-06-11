@@ -1,4 +1,10 @@
 import type { FieldTypeRegistry } from "../core/field-types/types";
+import { inspectWorkflowConditionsFromMetadata } from "../core/workflows/authoring";
+import type {
+  WorkflowDefinition,
+  WorkflowConditionInspectionMetadata,
+  WorkflowOperatorRegistry
+} from "../core/workflows/types";
 import type { WorkflowAuthoringMetadata } from "../core/workflows/types";
 import { readTableSchemaMetadata } from "./schema-metadata-read";
 
@@ -25,6 +31,7 @@ type WorkflowDefinitionRow = {
 };
 
 export type WorkflowDefinitionMetadata = {
+  conditionMetadata: WorkflowConditionInspectionMetadata[];
   currentVersion: number;
   definition: Record<string, unknown>;
   effectiveVersion: number;
@@ -73,6 +80,23 @@ function normalizeWorkflowDefinition(definition: unknown): Record<string, unknow
   }
 
   return isRecord(definition.definition) ? definition.definition : definition;
+}
+
+function normalizeDefinitionForConditionInspection(
+  definition: Record<string, unknown>,
+  workflowId: string
+): WorkflowDefinition {
+  return {
+    actions: Array.isArray(definition.actions) ? (definition.actions as WorkflowDefinition["actions"]) : [],
+    conditions: Array.isArray(definition.conditions)
+      ? (definition.conditions as WorkflowDefinition["conditions"])
+      : [],
+    trigger:
+      isRecord(definition.trigger) && typeof definition.trigger.operatorId === "string"
+        ? (definition.trigger as WorkflowDefinition["trigger"])
+        : { operatorId: "" },
+    workflowId: typeof definition.workflowId === "string" ? definition.workflowId : workflowId
+  };
 }
 
 export function readWorkflowTriggerTableId(definition: unknown): string | null {
@@ -162,6 +186,7 @@ async function readLatestPublishedWorkflowRow(
 export async function readWorkflowDefinitionMetadata(
   db: D1Database,
   fieldTypeRegistry: FieldTypeRegistry | undefined,
+  workflowOperatorRegistry: WorkflowOperatorRegistry | undefined,
   workspaceId: string,
   workflowId: string
 ): Promise<WorkflowDefinitionMetadata | null> {
@@ -206,13 +231,21 @@ export async function readWorkflowDefinitionMetadata(
   const triggerTableId = readWorkflowTriggerTableId(parsedDefinition);
   const tableMetadata =
     triggerTableId && fieldTypeRegistry
-      ? await readTableSchemaMetadata(db, fieldTypeRegistry, {
+      ? await readTableSchemaMetadata(db, fieldTypeRegistry, undefined, undefined, {
           tableId: triggerTableId,
           workspaceId
         })
       : null;
 
   return {
+    conditionMetadata:
+      workflowOperatorRegistry == null
+        ? []
+        : inspectWorkflowConditionsFromMetadata(
+            normalizeDefinitionForConditionInspection(definition, workflowId),
+            tableMetadata?.workflow ?? { bindings: {} },
+            workflowOperatorRegistry
+          ),
     currentVersion: row.current_version ?? 0,
     definition,
     effectiveVersion: row.version ?? row.current_version ?? 0,

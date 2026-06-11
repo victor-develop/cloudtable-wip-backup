@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
+import { buildWorkflowAuthoringMetadata, normalizeWorkflowAuthoringMetadata } from "../../../../src/core/workflows/binding-metadata";
 import {
-  buildWorkflowAuthoringMetadata,
-  normalizeWorkflowAuthoringMetadata
-} from "../../../../src/core/workflows/binding-metadata";
-import { draftWorkflowConditionsFromMetadata } from "../../../../src/core/workflows/authoring";
+  draftWorkflowConditionsFromMetadata,
+  inspectWorkflowConditionsFromMetadata
+} from "../../../../src/core/workflows/authoring";
 import { serializeWorkflowOperatorManifest } from "../../../../src/core/workflows/manifest";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
 
@@ -159,6 +159,87 @@ describe("workflow authoring", () => {
           right: "qualified"
         },
         operatorId: "equals"
+      }
+    ]);
+  });
+
+  it("inspects saved conditions through canonical binding and operator metadata", () => {
+    const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {
+          rowOwner: true
+        },
+        fieldId: "fld_owner",
+        fieldKey: "owner",
+        fieldType: "principal.user"
+      },
+      {
+        config: {},
+        fieldId: "fld_status",
+        fieldKey: "status",
+        fieldType: "status.semantic"
+      }
+    ]);
+
+    expect(
+      inspectWorkflowConditionsFromMetadata(
+        {
+          actions: [],
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.owner.fieldId"
+                },
+                fieldType: {
+                  path: "row.owner.fieldType"
+                },
+                value: {
+                  path: "row.owner.value"
+                }
+              },
+              operatorId: "is_not_empty"
+            },
+            {
+              input: {
+                fieldId: {
+                  path: "row.fields.status.fieldId"
+                },
+                fieldType: {
+                  path: "row.fields.status.fieldType"
+                },
+                left: {
+                  path: "row.fields.status.value"
+                },
+                right: "qualified"
+              },
+              operatorId: "equals"
+            }
+          ],
+          trigger: {
+            operatorId: "record_updated"
+          },
+          workflowId: "wf_condition_metadata"
+        },
+        metadata,
+        workflowOperatorRegistry
+      )
+    ).toEqual([
+      {
+        diagnostics: [],
+        index: 0,
+        operator: supportedOperators(["is_not_empty"])[0],
+        operatorId: "is_not_empty",
+        referencedBindingNames: ["row.owner"],
+        resolvedBindings: [metadata.bindings["row.owner"]]
+      },
+      {
+        diagnostics: [],
+        index: 1,
+        operator: supportedOperators(["equals"])[0],
+        operatorId: "equals",
+        referencedBindingNames: ["row.fields.status"],
+        resolvedBindings: [metadata.bindings["row.fields.status"]]
       }
     ]);
   });

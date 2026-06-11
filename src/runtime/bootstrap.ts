@@ -212,12 +212,20 @@ function createTableSchemaInspector(
   runtime: {
     fieldTypeRegistry: ReturnType<typeof createFieldTypeRegistry>;
     permissionEngine: ReturnType<typeof createPermissionEngine>;
+    viewPlanner: ReturnType<typeof createViewPlanner>;
+    workflowOperatorRegistry: ReturnType<typeof createWorkflowOperatorRegistry>;
   },
   snapshot?: EffectivePermissionSnapshot
 ) {
   return {
     async read(input: { tableId: string; workspaceId: string }) {
-      const detail = await readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, input);
+      const detail = await readTableSchemaMetadata(
+        env.DB,
+        runtime.fieldTypeRegistry,
+        runtime.viewPlanner,
+        runtime.workflowOperatorRegistry,
+        input
+      );
       if (!detail || !snapshot) {
         return detail;
       }
@@ -322,6 +330,7 @@ function createWorkflowDefinitionInspector(
   runtime: {
     fieldTypeRegistry: ReturnType<typeof createFieldTypeRegistry>;
     permissionEngine: ReturnType<typeof createPermissionEngine>;
+    workflowOperatorRegistry: ReturnType<typeof createWorkflowOperatorRegistry>;
   },
   snapshot?: EffectivePermissionSnapshot
 ) {
@@ -330,6 +339,7 @@ function createWorkflowDefinitionInspector(
       const detail = await readWorkflowDefinitionMetadata(
         env.DB,
         runtime.fieldTypeRegistry,
+        runtime.workflowOperatorRegistry,
         input.workspaceId,
         input.workflowId
       );
@@ -379,10 +389,16 @@ function createPermissionPersonaPreviewReader(
   return {
     async read(input: { tableId: string; viewId: string; workspaceId: string }) {
       const [table, view, viewQuery] = await Promise.all([
-        readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
+        readTableSchemaMetadata(
+          env.DB,
+          runtime.fieldTypeRegistry,
+          runtime.viewPlanner,
+          runtime.workflowOperatorRegistry,
+          {
           tableId: input.tableId,
           workspaceId: input.workspaceId
-        }),
+          }
+        ),
         readViewDefinitionMetadata(env.DB, {
           tableId: input.tableId,
           viewId: input.viewId,
@@ -597,13 +613,19 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
   });
   const viewPlanner = createViewPlanner(fieldTypeRegistry, permissionEngine);
   let agentToolRegistry: ReturnType<typeof createAgentToolRegistry>;
-  const workspaceInspector = createWorkspaceInspector(env.DB, fieldTypeRegistry, workflowOperatorRegistry, () => {
-    if (!agentToolRegistry) {
-      throw new Error("Agent tool registry requested before initialization.");
-    }
+  const workspaceInspector = createWorkspaceInspector(
+    env.DB,
+    fieldTypeRegistry,
+    viewPlanner,
+    workflowOperatorRegistry,
+    () => {
+      if (!agentToolRegistry) {
+        throw new Error("Agent tool registry requested before initialization.");
+      }
 
-    return agentToolRegistry;
-  });
+      return agentToolRegistry;
+    }
+  );
   const workflowHistoryReader = {
     read(input: { workflowId: string; workspaceId: string }) {
       return readWorkflowHistoryForWorkflow(env.DB, input.workspaceId, input.workflowId);
@@ -651,7 +673,9 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
     env,
     {
       fieldTypeRegistry,
-      permissionEngine
+      permissionEngine,
+      viewPlanner,
+      workflowOperatorRegistry
     },
     undefined
   );
@@ -666,7 +690,8 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
     env,
     {
       fieldTypeRegistry,
-      permissionEngine
+      permissionEngine,
+      workflowOperatorRegistry
     },
     undefined
   );
@@ -751,13 +776,19 @@ export function createRuntimeWithSnapshot(
   const viewPlanner = createViewPlanner(fieldTypeRegistry, permissionEngine);
   const appInspector = createAppInspector(env.DB);
   let agentToolRegistry: ReturnType<typeof createAgentToolRegistry>;
-  const workspaceInspector = createWorkspaceInspector(env.DB, fieldTypeRegistry, workflowOperatorRegistry, () => {
-    if (!agentToolRegistry) {
-      throw new Error("Agent tool registry requested before initialization.");
-    }
+  const workspaceInspector = createWorkspaceInspector(
+    env.DB,
+    fieldTypeRegistry,
+    viewPlanner,
+    workflowOperatorRegistry,
+    () => {
+      if (!agentToolRegistry) {
+        throw new Error("Agent tool registry requested before initialization.");
+      }
 
-    return agentToolRegistry;
-  });
+      return agentToolRegistry;
+    }
+  );
   const workflowHistoryReader = {
     read(input: { workflowId: string; workspaceId: string }) {
       return readWorkflowHistoryForWorkflow(env.DB, input.workspaceId, input.workflowId);
@@ -805,7 +836,9 @@ export function createRuntimeWithSnapshot(
     env,
     {
       fieldTypeRegistry,
-      permissionEngine
+      permissionEngine,
+      viewPlanner,
+      workflowOperatorRegistry
     },
     snapshot
   );
@@ -820,7 +853,8 @@ export function createRuntimeWithSnapshot(
     env,
     {
       fieldTypeRegistry,
-      permissionEngine
+      permissionEngine,
+      workflowOperatorRegistry
     },
     snapshot
   );

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { TableCoordinatorDurableObject } from "../../../../src/durable-objects/table-coordinator";
 import { WorkspaceControlDurableObject } from "../../../../src/durable-objects/workspace-control";
 import type { CommandEnvelope } from "../../../../src/core/commands/types";
+import { serializeWorkflowOperatorManifest } from "../../../../src/core/workflows/manifest";
+import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
 import { handleQueueBatch } from "../../../../src/queues/consumer";
 import type { CloudTableEnv, CloudTableQueueMessage } from "../../../../src/runtime/env";
 import { handleFetch, handleScheduled } from "../../../../src/runtime/worker";
@@ -13,6 +15,14 @@ import {
 } from "../../harness/runtime/sqlite-d1";
 
 type StoredValue = unknown;
+
+const workflowOperatorRegistry = createWorkflowOperatorRegistry();
+
+function supportedConditionOperatorManifests(operatorIds: readonly string[]) {
+  return operatorIds.map((operatorId) =>
+    serializeWorkflowOperatorManifest(workflowOperatorRegistry.require(operatorId))
+  );
+}
 
 class FakeDurableObjectStorage {
   private readonly store = new Map<string, StoredValue>();
@@ -235,6 +245,225 @@ function insertPermissionSnapshot(
         fields: input.fields
       }),
       "2026-06-06T00:00:00.000Z"
+    );
+}
+
+function insertField(
+  db: SqliteD1Database,
+  input: {
+    config?: Record<string, unknown>;
+    fieldId: string;
+    fieldKey: string;
+    fieldType: string;
+    label: string;
+    tableId: string;
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO fields (
+        id,
+        workspace_id,
+        table_id,
+        field_order,
+        field_key,
+        label,
+        field_type,
+        field_type_version,
+        config_json,
+        created_at,
+        updated_at,
+        archived_at,
+        last_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.fieldId,
+      "ws_1",
+      input.tableId,
+      null,
+      input.fieldKey,
+      input.label,
+      input.fieldType,
+      1,
+      JSON.stringify(input.config ?? {}),
+      "2026-06-06T00:00:00.000Z",
+      "2026-06-06T00:00:00.000Z",
+      null,
+      null
+    );
+}
+
+function insertRecordProjection(
+  db: SqliteD1Database,
+  input: {
+    fields: Record<string, unknown>;
+    recordId: string;
+    recordKey: string;
+    tableId: string;
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO records (
+        id,
+        workspace_id,
+        table_id,
+        record_key,
+        record_revision,
+        created_at,
+        updated_at,
+        archived_at,
+        last_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.recordId,
+      "ws_1",
+      input.tableId,
+      input.recordKey,
+      1,
+      "2026-06-06T00:00:00.000Z",
+      "2026-06-06T00:00:00.000Z",
+      null,
+      null
+    );
+  db.inner
+    .prepare(
+      `INSERT INTO record_projection (
+        workspace_id,
+        table_id,
+        record_id,
+        projection_json,
+        search_document,
+        projection_version,
+        last_event_id,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      "ws_1",
+      input.tableId,
+      input.recordId,
+      JSON.stringify({
+        fields: input.fields
+      }),
+      "",
+      1,
+      `evt_${input.recordId}`,
+      "2026-06-06T00:00:00.000Z"
+    );
+}
+
+function insertFieldIndexEntry(
+  db: SqliteD1Database,
+  input: {
+    fieldId: string;
+    recordId: string;
+    referenceValue?: string | null;
+    tableId: string;
+    textValue?: string | null;
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO field_index_entries (
+        workspace_id,
+        table_id,
+        field_id,
+        record_id,
+        index_value_text,
+        index_value_number,
+        index_value_datetime,
+        index_value_bool,
+        last_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      "ws_1",
+      input.tableId,
+      input.fieldId,
+      input.recordId,
+      input.textValue ?? input.referenceValue ?? null,
+      null,
+      null,
+      null,
+      `evt_index_${input.recordId}_${input.fieldId}`
+    );
+}
+
+function insertView(
+  db: SqliteD1Database,
+  input: {
+    filters: Array<{
+      fieldId: string;
+      operatorId: string;
+      value?: unknown;
+    }>;
+    tableId: string;
+    viewId: string;
+    viewKey: string;
+    viewName: string;
+    visibleFieldIds: string[];
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO views (
+        id,
+        workspace_id,
+        table_id,
+        view_key,
+        name,
+        current_schema_version,
+        created_at,
+        updated_at,
+        archived_at,
+        last_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.viewId,
+      "ws_1",
+      input.tableId,
+      input.viewKey,
+      input.viewName,
+      1,
+      "2026-06-06T00:00:00.000Z",
+      "2026-06-06T00:00:00.000Z",
+      null,
+      null
+    );
+  db.inner
+    .prepare(
+      `INSERT INTO view_schema_versions (
+        id,
+        workspace_id,
+        view_id,
+        schema_version,
+        schema_json,
+        created_at,
+        created_by_principal_id,
+        last_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      `${input.viewId}:v1`,
+      "ws_1",
+      input.viewId,
+      1,
+      JSON.stringify({
+        filterFieldIds: input.filters.map((filter) => filter.fieldId),
+        filters: input.filters,
+        groupByFieldId: null,
+        showEmptyGroups: false,
+        sortFieldIds: [],
+        sorts: [],
+        visibleFieldIds: input.visibleFieldIds
+      }),
+      "2026-06-06T00:00:00.000Z",
+      "usr_owner",
+      null
     );
 }
 
@@ -476,6 +705,24 @@ describe("cloudtable runtime smoke", () => {
     );
     expect(schemaResponse.status).toBe(200);
     const schemaBody = (await schemaResponse.json()) as {
+      view: {
+        fields: Record<
+          string,
+          {
+            capabilities: {
+              supportsFiltering: boolean;
+              supportsGrouping: boolean;
+              supportsSorting: boolean;
+            };
+            fieldId: string;
+            fieldKey: string;
+            fieldType: string;
+            supportedFilterOperatorIds: string[];
+            supportedFilterOperators: Record<string, unknown>[];
+            supportedSortModes: string[];
+          }
+        >;
+      };
       workflow: {
         bindings: Record<string, { fieldId: string; template: { valuePath: string } }>;
       };
@@ -485,6 +732,24 @@ describe("cloudtable runtime smoke", () => {
       template: {
         valuePath: "row.owner.value"
       }
+    });
+    expect(schemaBody.view.fields["fld_owner"]).toEqual({
+      capabilities: {
+        supportsFiltering: true,
+        supportsGrouping: true,
+        supportsSorting: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      supportedFilterOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedFilterOperators: supportedConditionOperatorManifests([
+        "equals",
+        "not_equals",
+        "is_empty",
+        "is_not_empty"
+      ]),
+      supportedSortModes: ["ascending", "descending"]
     });
 
     const createRecord = await handleFetch(
@@ -668,6 +933,498 @@ describe("cloudtable runtime smoke", () => {
         recordId: "rec_owner_smoke"
       },
       message: "Owner workflow step completed."
+    });
+  });
+
+  it("proves the canonical row.owner agent-tool preview through the smoke runtime path", async () => {
+    const { db, env } = createEnv();
+
+    insertPermissionSnapshot(db, {
+      commandTypes: ["field.create", "workflow.create"],
+      fields: {
+        fld_owner: {
+          agent: true,
+          fieldId: "fld_owner",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      policyRevision: 45,
+      principalId: "usr_owner",
+      scopeHash: "scope:table:tbl_1"
+    });
+
+    const createOwnerField = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/fields", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_field_owner_preview_smoke",
+            idempotencyKey: "idem_field_owner_preview_smoke",
+            payload: {
+              config: {
+                rowOwner: true
+              },
+              fieldId: "fld_owner",
+              fieldKey: "owner",
+              fieldType: "principal.user",
+              label: "Owner"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createOwnerField.status).toBe(200);
+
+    const previewResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "Notify sales ops when the owner is assigned.",
+            fieldIds: ["fld_owner"],
+            name: "Owner assigned follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_owner_assigned_smoke"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 45,
+          principalId: "usr_owner",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(previewResponse.status).toBe(200);
+    expect(
+      (await previewResponse.json()) as {
+        output: {
+          command: {
+            payload: {
+              definition: {
+                conditions: unknown[];
+              };
+            };
+          };
+          kind: string;
+          proposal: {
+            conditions: unknown[];
+          };
+        };
+      }
+    ).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.owner.fieldId"
+                },
+                fieldType: {
+                  path: "row.owner.fieldType"
+                },
+                value: {
+                  path: "row.owner.value"
+                }
+              },
+              operatorId: "is_not_empty"
+            }
+          ]
+        },
+        command: {
+          payload: {
+            definition: {
+              conditions: [
+                {
+                  input: {
+                    fieldId: {
+                      path: "row.owner.fieldId"
+                    },
+                    fieldType: {
+                      path: "row.owner.fieldType"
+                    },
+                    value: {
+                      path: "row.owner.value"
+                    }
+                  },
+                  operatorId: "is_not_empty"
+                }
+              ]
+            }
+          }
+        }
+      }
+    });
+  });
+
+  it("proves owner-filtered saved-view query parity through the smoke runtime path", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_title",
+      fieldKey: "title",
+      fieldType: "text.single_line",
+      label: "Title",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        owner: ["usr_owner"],
+        title: "Owned by owner"
+      },
+      recordId: "rec_owner_smoke_1",
+      recordKey: "owner-smoke-1",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        owner: ["usr_other"],
+        title: "Owned by other"
+      },
+      recordId: "rec_owner_smoke_2",
+      recordKey: "owner-smoke-2",
+      tableId: "tbl_1"
+    });
+    insertFieldIndexEntry(db, {
+      fieldId: "fld_owner",
+      recordId: "rec_owner_smoke_1",
+      referenceValue: "usr_owner",
+      tableId: "tbl_1",
+      textValue: "usr_owner"
+    });
+    insertFieldIndexEntry(db, {
+      fieldId: "fld_owner",
+      recordId: "rec_owner_smoke_2",
+      referenceValue: "usr_other",
+      tableId: "tbl_1",
+      textValue: "usr_other"
+    });
+    insertView(db, {
+      filters: [
+        {
+          fieldId: "fld_owner",
+          operatorId: "equals",
+          value: "usr_owner"
+        }
+      ],
+      tableId: "tbl_1",
+      viewId: "view_owner_smoke",
+      viewKey: "owner-smoke",
+      viewName: "Owner Smoke",
+      visibleFieldIds: ["fld_title", "fld_owner"]
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: [],
+      fields: {
+        fld_owner: {
+          agent: true,
+          fieldId: "fld_owner",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_title: {
+          agent: true,
+          fieldId: "fld_title",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      policyRevision: 47,
+      principalId: "usr_owner",
+      scopeHash: "scope:view:view_owner_smoke",
+      snapshotId: "snap_view_owner_smoke"
+    });
+
+    const directResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/views/view_owner_smoke?workspaceId=ws_1&principalId=usr_owner&permissionScopeHash=scope:view:view_owner_smoke&policyRevision=47"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const agentResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            tableId: "tbl_1",
+            viewId: "view_owner_smoke"
+          },
+          permissionScopeHash: "scope:view:view_owner_smoke",
+          policyRevision: 47,
+          principalId: "usr_owner",
+          toolId: "queryView",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(directResponse.status).toBe(200);
+    expect(agentResponse.status).toBe(200);
+
+    const directBody = (await directResponse.json()) as {
+      rows: Array<{ cells: Record<string, unknown>; recordId: string }>;
+    };
+    const agentBody = (await agentResponse.json()) as {
+      output: {
+        kind: string;
+        view: Record<string, unknown>;
+      };
+    };
+
+    expect(directBody.rows).toEqual([
+      {
+        cells: {
+          fld_owner: ["usr_owner"],
+          fld_title: "Owned by owner"
+        },
+        hiddenFieldIds: [],
+        recordId: "rec_owner_smoke_1",
+        recordKey: "owner-smoke-1",
+        redactedFieldIds: [],
+        states: {
+          fld_owner: "visible",
+          fld_title: "visible"
+        }
+      }
+    ]);
+    expect(agentBody.output).toEqual({
+      kind: "view-query",
+      view: directBody
+    });
+  });
+
+  it("proves the canonical row.owner workflow creation through the audited execute smoke path", async () => {
+    const { db, env } = createEnv();
+
+    insertPermissionSnapshot(db, {
+      commandTypes: ["field.create", "workflow.create", "workflow.publish"],
+      fields: {
+        fld_owner: {
+          agent: true,
+          fieldId: "fld_owner",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      policyRevision: 46,
+      principalId: "usr_owner_execute",
+      scopeHash: "scope:table:tbl_1"
+    });
+
+    const createOwnerField = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/fields", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_field_owner_execute_smoke",
+            idempotencyKey: "idem_field_owner_execute_smoke",
+            payload: {
+              config: {
+                rowOwner: true
+              },
+              fieldId: "fld_owner",
+              fieldKey: "owner",
+              fieldType: "principal.user",
+              label: "Owner"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createOwnerField.status).toBe(200);
+
+    const previewResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "Notify sales ops when the owner is assigned.",
+            fieldIds: ["fld_owner"],
+            name: "Owner assigned execute smoke",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_owner_assigned_execute_smoke"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 46,
+          principalId: "usr_owner_execute",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(previewResponse.status).toBe(200);
+
+    const previewBody = (await previewResponse.json()) as {
+      output: {
+        command: CommandEnvelope;
+      };
+    };
+
+    const executeResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            command: previewBody.output.command
+          },
+          principalId: "usr_owner_execute",
+          toolId: "executeCommand",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(executeResponse.status).toBe(200);
+    expect(
+      (await executeResponse.json()) as {
+        output: {
+          command: CommandEnvelope;
+          result: {
+            accepted: boolean;
+            events: Array<{ commandType: string; eventType: string }>;
+            status: string;
+          };
+        };
+      }
+    ).toMatchObject({
+      output: {
+        command: {
+          actor: {
+            mode: "agent",
+            principalId: "usr_owner_execute"
+          },
+          commandType: "workflow.create",
+          payload: {
+            definition: {
+              conditions: [
+                {
+                  input: {
+                    fieldId: {
+                      path: "row.owner.fieldId"
+                    },
+                    fieldType: {
+                      path: "row.owner.fieldType"
+                    },
+                    value: {
+                      path: "row.owner.value"
+                    }
+                  },
+                  operatorId: "is_not_empty"
+                }
+              ]
+            },
+            workflowId: "wf_owner_assigned_execute_smoke"
+          }
+        },
+        result: {
+          accepted: true,
+          events: [
+            {
+              commandType: "workflow.create",
+              eventType: "workflow.created"
+            }
+          ],
+          status: "accepted"
+        }
+      }
+    });
+    const definitionResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_owner_assigned_execute_smoke/definition?workspaceId=ws_1&principalId=usr_owner_execute&permissionScopeHash=scope:table:tbl_1&policyRevision=46"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(definitionResponse.status).toBe(200);
+    expect((await definitionResponse.json()) as Record<string, unknown>).toMatchObject({
+      definition: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.owner.fieldId"
+              },
+              fieldType: {
+                path: "row.owner.fieldType"
+              },
+              value: {
+                path: "row.owner.value"
+              }
+            },
+            operatorId: "is_not_empty"
+          }
+        ]
+      },
+      workflow: {
+        bindings: {
+          "row.owner": {
+            binding: "row.owner",
+            fieldId: "fld_owner",
+            fieldType: "principal.user",
+            template: {
+              fieldIdPath: "row.owner.fieldId",
+              fieldTypePath: "row.owner.fieldType",
+              valuePath: "row.owner.value"
+            }
+          }
+        }
+      },
+      workflowId: "wf_owner_assigned_execute_smoke"
     });
   });
 

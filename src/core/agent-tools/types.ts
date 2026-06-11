@@ -10,6 +10,7 @@ import type {
   WorkflowOperatorManifest,
   WorkflowTriggerManifest
 } from "../workflows/types";
+import type { ViewAuthoringMetadata } from "../views/authoring";
 
 export type AgentToolScope = "app" | "table" | "view" | "workflow";
 export type AgentToolPhase = "draft" | "preview" | "execute";
@@ -419,6 +420,7 @@ export type WorkspaceInspection = {
     tableId: string;
     name: string;
     fieldIds: string[];
+    view: ViewAuthoringMetadata;
     workflow: WorkflowAuthoringMetadata;
     viewIds: string[];
   }>;

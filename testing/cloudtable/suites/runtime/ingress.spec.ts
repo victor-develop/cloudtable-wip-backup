@@ -474,6 +474,7 @@ function insertFieldIndexEntry(
     datetimeValue?: string | null;
     fieldId: string;
     numberValue?: number | null;
+    referenceValue?: string | null;
     recordId: string;
     tableId: string;
     textValue?: string | null;
@@ -500,7 +501,7 @@ function insertFieldIndexEntry(
       input.tableId,
       input.fieldId,
       input.recordId,
-      input.textValue ?? null,
+      input.textValue ?? input.referenceValue ?? null,
       input.numberValue ?? null,
       input.datetimeValue ?? null,
       input.boolValue == null ? null : Number(input.boolValue),
@@ -2402,6 +2403,23 @@ describe("cloudtable runtime ingress", () => {
 
   it("returns persisted workflow definition metadata through the worker read ingress", async () => {
     const { db, env } = createEnv();
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "status.semantic",
+      label: "Status",
+      tableId: "tbl_1"
+    });
     insertWorkflow(db, {
       definition: {
         metadata: {
@@ -2409,19 +2427,41 @@ describe("cloudtable runtime ingress", () => {
         },
         trigger: {
           match: {
-            eventTypes: ["record.updated"],
+            eventTypes: ["record_updated"],
             fieldId: "fld_status",
             tableId: "tbl_1"
           },
-          operatorId: "record.updated"
+          operatorId: "record_updated"
         },
         conditions: [
           {
             input: {
-              equals: "ready",
-              fieldId: "fld_status"
+              fieldId: {
+                path: "row.owner.fieldId"
+              },
+              fieldType: {
+                path: "row.owner.fieldType"
+              },
+              value: {
+                path: "row.owner.value"
+              }
             },
-            operatorId: "value.equals"
+            operatorId: "is_not_empty"
+          },
+          {
+            input: {
+              fieldId: {
+                path: "row.fields.status.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.status.fieldType"
+              },
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "ready"
+            },
+            operatorId: "equals"
           }
         ],
         actions: [
@@ -2478,7 +2518,56 @@ describe("cloudtable runtime ingress", () => {
     );
 
     expect(response.status).toBe(200);
-    expect((await response.json()) as Record<string, unknown>).toEqual({
+    expect((await response.json()) as Record<string, unknown>).toMatchObject({
+      conditionMetadata: [
+        {
+          diagnostics: [],
+          index: 0,
+          operator: supportedConditionOperatorManifests(["is_not_empty"])[0],
+          operatorId: "is_not_empty",
+          referencedBindingNames: ["row.owner"],
+          resolvedBindings: [
+            {
+              binding: "row.owner",
+              fieldId: "fld_owner",
+              fieldKey: "owner",
+              fieldType: "principal.user",
+              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+              supportedOperators: supportedConditionOperatorManifests([
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ]),
+              template: {
+                fieldIdPath: "row.owner.fieldId",
+                fieldTypePath: "row.owner.fieldType",
+                valuePath: "row.owner.value"
+              }
+            }
+          ]
+        },
+        {
+          diagnostics: [],
+          index: 1,
+          operator: supportedConditionOperatorManifests(["equals"])[0],
+          operatorId: "equals",
+          referencedBindingNames: ["row.fields.status"],
+          resolvedBindings: [
+            {
+              binding: "row.fields.status",
+              fieldId: "fld_status",
+              fieldKey: "status",
+              fieldType: "status.semantic",
+              template: {
+                fieldIdPath: "row.fields.status.fieldId",
+                fieldTypePath: "row.fields.status.fieldType",
+                valuePath: "row.fields.status.value"
+              }
+            }
+          ]
+        }
+      ],
       currentVersion: 1,
       definition: {
         actions: [
@@ -2494,10 +2583,32 @@ describe("cloudtable runtime ingress", () => {
         conditions: [
           {
             input: {
-              equals: "ready",
-              fieldId: "fld_status"
+              fieldId: {
+                path: "row.owner.fieldId"
+              },
+              fieldType: {
+                path: "row.owner.fieldType"
+              },
+              value: {
+                path: "row.owner.value"
+              }
             },
-            operatorId: "value.equals"
+            operatorId: "is_not_empty"
+          },
+          {
+            input: {
+              fieldId: {
+                path: "row.fields.status.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.status.fieldType"
+              },
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "ready"
+            },
+            operatorId: "equals"
           }
         ],
         metadata: {
@@ -2505,11 +2616,11 @@ describe("cloudtable runtime ingress", () => {
         },
         trigger: {
           match: {
-            eventTypes: ["record.updated"],
+            eventTypes: ["record_updated"],
             fieldId: "fld_status",
             tableId: "tbl_1"
           },
-          operatorId: "record.updated"
+          operatorId: "record_updated"
         },
         workflowId: "wf_definition_detail"
       },
@@ -2518,7 +2629,20 @@ describe("cloudtable runtime ingress", () => {
       status: "paused",
       triggerTableId: "tbl_1",
       workflow: {
-        bindings: {}
+        bindings: {
+          "row.owner": {
+            binding: "row.owner",
+            fieldId: "fld_owner",
+            fieldKey: "owner",
+            fieldType: "principal.user"
+          },
+          "row.fields.status": {
+            binding: "row.fields.status",
+            fieldId: "fld_status",
+            fieldKey: "status",
+            fieldType: "status.semantic"
+          }
+        }
       },
       workflowId: "wf_definition_detail",
       workflowKey: "workflow-detail",
@@ -2530,6 +2654,23 @@ describe("cloudtable runtime ingress", () => {
 
   it("routes permission-scoped workflow definition reads through the inspectWorkflowDefinition agent tool", async () => {
     const { db, env } = createEnv();
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "status.semantic",
+      label: "Status",
+      tableId: "tbl_1"
+    });
     insertWorkflow(db, {
       definition: {
         metadata: {
@@ -2537,19 +2678,41 @@ describe("cloudtable runtime ingress", () => {
         },
         trigger: {
           match: {
-            eventTypes: ["record.updated"],
+            eventTypes: ["record_updated"],
             fieldId: "fld_status",
             tableId: "tbl_1"
           },
-          operatorId: "record.updated"
+          operatorId: "record_updated"
         },
         conditions: [
           {
             input: {
-              equals: "ready",
-              fieldId: "fld_status"
+              fieldId: {
+                path: "row.owner.fieldId"
+              },
+              fieldType: {
+                path: "row.owner.fieldType"
+              },
+              value: {
+                path: "row.owner.value"
+              }
             },
-            operatorId: "value.equals"
+            operatorId: "is_not_empty"
+          },
+          {
+            input: {
+              fieldId: {
+                path: "row.fields.status.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.status.fieldType"
+              },
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "ready"
+            },
+            operatorId: "equals"
           }
         ],
         actions: [
@@ -7457,6 +7620,276 @@ describe("cloudtable runtime ingress", () => {
     });
   });
 
+  it("keeps owner-filtered saved-view query and definition surfaces in parity", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_title",
+      fieldKey: "title",
+      fieldType: "text.single_line",
+      label: "Title",
+      tableId: "tbl_1"
+    });
+
+    insertRecordProjection(db, {
+      fields: {
+        owner: ["usr_owner"],
+        title: "Owned by owner"
+      },
+      recordId: "rec_owner_1",
+      recordKey: "owner-1",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        owner: ["usr_member"],
+        title: "Owned by member"
+      },
+      recordId: "rec_owner_2",
+      recordKey: "owner-2",
+      tableId: "tbl_1"
+    });
+
+    insertFieldIndexEntry(db, {
+      fieldId: "fld_owner",
+      recordId: "rec_owner_1",
+      referenceValue: "usr_owner",
+      tableId: "tbl_1",
+      textValue: "usr_owner"
+    });
+    insertFieldIndexEntry(db, {
+      fieldId: "fld_owner",
+      recordId: "rec_owner_2",
+      referenceValue: "usr_member",
+      tableId: "tbl_1",
+      textValue: "usr_member"
+    });
+
+    insertView(db, {
+      filters: [
+        {
+          fieldId: "fld_owner",
+          operatorId: "equals",
+          value: "usr_owner"
+        }
+      ],
+      tableId: "tbl_1",
+      viewId: "view_owner_only",
+      viewKey: "owner-only",
+      viewName: "Owner Only",
+      visibleFieldIds: ["fld_title", "fld_owner"]
+    });
+    insertView(db, {
+      filters: [
+        {
+          fieldId: "fld_owner",
+          operatorId: "equals",
+          value: "usr_member"
+        }
+      ],
+      tableId: "tbl_1",
+      viewId: "view_member_only",
+      viewKey: "member-only",
+      viewName: "Member Only",
+      visibleFieldIds: ["fld_title", "fld_owner"]
+    });
+
+    const visibleOwnerField = {
+      agent: true,
+      fieldId: "fld_owner",
+      fieldType: "principal.user",
+      read: "visible",
+      workflow: true,
+      write: true
+    } as const;
+    const visibleTitleField = {
+      agent: true,
+      fieldId: "fld_title",
+      fieldType: "text.single_line",
+      read: "visible",
+      workflow: true,
+      write: true
+    } as const;
+
+    insertPermissionSnapshot(db, {
+      fields: {
+        fld_owner: visibleOwnerField,
+        fld_title: visibleTitleField
+      },
+      policyRevision: 51,
+      principalId: "usr_owner",
+      schemaEpoch: 1,
+      scopeHash: "scope:view:view_owner_only",
+      snapshotId: "snap_owner_view_owner_only",
+      workspaceId: "ws_1"
+    });
+    insertPermissionSnapshot(db, {
+      fields: {
+        fld_owner: visibleOwnerField,
+        fld_title: visibleTitleField
+      },
+      policyRevision: 52,
+      principalId: "usr_member",
+      schemaEpoch: 1,
+      scopeHash: "scope:view:view_member_only",
+      snapshotId: "snap_member_view_member_only",
+      workspaceId: "ws_1"
+    });
+
+    const ownerDirectResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/views/view_owner_only?workspaceId=ws_1&principalId=usr_owner&permissionScopeHash=scope:view:view_owner_only&policyRevision=51"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const memberDirectResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/views/view_member_only?workspaceId=ws_1&principalId=usr_member&permissionScopeHash=scope:view:view_member_only&policyRevision=52"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const ownerAgentQueryResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            tableId: "tbl_1",
+            viewId: "view_owner_only"
+          },
+          permissionScopeHash: "scope:view:view_owner_only",
+          policyRevision: 51,
+          principalId: "usr_owner",
+          toolId: "queryView",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    const ownerDefinitionResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/views/view_owner_only/definition?workspaceId=ws_1&principalId=usr_owner&permissionScopeHash=scope:view:view_owner_only&policyRevision=51"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const ownerAgentDefinitionResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            tableId: "tbl_1",
+            viewId: "view_owner_only"
+          },
+          permissionScopeHash: "scope:view:view_owner_only",
+          policyRevision: 51,
+          principalId: "usr_owner",
+          toolId: "inspectViewDefinition",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(ownerDirectResponse.status).toBe(200);
+    expect(memberDirectResponse.status).toBe(200);
+    expect(ownerAgentQueryResponse.status).toBe(200);
+    expect(ownerDefinitionResponse.status).toBe(200);
+    expect(ownerAgentDefinitionResponse.status).toBe(200);
+
+    const ownerDirectBody = (await ownerDirectResponse.json()) as {
+      rows: Array<{ cells: Record<string, unknown>; recordId: string }>;
+    };
+    const memberDirectBody = (await memberDirectResponse.json()) as {
+      rows: Array<{ cells: Record<string, unknown>; recordId: string }>;
+    };
+    const ownerAgentQueryBody = (await ownerAgentQueryResponse.json()) as {
+      output: {
+        kind: string;
+        view: Record<string, unknown>;
+      };
+    };
+    const ownerDefinitionBody = (await ownerDefinitionResponse.json()) as Record<string, unknown>;
+    const ownerAgentDefinitionBody = (await ownerAgentDefinitionResponse.json()) as {
+      output: {
+        kind: string;
+        view: Record<string, unknown>;
+      };
+    };
+
+    expect(ownerDirectBody.rows).toEqual([
+      {
+        cells: {
+          fld_owner: ["usr_owner"],
+          fld_title: "Owned by owner"
+        },
+        hiddenFieldIds: [],
+        recordId: "rec_owner_1",
+        recordKey: "owner-1",
+        redactedFieldIds: [],
+        states: {
+          fld_owner: "visible",
+          fld_title: "visible"
+        }
+      }
+    ]);
+    expect(memberDirectBody.rows).toEqual([
+      {
+        cells: {
+          fld_owner: ["usr_member"],
+          fld_title: "Owned by member"
+        },
+        hiddenFieldIds: [],
+        recordId: "rec_owner_2",
+        recordKey: "owner-2",
+        redactedFieldIds: [],
+        states: {
+          fld_owner: "visible",
+          fld_title: "visible"
+        }
+      }
+    ]);
+    expect(ownerAgentQueryBody.output).toEqual({
+      kind: "view-query",
+      view: ownerDirectBody
+    });
+    expect(ownerDefinitionBody).toMatchObject({
+      definition: {
+        filters: [
+          {
+            fieldId: "fld_owner",
+            operatorId: "equals",
+            protected: false,
+            value: "usr_owner"
+          }
+        ]
+      }
+    });
+    expect(ownerAgentDefinitionBody.output).toEqual({
+      kind: "view-definition-inspection",
+      view: ownerDefinitionBody
+    });
+  });
+
   it("routes permission-scoped table schema reads through the inspectTableSchema agent tool", async () => {
     const { db, env } = createEnv();
 
@@ -8658,6 +9091,13 @@ describe("cloudtable runtime ingress", () => {
       tableId: "tbl_1"
     });
     insertField(db, {
+      fieldId: "fld_assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      label: "Assignee",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
       config: {
         options: [
           { id: "open", label: "Open", semantic: "todo" },
@@ -8712,6 +9152,14 @@ describe("cloudtable runtime ingress", () => {
           workflow: true,
           write: true
         },
+        fld_assignee: {
+          agent: true,
+          fieldId: "fld_assignee",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
         fld_status: {
           agent: true,
           fieldId: "fld_status",
@@ -8748,6 +9196,27 @@ describe("cloudtable runtime ingress", () => {
       env,
       {} as ExecutionContext
     );
+    const schemaAgentResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            tableId: "tbl_1",
+            workspaceId: "ws_1"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 44,
+          principalId: "usr_owner_metadata",
+          toolId: "inspectTableSchema",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
     const workflowResponse = await handleFetch(
       new Request(
         "https://example.test/v1/workflows/wf_owner_metadata/definition?workspaceId=ws_1&principalId=usr_owner_metadata&permissionScopeHash=scope:table:tbl_1&policyRevision=44"
@@ -8778,6 +9247,7 @@ describe("cloudtable runtime ingress", () => {
     );
 
     expect(schemaResponse.status).toBe(200);
+    expect(schemaAgentResponse.status).toBe(200);
     expect(workflowResponse.status).toBe(200);
     expect(workspaceResponse.status).toBe(200);
 
@@ -8837,6 +9307,35 @@ describe("cloudtable runtime ingress", () => {
         fieldIdPath: "row.fields.owner.fieldId",
         fieldTypePath: "row.fields.owner.fieldType",
         valuePath: "row.fields.owner.value"
+      }
+    };
+    const expectedAssigneeFieldBinding = {
+      binding: "row.fields.assignee",
+      fieldId: "fld_assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      proposalHints: [
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: supportedConditionOperatorManifests([
+        "equals",
+        "not_equals",
+        "is_empty",
+        "is_not_empty"
+      ]),
+      template: {
+        fieldIdPath: "row.fields.assignee.fieldId",
+        fieldTypePath: "row.fields.assignee.fieldType",
+        valuePath: "row.fields.assignee.value"
       }
     };
     const expectedTitleFieldBinding = {
@@ -8955,8 +9454,53 @@ describe("cloudtable runtime ingress", () => {
     };
 
     const schemaBody = (await schemaResponse.json()) as {
+      view: {
+        fields: Record<
+          string,
+          {
+            capabilities: {
+              supportsFiltering: boolean;
+              supportsGrouping: boolean;
+              supportsSorting: boolean;
+            };
+            fieldId: string;
+            fieldKey: string;
+            fieldType: string;
+            supportedFilterOperatorIds: string[];
+            supportedFilterOperators: Record<string, unknown>[];
+            supportedSortModes: string[];
+          }
+        >;
+        filterableFieldIds: string[];
+        groupableFieldIds: string[];
+        sortableFieldIds: string[];
+      };
       workflow: {
         bindings: Record<string, Record<string, unknown>>;
+      };
+    };
+    const schemaAgentBody = (await schemaAgentResponse.json()) as {
+      output: {
+        schema: {
+          view: {
+            fields: Record<
+              string,
+              {
+                capabilities: {
+                  supportsFiltering: boolean;
+                  supportsGrouping: boolean;
+                  supportsSorting: boolean;
+                };
+                fieldId: string;
+                fieldKey: string;
+                fieldType: string;
+                supportedFilterOperatorIds: string[];
+                supportedFilterOperators: Record<string, unknown>[];
+                supportedSortModes: string[];
+              }
+            >;
+          };
+        };
       };
     };
     const workflowBody = (await workflowResponse.json()) as {
@@ -8969,6 +9513,24 @@ describe("cloudtable runtime ingress", () => {
         workspace: {
           tables: Array<{
             tableId: string;
+            view: {
+              fields: Record<
+                string,
+                {
+                  capabilities: {
+                    supportsFiltering: boolean;
+                    supportsGrouping: boolean;
+                    supportsSorting: boolean;
+                  };
+                  fieldId: string;
+                  fieldKey: string;
+                  fieldType: string;
+                  supportedFilterOperatorIds: string[];
+                  supportedFilterOperators: Record<string, unknown>[];
+                  supportedSortModes: string[];
+                }
+              >;
+            };
             workflow: {
               bindings: Record<string, Record<string, unknown>>;
             };
@@ -8979,12 +9541,50 @@ describe("cloudtable runtime ingress", () => {
 
     expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwner);
     expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
+    expect(schemaBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedAssigneeFieldBinding);
     expect(schemaBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
     expect(schemaBody.workflow.bindings["row.fields.title"]).toEqual(expectedTitleFieldBinding);
+    expect(schemaBody.view.fields["fld_owner"]).toEqual({
+      capabilities: {
+        supportsFiltering: true,
+        supportsGrouping: true,
+        supportsSorting: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      supportedFilterOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedFilterOperators: supportedConditionOperatorManifests([
+        "equals",
+        "not_equals",
+        "is_empty",
+        "is_not_empty"
+      ]),
+      supportedSortModes: ["ascending", "descending"]
+    });
+    expect(schemaBody.view.fields["fld_assignee"]).toEqual({
+      ...schemaBody.view.fields["fld_owner"],
+      fieldId: "fld_assignee",
+      fieldKey: "assignee"
+    });
+    expect(schemaBody.view.filterableFieldIds).toEqual(
+      expect.arrayContaining(["fld_owner", "fld_assignee", "fld_status", "fld_title"])
+    );
+    expect(schemaBody.view.groupableFieldIds).toEqual(
+      expect.arrayContaining(["fld_owner", "fld_assignee", "fld_status", "fld_title"])
+    );
+    expect(schemaBody.view.sortableFieldIds).toEqual(
+      expect.arrayContaining(["fld_owner", "fld_assignee", "fld_status", "fld_title"])
+    );
+    expect(schemaAgentBody.output.schema.view).toEqual(schemaBody.view);
     expect(workflowBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwner);
     expect(workflowBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
+    expect(workflowBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedAssigneeFieldBinding);
     expect(workflowBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
     expect(workflowBody.workflow.bindings["row.fields.title"]).toEqual(expectedTitleFieldBinding);
+    expect(
+      workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.view
+    ).toEqual(schemaBody.view);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings["row.owner"]
     ).toEqual(expectedRowOwner);
@@ -8993,6 +9593,11 @@ describe("cloudtable runtime ingress", () => {
         "row.fields.owner"
       ]
     ).toEqual(expectedOwnerFieldBinding);
+    expect(
+      workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
+        "row.fields.assignee"
+      ]
+    ).toEqual(expectedAssigneeFieldBinding);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
         "row.fields.status"
@@ -11771,6 +12376,258 @@ describe("cloudtable runtime ingress", () => {
     });
     expect(eventFanoutQueue.sent).toHaveLength(1);
     expect(workflowDispatchQueue.sent).toEqual([]);
+  });
+
+  it("creates a row.owner workflow through the audited agent-tool execute ingress", async () => {
+    const { db, env, eventFanoutQueue } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "text.single_line",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_owner_workflow_execute",
+      workspaceId: "ws_1",
+      principalId: "agt_owner_workflow_execute",
+      policyRevision: 48,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create", "workflow.publish"],
+      fields: {
+        fld_owner: {
+          agent: true,
+          fieldId: "fld_owner",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_status: {
+          agent: true,
+          fieldId: "fld_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const previewResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "Notify sales ops when the owner is assigned.",
+            fieldIds: ["fld_owner"],
+            name: "Owner assigned execute",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_owner_assigned_execute"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 48,
+          principalId: "agt_owner_workflow_execute",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(previewResponse.status).toBe(200);
+    const previewBody = (await previewResponse.json()) as {
+      output: {
+        command: CommandEnvelope;
+        proposal: {
+          conditions: Array<{
+            input: {
+              fieldId: {
+                path: string;
+              };
+              fieldType: {
+                path: string;
+              };
+              value: {
+                path: string;
+              };
+            };
+            operatorId: string;
+          }>;
+        };
+      };
+    };
+    expect(previewBody.output.proposal.conditions).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.owner.fieldId"
+          },
+          fieldType: {
+            path: "row.owner.fieldType"
+          },
+          value: {
+            path: "row.owner.value"
+          }
+        },
+        operatorId: "is_not_empty"
+      }
+    ]);
+
+    const executeResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            command: previewBody.output.command
+          },
+          principalId: "agt_owner_workflow_execute",
+          toolId: "executeCommand",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(executeResponse.status).toBe(200);
+    const executeBody = (await executeResponse.json()) as {
+      inputDiagnostics: string[];
+      output: {
+        command: CommandEnvelope;
+        kind: string;
+        result: {
+          accepted: boolean;
+          events: Array<{ commandType: string; eventType: string }>;
+          status: string;
+        };
+      };
+      tool: {
+        id: string;
+        phase: string;
+      };
+    };
+
+    expect(executeBody.tool).toMatchObject({
+      id: "executeCommand",
+      phase: "execute"
+    });
+    expect(executeBody.inputDiagnostics).toEqual([]);
+    expect(executeBody.output.kind).toBe("command-execution");
+    expect(executeBody.output.command).toMatchObject({
+      actor: {
+        mode: "agent",
+        principalId: "agt_owner_workflow_execute"
+      },
+      commandType: "workflow.create",
+      permissionScopeHash: "scope:table:tbl_1",
+      permissionsVersion: 48,
+      schemaEpoch: 0,
+      workspaceId: "ws_1"
+    });
+    expect(executeBody.output.command.payload).toMatchObject({
+      definition: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.owner.fieldId"
+              },
+              fieldType: {
+                path: "row.owner.fieldType"
+              },
+              value: {
+                path: "row.owner.value"
+              }
+            },
+            operatorId: "is_not_empty"
+          }
+        ],
+        workflowId: "wf_owner_assigned_execute"
+      },
+      workflowId: "wf_owner_assigned_execute",
+      workflowKey: "owner-assigned-execute"
+    });
+    expect(executeBody.output.result).toMatchObject({
+      accepted: true,
+      events: [
+        {
+          commandType: "workflow.create",
+          eventType: "workflow.created"
+        }
+      ],
+      status: "accepted"
+    });
+    expect(eventFanoutQueue.sent).toHaveLength(1);
+
+    const definitionResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_owner_assigned_execute/definition?workspaceId=ws_1&principalId=agt_owner_workflow_execute&permissionScopeHash=scope:table:tbl_1&policyRevision=48"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(definitionResponse.status).toBe(200);
+    expect((await definitionResponse.json()) as Record<string, unknown>).toMatchObject({
+      definition: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.owner.fieldId"
+              },
+              fieldType: {
+                path: "row.owner.fieldType"
+              },
+              value: {
+                path: "row.owner.value"
+              }
+            },
+            operatorId: "is_not_empty"
+          }
+        ]
+      },
+      workflow: {
+        bindings: {
+          "row.owner": {
+            binding: "row.owner",
+            fieldId: "fld_owner",
+            fieldKey: "owner",
+            fieldType: "principal.user",
+            template: {
+              fieldIdPath: "row.owner.fieldId",
+              fieldTypePath: "row.owner.fieldType",
+              valuePath: "row.owner.value"
+            }
+          }
+        }
+      },
+      workflowId: "wf_owner_assigned_execute",
+      workflowKey: "owner-assigned-execute",
+      workflowName: "Owner assigned execute"
+    });
   });
 
   it("rejects stale explicit permission coordinates on the execution ingress", async () => {

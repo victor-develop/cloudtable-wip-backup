@@ -1,5 +1,9 @@
 import type { JsonValue } from "../core/field-types/types";
 import type { FieldTypeRegistry } from "../core/field-types/types";
+import { buildViewAuthoringMetadata } from "../core/views/authoring";
+import type { ViewAuthoringMetadata } from "../core/views/authoring";
+import type { ViewPlanner } from "../core/views/planner";
+import type { WorkflowOperatorRegistry } from "../core/workflows/types";
 import { buildWorkflowAuthoringMetadataForFields } from "../core/workflows/binding-metadata";
 import type { WorkflowAuthoringMetadata } from "../core/workflows/types";
 
@@ -47,6 +51,7 @@ export type TableSchemaMetadata = {
   tableName: string;
   tableSchemaVersion: number;
   tableSlug: string;
+  view: ViewAuthoringMetadata;
   workflow: WorkflowAuthoringMetadata;
   workspaceId: string;
 };
@@ -90,6 +95,8 @@ export class SchemaMetadataAccessError extends Error {
 export async function readTableSchemaMetadata(
   db: D1Database,
   fieldTypeRegistry: FieldTypeRegistry | undefined,
+  viewPlanner: ViewPlanner | undefined,
+  workflowOperatorRegistry: WorkflowOperatorRegistry | undefined,
   input: {
     tableId: string;
     workspaceId: string;
@@ -147,6 +154,25 @@ export async function readTableSchemaMetadata(
     tableName: table.name,
     tableSchemaVersion: table.current_schema_version,
     tableSlug: table.slug,
+    view:
+      viewPlanner == null
+        ? {
+            fieldIds: [],
+            fields: {},
+            filterableFieldIds: [],
+            groupableFieldIds: [],
+            sortableFieldIds: []
+          }
+        : buildViewAuthoringMetadata(
+            viewPlanner,
+            fields,
+            (field) => ({
+              fieldId: field.fieldId,
+              fieldKey: field.fieldKey,
+              fieldType: field.fieldType
+            }),
+            workflowOperatorRegistry
+          ),
     workflow:
       fieldTypeRegistry == null
         ? { bindings: {} }

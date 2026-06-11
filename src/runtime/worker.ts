@@ -339,6 +339,7 @@ export async function handleFetch(
     const workspaceInspector = createWorkspaceInspector(
       env.DB,
       runtime.fieldTypeRegistry,
+      runtime.viewPlanner,
       runtime.workflowOperatorRegistry,
       () => runtime.agentToolRegistry
     );
@@ -450,10 +451,16 @@ export async function handleFetch(
       return auth.response;
     }
 
-    const detail = await readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
-      tableId,
-      workspaceId
-    });
+    const detail = await readTableSchemaMetadata(
+      env.DB,
+      runtime.fieldTypeRegistry,
+      runtime.viewPlanner,
+      runtime.workflowOperatorRegistry,
+      {
+        tableId,
+        workspaceId
+      }
+    );
     if (!detail) {
       return notFound(`Table ${tableId} was not found.`);
     }
@@ -625,6 +632,7 @@ export async function handleFetch(
     const detail = await readWorkflowDefinitionMetadata(
       env.DB,
       runtime.fieldTypeRegistry,
+      runtime.workflowOperatorRegistry,
       auth.workspaceId,
       auth.workflowId
     );
@@ -887,10 +895,16 @@ export async function handleFetch(
     }
 
     const [, tableId] = tableActivityMatch;
-    const table = await readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
-      tableId,
-      workspaceId
-    });
+    const table = await readTableSchemaMetadata(
+      env.DB,
+      runtime.fieldTypeRegistry,
+      runtime.viewPlanner,
+      runtime.workflowOperatorRegistry,
+      {
+        tableId,
+        workspaceId
+      }
+    );
     if (!table) {
       return notFound(`Table ${tableId} was not found.`);
     }
@@ -1599,10 +1613,16 @@ async function handleGroupedViewMove(
   }
 
   const [table, viewDefinition, viewQuery] = await Promise.all([
-    readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
-      tableId: input.tableId,
-      workspaceId
-    }),
+    readTableSchemaMetadata(
+      env.DB,
+      runtime.fieldTypeRegistry,
+      runtime.viewPlanner,
+      runtime.workflowOperatorRegistry,
+      {
+        tableId: input.tableId,
+        workspaceId
+      }
+    ),
     readViewDefinitionMetadata(env.DB, {
       tableId: input.tableId,
       viewId: input.viewId,
@@ -1900,10 +1920,16 @@ async function prepareViewScopedCreateInput(
   }
 
   const [table, viewDefinition, viewQuery] = await Promise.all([
-    readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
-      tableId,
-      workspaceId: snapshot.workspaceId
-    }),
+    readTableSchemaMetadata(
+      env.DB,
+      runtime.fieldTypeRegistry,
+      runtime.viewPlanner,
+      runtime.workflowOperatorRegistry,
+      {
+        tableId,
+        workspaceId: snapshot.workspaceId
+      }
+    ),
     readViewDefinitionMetadata(env.DB, {
       tableId,
       viewId,
@@ -2095,10 +2121,16 @@ async function handleViewScopedRecordCreate(
   }
 
   const [table, viewDefinition, viewQuery] = await Promise.all([
-    readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
-      tableId: input.tableId,
-      workspaceId
-    }),
+    readTableSchemaMetadata(
+      env.DB,
+      runtime.fieldTypeRegistry,
+      runtime.viewPlanner,
+      runtime.workflowOperatorRegistry,
+      {
+        tableId: input.tableId,
+        workspaceId
+      }
+    ),
     readViewDefinitionMetadata(env.DB, {
       tableId: input.tableId,
       viewId: input.viewId,

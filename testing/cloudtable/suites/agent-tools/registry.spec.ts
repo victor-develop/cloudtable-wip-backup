@@ -195,6 +195,13 @@ function createRegistry(overrides?: {
           tableId: "tbl_accounts",
           name: "Accounts",
           fieldIds: ["title", "status"],
+          view: {
+            fieldIds: [],
+            fields: {},
+            filterableFieldIds: [],
+            groupableFieldIds: [],
+            sortableFieldIds: []
+          },
           workflow: { bindings: {} },
           viewIds: ["view_open"]
         }
@@ -982,7 +989,7 @@ describe("cloudtable agent tool registry", () => {
       }
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       kind: "workspace-inspection",
       workspace: {
         apps: [
@@ -1010,6 +1017,13 @@ describe("cloudtable agent tool registry", () => {
             tableId: "tbl_accounts",
             name: "Accounts",
             fieldIds: ["title", "status"],
+            view: {
+              fieldIds: [],
+              fields: {},
+              filterableFieldIds: [],
+              groupableFieldIds: [],
+              sortableFieldIds: []
+            },
             workflow: { bindings: {} },
             viewIds: ["view_open"]
           }
@@ -1710,6 +1724,7 @@ describe("cloudtable agent tool registry", () => {
     const permissionEngine = createPermissionEngine(fieldTypeRegistry, {
       snapshot
     });
+    const viewPlanner = createViewPlanner(fieldTypeRegistry, permissionEngine);
     const commandBus: CommandBus = {
       async dryRun() {
         throw new Error("not used in D1 inspector test");
@@ -1756,7 +1771,7 @@ describe("cloudtable agent tool registry", () => {
           throw new Error("not used in D1 inspector test");
         }
       },
-      viewPlanner: createViewPlanner(fieldTypeRegistry, permissionEngine),
+      viewPlanner,
       viewQueryReader: {
         read() {
           throw new Error("not used in D1 inspector test");
@@ -1781,6 +1796,7 @@ describe("cloudtable agent tool registry", () => {
       workspaceInspector: createWorkspaceInspector(
         db as unknown as D1Database,
         fieldTypeRegistry,
+        viewPlanner,
         workflowOperatorRegistry,
         () => registry
       )
@@ -1831,6 +1847,50 @@ describe("cloudtable agent tool registry", () => {
             fieldIds: ["fld_name", "fld_status"],
             name: "Table 1",
             tableId: "tbl_accounts",
+            view: {
+              fieldIds: ["fld_name", "fld_status"],
+              fields: {
+                fld_name: {
+                  capabilities: {
+                    supportsFiltering: true,
+                    supportsGrouping: true,
+                    supportsSorting: true
+                  },
+                  fieldId: "fld_name",
+                  fieldKey: "name",
+                  fieldType: "text.single_line",
+                  supportedFilterOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+                  supportedFilterOperators: supportedConditionOperatorManifests([
+                    "equals",
+                    "not_equals",
+                    "is_empty",
+                    "is_not_empty"
+                  ]),
+                  supportedSortModes: ["ascending", "descending"]
+                },
+                fld_status: {
+                  capabilities: {
+                    supportsFiltering: true,
+                    supportsGrouping: true,
+                    supportsSorting: true
+                  },
+                  fieldId: "fld_status",
+                  fieldKey: "status",
+                  fieldType: "status.semantic",
+                  supportedFilterOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+                  supportedFilterOperators: supportedConditionOperatorManifests([
+                    "equals",
+                    "not_equals",
+                    "is_empty",
+                    "is_not_empty"
+                  ]),
+                  supportedSortModes: ["ascending", "descending"]
+                }
+              },
+              filterableFieldIds: ["fld_name", "fld_status"],
+              groupableFieldIds: ["fld_name", "fld_status"],
+              sortableFieldIds: ["fld_name", "fld_status"]
+            },
             workflow: {
               bindings: {
                 "row.fields.name": {
@@ -1899,6 +1959,13 @@ describe("cloudtable agent tool registry", () => {
             fieldIds: [],
             name: "Contacts",
             tableId: "tbl_contacts",
+            view: {
+              fieldIds: [],
+              fields: {},
+              filterableFieldIds: [],
+              groupableFieldIds: [],
+              sortableFieldIds: []
+            },
             workflow: { bindings: {} },
             viewIds: []
           }

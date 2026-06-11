@@ -2,8 +2,12 @@ import type {
   WorkflowAuthoringMetadata,
   WorkflowConditionBindingMetadata,
   WorkflowConditionBinding,
+  WorkflowConditionInspectionMetadata,
+  WorkflowConditionManifest,
   WorkflowDefinition
 } from "./types";
+import type { WorkflowOperatorRegistry } from "./types";
+import { serializeWorkflowOperatorManifest } from "./manifest";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -94,6 +98,55 @@ function findReferencedBindingNames(
   return Array.from(referencedBindings).sort();
 }
 
+function resolveBindingsByFieldId(
+  condition: WorkflowConditionBinding,
+  authoringMetadata: WorkflowAuthoringMetadata,
+  referencedBindingNames: string[]
+): string[] {
+  if (!isRecord(condition.input) || typeof condition.input.fieldId !== "string") {
+    return referencedBindingNames;
+  }
+
+  const bindingNames = new Set(referencedBindingNames);
+  const candidates = Object.values(authoringMetadata.bindings).filter(
+    (metadata) => metadata.fieldId === condition.input.fieldId
+  );
+  if (candidates.length === 0) {
+    return referencedBindingNames;
+  }
+
+  if (bindingNames.size > 0) {
+    for (const candidate of candidates) {
+      bindingNames.add(candidate.binding);
+    }
+
+    return Array.from(bindingNames).sort();
+  }
+
+  const ownerAliasReferenced = collectConditionTemplatePaths(condition).some((path) =>
+    path.startsWith("row.owner")
+  );
+  if (ownerAliasReferenced) {
+    const canonicalOwner = candidates.find((candidate) => candidate.binding === "row.owner");
+    if (canonicalOwner) {
+      return [canonicalOwner.binding];
+    }
+  }
+
+  const genericFieldBinding = candidates.find((candidate) => candidate.binding.startsWith("row.fields."));
+  if (genericFieldBinding) {
+    return [genericFieldBinding.binding];
+  }
+
+  return [candidates[0]!.binding];
+}
+
+function collectConditionTemplatePaths(condition: WorkflowConditionBinding): string[] {
+  const paths: string[] = [];
+  collectTemplatePaths(condition.input, paths);
+  return paths;
+}
+
 function validateConditionBinding(
   index: number,
   condition: WorkflowConditionBinding,
@@ -149,6 +202,75 @@ export function validateWorkflowConditionBindings(
   }
 
   return diagnostics;
+}
+
+function resolveConditionOperatorManifest(
+  condition: WorkflowConditionBinding,
+  workflowOperatorRegistry: WorkflowOperatorRegistry
+): {
+  diagnostics: string[];
+  operator: WorkflowConditionManifest | null;
+} {
+  const operator = workflowOperatorRegistry.get(condition.operatorId);
+  if (!operator) {
+    return {
+      diagnostics: [`workflow_condition_operator_unknown:${condition.operatorId}`],
+      operator: null
+    };
+  }
+
+  if (operator.kind !== "condition") {
+    return {
+      diagnostics: [`workflow_condition_operator_kind_invalid:${condition.operatorId}:${operator.kind}`],
+      operator: null
+    };
+  }
+
+  return {
+    diagnostics: [],
+    operator: serializeWorkflowOperatorManifest(operator) as WorkflowConditionManifest
+  };
+}
+
+export function inspectWorkflowConditionsFromMetadata(
+  definition: WorkflowDefinition,
+  authoringMetadata: WorkflowAuthoringMetadata,
+  workflowOperatorRegistry: WorkflowOperatorRegistry
+): WorkflowConditionInspectionMetadata[] {
+  return definition.conditions.map((condition, index) => {
+    const referencedBindingNames = resolveBindingsByFieldId(
+      condition,
+      authoringMetadata,
+      findReferencedBindingNames(condition, authoringMetadata)
+    );
+    const diagnostics: string[] = [];
+    const resolvedBindings: WorkflowConditionBindingMetadata[] = [];
+
+    for (const bindingName of referencedBindingNames) {
+      const metadata = authoringMetadata.bindings[bindingName];
+      if (!metadata) {
+        diagnostics.push(`workflow_condition_binding_missing:${index}:${bindingName}`);
+        continue;
+      }
+
+      resolvedBindings.push(metadata);
+      diagnostics.push(...validateConditionBinding(index, condition, bindingName, metadata));
+    }
+
+    const resolvedOperator = resolveConditionOperatorManifest(condition, workflowOperatorRegistry);
+    diagnostics.push(
+      ...resolvedOperator.diagnostics.map((diagnostic) => `${diagnostic}:${index}`)
+    );
+
+    return {
+      diagnostics,
+      index,
+      operator: resolvedOperator.operator,
+      operatorId: condition.operatorId,
+      referencedBindingNames,
+      resolvedBindings
+    };
+  });
 }
 
 function normalizeText(value: string): string {
