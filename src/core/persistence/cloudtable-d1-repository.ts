@@ -5,14 +5,21 @@ import type {
   JsonValue,
   NormalizedCellValue
 } from "../field-types/types";
+import {
+  findRowOwnerField,
+  isRowOwnerEnabled
+} from "../ownership/row-owner";
 import { CommandCommitError } from "../commands/errors";
 import { isSupportedDomainCommandType } from "../commands/domain";
 import { toCanonicalJson } from "../commands/transcript";
 import type { IdempotencyReceipt } from "../commands/types";
 import type { EventLedgerCommit, EventLedgerRecord } from "../events/types";
 import { createWorkflowOperatorRegistry } from "../workflows/operator-registry";
+import { validateWorkflowConditionBindings } from "../workflows/authoring";
+import { buildWorkflowAuthoringMetadataForFields as buildSharedWorkflowAuthoringMetadataForFields } from "../workflows/binding-metadata";
 import type {
   WorkflowActionBinding,
+  WorkflowAuthoringMetadata,
   WorkflowConditionBinding,
   WorkflowDefinition,
   WorkflowTriggerBinding
@@ -186,6 +193,32 @@ function asWorkflowDefinition(
   return isRecord(value) ? (value as WorkflowDefinition & { metadata?: Record<string, unknown> }) : null;
 }
 
+function normalizeWorkflowTriggerMatcher(match: unknown): WorkflowTriggerBinding["match"] {
+  if (!isRecord(match)) {
+    return undefined;
+  }
+
+  const normalizedMatch: Record<string, unknown> = { ...match };
+  const fieldIds = Array.isArray(match.fieldIds)
+    ? match.fieldIds.filter(
+        (fieldId): fieldId is string => typeof fieldId === "string" && fieldId.length > 0
+      )
+    : typeof match.fieldId === "string" && match.fieldId.length > 0
+      ? [match.fieldId]
+      : [];
+
+  delete normalizedMatch.fieldId;
+  delete normalizedMatch.fieldIds;
+
+  if (fieldIds.length > 0) {
+    normalizedMatch.fieldIds = Array.from(new Set(fieldIds));
+  }
+
+  return Object.keys(normalizedMatch).length > 0
+    ? (normalizedMatch as WorkflowTriggerBinding["match"])
+    : undefined;
+}
+
 function normalizeWorkflowDefinition(
   command: EventLedgerCommit["command"],
   payload: Record<string, unknown>
@@ -216,7 +249,10 @@ function normalizeWorkflowDefinition(
       scopeHash: command.permissionScopeHash
     },
     trigger: isRecord(definition.trigger)
-      ? (definition.trigger as WorkflowTriggerBinding)
+      ? ({
+          ...(definition.trigger as WorkflowTriggerBinding),
+          match: normalizeWorkflowTriggerMatcher((definition.trigger as WorkflowTriggerBinding).match)
+        } satisfies WorkflowTriggerBinding)
       : {
           operatorId: ""
         },
@@ -304,6 +340,28 @@ function assertPublishableWorkflowDefinition(definition: WorkflowDefinition): vo
   }
 }
 
+function buildWorkflowAuthoringMetadataForFields(
+  fieldTypeRegistry: FieldTypeRegistry,
+  fields: readonly FieldRow[]
+): WorkflowAuthoringMetadata {
+  return buildSharedWorkflowAuthoringMetadataForFields(fieldTypeRegistry, fields, (field) => ({
+    config: JSON.parse(field.config_json) as JsonValue,
+    fieldId: field.id,
+    fieldKey: field.field_key,
+    fieldType: field.field_type
+  }));
+}
+
+function assertWorkflowConditionBindings(
+  definition: WorkflowDefinition,
+  authoringMetadata: WorkflowAuthoringMetadata
+): void {
+  const diagnostics = validateWorkflowConditionBindings(definition, authoringMetadata);
+  if (diagnostics.length > 0) {
+    throw new CommandCommitError(diagnostics[0] ?? "workflow_condition_binding_invalid");
+  }
+}
+
 function asJsonValue(value: unknown): JsonValue | null {
   if (
     value === null ||
@@ -339,6 +397,135 @@ function isSelectableOptionFieldType(fieldType: string): boolean {
 
 function parseFieldConfig(raw: string): JsonValue {
   return JSON.parse(raw) as JsonValue;
+}
+
+function resolveRowOwnerField(fields: readonly FieldRow[]): FieldRow | null {
+  const rowOwnerCandidate = findRowOwnerField(
+    fields.map((field) => ({
+      config: parseFieldConfig(field.config_json),
+      fieldId: field.id,
+      fieldKey: field.field_key,
+      fieldType: field.field_type
+    }))
+  );
+  if (!rowOwnerCandidate) {
+    return null;
+  }
+
+  return fields.find((field) => field.id === rowOwnerCandidate.fieldId) ?? null;
+}
+
+function parseNormalizedCellValue(raw: string): NormalizedCellValue | null {
+  return JSON.parse(raw) as NormalizedCellValue | null;
+}
+
+function assertRowOwnerCellValue(
+  rowOwnerField: FieldRow | null,
+  cell: Pick<CellStateRow, "value_json"> | null | undefined
+): void {
+  if (!rowOwnerField) {
+    return;
+  }
+
+  const normalized = cell ? parseNormalizedCellValue(cell.value_json) : null;
+  if (normalized == null || normalized.isEmpty) {
+    throw new CommandCommitError(`row_owner_value_required:${rowOwnerField.id}`);
+  }
+}
+
+function assertRowOwnerFieldConfiguration(
+  fields: readonly FieldRow[],
+  input: {
+    candidateFieldId: string;
+    config: JsonValue;
+    fieldType: string;
+  }
+): void {
+  if (!isRowOwnerEnabled(input.config)) {
+    return;
+  }
+
+  if (input.fieldType !== "principal.user") {
+    throw new CommandCommitError("row_owner_field_must_use_principal_user");
+  }
+
+  const conflictingField = fields.find(
+    (field) =>
+      field.id !== input.candidateFieldId && isRowOwnerEnabled(parseFieldConfig(field.config_json))
+  );
+  if (conflictingField) {
+    throw new CommandCommitError(`row_owner_field_conflict:${conflictingField.id}`);
+  }
+}
+
+async function tableHasActiveRecords(
+  db: D1Database,
+  workspaceId: string,
+  tableId: string
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS has_records
+       FROM records
+       WHERE workspace_id = ? AND table_id = ? AND archived_at IS NULL
+       LIMIT 1`
+    )
+    .bind(workspaceId, tableId)
+    .first<{ has_records: number }>();
+
+  return row?.has_records === 1;
+}
+
+async function tableHasRecordsMissingRowOwnerValue(
+  db: D1Database,
+  workspaceId: string,
+  tableId: string,
+  fieldId: string
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT 1 AS has_missing
+       FROM records
+       LEFT JOIN cell_current
+         ON cell_current.workspace_id = records.workspace_id
+        AND cell_current.table_id = records.table_id
+        AND cell_current.record_id = records.id
+        AND cell_current.field_id = ?
+       WHERE records.workspace_id = ?
+         AND records.table_id = ?
+         AND records.archived_at IS NULL
+         AND (
+           cell_current.record_id IS NULL OR
+           COALESCE(json_extract(cell_current.value_json, '$.isEmpty'), 1) = 1
+         )
+       LIMIT 1`
+    )
+    .bind(fieldId, workspaceId, tableId)
+    .first<{ has_missing: number }>();
+
+  return row?.has_missing === 1;
+}
+
+async function assertRowOwnerActivationInvariant(
+  db: D1Database,
+  workspaceId: string,
+  tableId: string,
+  input: {
+    activatingExistingField: boolean;
+    fieldId: string;
+    nextConfig: JsonValue;
+  }
+): Promise<void> {
+  if (!isRowOwnerEnabled(input.nextConfig)) {
+    return;
+  }
+
+  const hasMissingValues = input.activatingExistingField
+    ? await tableHasRecordsMissingRowOwnerValue(db, workspaceId, tableId, input.fieldId)
+    : await tableHasActiveRecords(db, workspaceId, tableId);
+  if (hasMissingValues) {
+    throw new CommandCommitError(`row_owner_backfill_required:${input.fieldId}`);
+  }
 }
 
 function toNumberValue(indexValue: FieldIndexValue): number | null {
@@ -1347,6 +1534,7 @@ async function appendRecordPatchStatements(
     throw new CommandCommitError(`record_not_found:${recordId}`);
   }
 
+  const rowOwnerField = resolveRowOwnerField(await listFields(db, command.workspaceId, table.id));
   const fieldsByIdentifier = await resolvePatchFieldMap(db, command.workspaceId, table.id);
   const existingCells = await getRecordCells(db, command.workspaceId, table.id, recordId);
   const existingCellsByFieldId = new Map(existingCells.map((cell) => [cell.field_id, cell] as const));
@@ -1449,6 +1637,8 @@ async function appendRecordPatchStatements(
         )
     );
   }
+
+  assertRowOwnerCellValue(rowOwnerField, mergedCellsByFieldId.get(rowOwnerField?.id ?? ""));
 
   const mergedCells = [...mergedCellsByFieldId.values()].sort(compareCellStateRows);
   const nextRecordRevision = record.record_revision + 1;
@@ -1601,6 +1791,16 @@ async function appendDomainStatements(
       const fieldType = payload.fieldType as string;
       const config = asJsonValue(payload.config ?? {}) ?? {};
       const existingFields = await listFields(db, command.workspaceId, table.id);
+      assertRowOwnerFieldConfiguration(existingFields, {
+        candidateFieldId: fieldId,
+        config,
+        fieldType
+      });
+      await assertRowOwnerActivationInvariant(db, command.workspaceId, table.id, {
+        activatingExistingField: false,
+        fieldId,
+        nextConfig: config
+      });
       const orderedExistingFields = await appendDenseFieldOrderStatements(
         db,
         command.workspaceId,
@@ -1673,6 +1873,18 @@ async function appendDomainStatements(
         ...(existingConfig as Record<string, JsonValue>),
         ...(configPatch as Record<string, JsonValue>)
       } satisfies Record<string, JsonValue>;
+      const existingFields = await listFields(db, command.workspaceId, table.id);
+      const wasRowOwnerEnabled = isRowOwnerEnabled(existingConfig);
+      assertRowOwnerFieldConfiguration(existingFields, {
+        candidateFieldId: field.id,
+        config: nextConfig,
+        fieldType: field.field_type
+      });
+      await assertRowOwnerActivationInvariant(db, command.workspaceId, table.id, {
+        activatingExistingField: !wasRowOwnerEnabled,
+        fieldId: field.id,
+        nextConfig
+      });
       const validation = definition.validateConfig(nextConfig, {
         fieldType: field.field_type
       });
@@ -2038,6 +2250,11 @@ async function appendDomainStatements(
         ...payload,
         tableId
       });
+      const activeFields = await listFields(db, command.workspaceId, table.id);
+      assertWorkflowConditionBindings(
+        definition,
+        buildWorkflowAuthoringMetadataForFields(fieldTypeRegistry, activeFields)
+      );
       const workflowVersionId = `${workflowId}:v1`;
       const refs = workflowDefinitionRefs(definition);
 
@@ -2163,6 +2380,11 @@ async function appendDomainStatements(
         ...payload,
         tableId
       });
+      const activeFields = await listFields(db, command.workspaceId, table.id);
+      assertWorkflowConditionBindings(
+        nextDefinition,
+        buildWorkflowAuthoringMetadataForFields(fieldTypeRegistry, activeFields)
+      );
       const refs = workflowDefinitionRefs(nextDefinition);
 
       statements.push(
@@ -2307,6 +2529,23 @@ async function appendDomainStatements(
       }
 
       if (command.commandType === "workflow.publish") {
+        const workflowTableId =
+          typeof parsedDefinition.metadata?.tableId === "string" &&
+          parsedDefinition.metadata.tableId.length > 0
+            ? parsedDefinition.metadata.tableId
+            : typeof parsedDefinition.trigger.match?.tableId === "string" &&
+                parsedDefinition.trigger.match.tableId.length > 0
+              ? parsedDefinition.trigger.match.tableId
+            : null;
+        if (!workflowTableId) {
+          throw new CommandCommitError("missing_tableId");
+        }
+
+        const activeFields = await listFields(db, command.workspaceId, workflowTableId);
+        assertWorkflowConditionBindings(
+          parsedDefinition,
+          buildWorkflowAuthoringMetadataForFields(fieldTypeRegistry, activeFields)
+        );
         assertPublishableWorkflowDefinition(parsedDefinition);
       } else if (version.published_at == null) {
         throw new CommandCommitError(`workflow_not_published:${workflowId}`);
@@ -2357,6 +2596,16 @@ async function appendDomainStatements(
           ? (payload.recordKey as string)
           : stableRecordKeyFromId(recordId);
       const cells = (payload.cells as Record<string, unknown> | undefined) ?? {};
+      const activeFields = await listFields(db, command.workspaceId, table.id);
+      const rowOwnerField = resolveRowOwnerField(activeFields);
+      const effectiveCells = { ...cells };
+      if (rowOwnerField && !Object.prototype.hasOwnProperty.call(effectiveCells, rowOwnerField.id)) {
+        if (command.actor.principalId.length === 0) {
+          throw new CommandCommitError(`row_owner_principal_missing:${rowOwnerField.id}`);
+        }
+
+        effectiveCells[rowOwnerField.id] = [command.actor.principalId];
+      }
 
       statements.push(
         db
@@ -2387,7 +2636,8 @@ async function appendDomainStatements(
       );
 
       const projectionCells: CellStateRow[] = [];
-      const sortedFieldIds = Object.keys(cells).sort();
+      const sortedFieldIds = Object.keys(effectiveCells).sort();
+      let rowOwnerAssigned = rowOwnerField == null;
       for (const fieldId of sortedFieldIds) {
         const mutation = await buildCellMutation(
           db,
@@ -2395,8 +2645,11 @@ async function appendDomainStatements(
           command.workspaceId,
           table.id,
           fieldId,
-          cells[fieldId]
+          effectiveCells[fieldId]
         );
+        if (rowOwnerField && fieldId === rowOwnerField.id) {
+          rowOwnerAssigned = mutation.normalized != null && !mutation.normalized.isEmpty;
+        }
 
         projectionCells.push({
           cell_revision: 1,
@@ -2453,6 +2706,9 @@ async function appendDomainStatements(
               event.eventId
             )
         );
+      }
+      if (!rowOwnerAssigned && rowOwnerField) {
+        throw new CommandCommitError(`row_owner_value_required:${rowOwnerField.id}`);
       }
 
       statements.push(
@@ -2812,6 +3068,7 @@ async function appendDomainStatements(
         fieldId,
         payload.value
       );
+      const rowOwnerField = resolveRowOwnerField(await listFields(db, command.workspaceId, table.id));
 
       const existingCells = await getRecordCells(
         db,
@@ -2833,6 +3090,10 @@ async function appendDomainStatements(
           value_json: JSON.stringify(mutation.normalized)
         }
       ].sort(compareCellStateRows);
+      assertRowOwnerCellValue(
+        rowOwnerField,
+        mergedCells.find((cell) => cell.field_id === rowOwnerField?.id)
+      );
 
       statements.push(
         db

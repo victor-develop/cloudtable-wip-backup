@@ -1,5 +1,6 @@
 import type {
   CellValidationContext,
+  FieldWorkflowProposalHint,
   FieldSchemaContext,
   FieldIndexValue,
   FieldPermissionBehavior,
@@ -36,6 +37,18 @@ const basePermissionBehavior: FieldPermissionBehavior = {
   allowsWorkflowTrigger: true,
   supportsValueVisibilityRules: false
 };
+
+const defaultWorkflowProposalHints: readonly FieldWorkflowProposalHint[] = [
+  {
+    operatorId: "is_empty",
+    matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+    matchFieldPhrases: ["without {field}", "{field} missing"]
+  },
+  {
+    operatorId: "is_not_empty",
+    matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+  }
+];
 
 type ModuleFixtureInput = {
   type: string;
@@ -81,6 +94,17 @@ type ModuleFixtureInput = {
       }
   >;
   indexSample: (value: NormalizedCellValue | null) => FieldIndexValue;
+  workflowProposalHints?:
+    | readonly FieldWorkflowProposalHint[]
+    | ((
+        context: {
+          aliasOf?: string;
+          binding: string;
+          bindingKind: "field" | "alias";
+          fieldConfig?: JsonValue;
+          isCanonical?: boolean;
+        }
+      ) => readonly FieldWorkflowProposalHint[]);
 };
 
 type SelectOption = {
@@ -164,7 +188,6 @@ function defineFieldType(input: ModuleFixtureInput): FieldTypeDefinition {
     ...basePermissionBehavior,
     ...input.permissionBehavior
   };
-
   return {
     type: input.type,
     version,
@@ -222,6 +245,14 @@ function defineFieldType(input: ModuleFixtureInput): FieldTypeDefinition {
     },
     getSupportedConditionOperators() {
       return supportedConditionOperators;
+    },
+    getWorkflowProposalHints(context) {
+      const hints =
+        typeof input.workflowProposalHints === "function"
+          ? input.workflowProposalHints(context)
+          : input.workflowProposalHints ?? defaultWorkflowProposalHints;
+
+      return hints.map(cloneProposalHint);
     },
     getSupportedSortModes() {
       return supportedSortModes;
@@ -751,6 +782,78 @@ function optionSearchText(option: SelectOption): string {
   ).join(" ");
 }
 
+function buildOptionPhraseVariants(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return [];
+  }
+
+  return Array.from(
+    new Set([
+      trimmed.toLowerCase(),
+      trimmed
+        .replace(/[_-]+/g, " ")
+        .trim()
+        .toLowerCase()
+    ])
+  ).filter((entry) => entry.length > 0);
+}
+
+function buildConfiguredOptionWorkflowProposalHints(
+  options: readonly SelectOption[]
+): FieldWorkflowProposalHint[] {
+  const semanticCounts = new Map<string, number>();
+  for (const option of options) {
+    if (!option.semantic) {
+      continue;
+    }
+
+    semanticCounts.set(option.semantic, (semanticCounts.get(option.semantic) ?? 0) + 1);
+  }
+
+  return options.map((option) => {
+    const optionPhrases = new Set<string>([
+      ...buildOptionPhraseVariants(option.id),
+      ...buildOptionPhraseVariants(option.label)
+    ]);
+    if (option.semantic && semanticCounts.get(option.semantic) === 1) {
+      for (const phrase of buildOptionPhraseVariants(option.semantic)) {
+        optionPhrases.add(phrase);
+      }
+    }
+
+    const contextualPhrases = Array.from(optionPhrases).flatMap((phrase) => [
+      `changes to ${phrase}`,
+      `becomes ${phrase}`,
+      `is ${phrase}`,
+      `set to ${phrase}`,
+      `equals ${phrase}`
+    ]);
+
+    return {
+      draftInput: {
+        left: {
+          path: "row.fields.{field}.value"
+        },
+        right: option.id
+      },
+      matchFieldPhrases: [
+        "{field} changes to " + option.label,
+        "{field} becomes " + option.label,
+        "{field} is " + option.label,
+        "{field} set to " + option.label,
+        "{field} equals " + option.label
+      ],
+      matchPhrases: contextualPhrases,
+      operatorId: "equals"
+    };
+  });
+}
+
 function buildSelectMeta(option: SelectOption | undefined): Record<string, JsonValue> | undefined {
   if (!option) {
     return undefined;
@@ -761,6 +864,18 @@ function buildSelectMeta(option: SelectOption | undefined): Record<string, JsonV
     optionLabel: option.label,
     optionOrder: option.order,
     semantic: option.semantic ?? null
+  };
+}
+
+function cloneProposalHint(hint: FieldWorkflowProposalHint): FieldWorkflowProposalHint {
+  return {
+    draftInput:
+      hint.draftInput === undefined
+        ? undefined
+        : (JSON.parse(JSON.stringify(hint.draftInput)) as Record<string, JsonValue>),
+    matchFieldPhrases: hint.matchFieldPhrases ? [...hint.matchFieldPhrases] : undefined,
+    matchPhrases: [...hint.matchPhrases],
+    operatorId: hint.operatorId
   };
 }
 
@@ -1153,6 +1268,23 @@ function createSelectFieldType(input: {
     },
     getSupportedConditionOperators() {
       return supportedConditionOperators;
+    },
+    getWorkflowProposalHints(context) {
+      const parsedConfig = parseSelectConfig(context.fieldConfig);
+      const configuredOptionHints =
+        input.type === "status.semantic"
+          ? buildConfiguredOptionWorkflowProposalHints(parsedConfig.options).map((hint) => ({
+              ...hint,
+              draftInput: {
+                left: {
+                  path: `${context.binding}.value`
+                },
+                right: hint.draftInput?.right ?? null
+              }
+            }))
+          : [];
+
+      return [...configuredOptionHints, ...defaultWorkflowProposalHints].map(cloneProposalHint);
     },
     getSupportedSortModes() {
       return supportedSortModes;
@@ -1641,7 +1773,10 @@ function validateDateValue(
 }
 
 function validatePrincipalConfig(config: unknown): ValidationResult {
-  const { config: parsedConfig, errors } = validateObjectConfig(config, ["allowedRoleIds"]);
+  const { config: parsedConfig, errors } = validateObjectConfig(config, [
+    "allowedRoleIds",
+    "rowOwner"
+  ]);
   if (!parsedConfig) {
     return {
       valid: false,
@@ -1651,6 +1786,9 @@ function validatePrincipalConfig(config: unknown): ValidationResult {
 
   if (parsedConfig.allowedRoleIds !== undefined) {
     errors.push(...validateStringArray(parsedConfig.allowedRoleIds, "allowedRoleIds").errors);
+  }
+  if (parsedConfig.rowOwner !== undefined && typeof parsedConfig.rowOwner !== "boolean") {
+    errors.push("rowOwner must be a boolean.");
   }
 
   return {
@@ -2175,6 +2313,10 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
             type: "string",
             description: "Workspace role id."
           }
+        },
+        rowOwner: {
+          type: "boolean",
+          description: "Marks this principal field as the table's canonical row-owner binding."
         }
       }
     },
@@ -2190,6 +2332,30 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
     normalize: (input) => normalizeReferenceValue("principal.user", input),
     normalizeSample: (input) => normalizeReferenceValue("principal.user", input),
     validateConfig: (config) => validatePrincipalConfig(config),
+    workflowProposalHints: ({ bindingKind, isCanonical }) =>
+      bindingKind === "alias" && isCanonical === true
+        ? [
+            {
+              operatorId: "is_empty",
+              matchPhrases: ["unassigned"],
+              matchFieldPhrases: ["without {field}", "{field} missing"]
+            },
+            {
+              operatorId: "is_not_empty",
+              matchPhrases: ["assigned"]
+            }
+          ]
+        : [
+            {
+              operatorId: "is_empty",
+              matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+              matchFieldPhrases: ["without {field}", "{field} missing"]
+            },
+            {
+              operatorId: "is_not_empty",
+              matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+            }
+          ],
     validateValue: (value) =>
       validateReferenceValue("principal.user", value, {
         allowMultiple: true,
@@ -2203,6 +2369,11 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
           "allowedRoleIds entries must be unique: admin.",
           "allowedRoleIds entry 2 must be a non-empty string."
         ]
+      },
+      {
+        idSuffix: "row_owner_non_boolean",
+        config: { rowOwner: "yes" },
+        expectedErrors: ["rowOwner must be a boolean."]
       }
     ],
     invalidValueFixtures: [

@@ -2,6 +2,8 @@ import { serializeAgentToolManifest } from "../core/agent-tools/manifest";
 import type { AgentToolRegistry, WorkspaceInspection, WorkspaceInspector } from "../core/agent-tools/types";
 import { serializeFieldTypeManifest } from "../core/field-types/manifest";
 import type { FieldTypeRegistry } from "../core/field-types/types";
+import type { JsonValue } from "../core/field-types/types";
+import { buildWorkflowAuthoringMetadataForFields } from "../core/workflows/binding-metadata";
 import { serializeWorkflowOperatorManifest } from "../core/workflows/manifest";
 import type { WorkflowOperatorRegistry } from "../core/workflows/types";
 
@@ -20,7 +22,10 @@ type TableRow = {
 };
 
 type FieldRow = {
+  config_json: string;
   field_id: string;
+  field_key: string;
+  field_type: string;
   field_order?: number | null;
   table_id: string;
   created_at: string;
@@ -59,8 +64,12 @@ export function createWorkspaceInspector(
       const [apps, tables, fieldsByTableId, viewIdsByTableId, views, workflows] = await Promise.all([
         appsIncluded ? loadApps(db, input.workspaceId) : Promise.resolve([]),
         appsIncluded || tablesIncluded ? loadTables(db, input.workspaceId) : Promise.resolve([]),
-        tablesIncluded ? loadFieldIdsByTable(db, input.workspaceId) : Promise.resolve(new Map()),
-        tablesIncluded ? loadViewIdsByTable(db, input.workspaceId) : Promise.resolve(new Map()),
+        tablesIncluded
+          ? loadFieldsByTable(db, input.workspaceId)
+          : Promise.resolve(new Map<string, FieldRow[]>()),
+        tablesIncluded
+          ? loadViewIdsByTable(db, input.workspaceId)
+          : Promise.resolve(new Map<string, string[]>()),
         viewsIncluded ? loadViews(db, input.workspaceId) : Promise.resolve([]),
         workflowsIncluded ? loadWorkflows(db, input.workspaceId) : Promise.resolve([])
       ]);
@@ -85,9 +94,21 @@ export function createWorkspaceInspector(
           : undefined,
         tables: tablesIncluded
           ? tables.map((table) => ({
-              fieldIds: fieldsByTableId.get(table.table_id) ?? [],
+              fieldIds: (fieldsByTableId.get(table.table_id) ?? []).map(
+                (field: FieldRow) => field.field_id
+              ),
               name: table.table_name,
               tableId: table.table_id,
+              workflow: buildWorkflowAuthoringMetadataForFields(
+                fieldTypeRegistry,
+                fieldsByTableId.get(table.table_id) ?? [],
+                (field) => ({
+                  config: JSON.parse(field.config_json) as JsonValue,
+                  fieldId: field.field_id,
+                  fieldKey: field.field_key,
+                  fieldType: field.field_type
+                })
+              ),
               viewIds: viewIdsByTableId.get(table.table_id) ?? []
             }))
           : [],
@@ -141,13 +162,13 @@ async function loadTables(db: D1Database, workspaceId: string): Promise<TableRow
   return rows.results ?? [];
 }
 
-async function loadFieldIdsByTable(
+async function loadFieldsByTable(
   db: D1Database,
   workspaceId: string
-): Promise<Map<string, string[]>> {
+): Promise<Map<string, FieldRow[]>> {
   const rows = await db
     .prepare(
-      `SELECT id AS field_id, table_id, created_at, field_order
+      `SELECT id AS field_id, table_id, created_at, field_order, field_key, field_type, config_json
        FROM fields
        WHERE workspace_id = ? AND archived_at IS NULL
        ORDER BY
@@ -160,7 +181,7 @@ async function loadFieldIdsByTable(
     .bind(workspaceId)
     .all<FieldRow>();
 
-  return groupIdsByTable(rows.results ?? [], "field_id");
+  return groupRowsByTable(rows.results ?? []);
 }
 
 async function loadViewIdsByTable(db: D1Database, workspaceId: string): Promise<Map<string, string[]>> {
@@ -248,6 +269,21 @@ function groupIdsByTable<T extends { table_id: string }>(
     }
 
     grouped.set(row.table_id, [id]);
+  }
+
+  return grouped;
+}
+
+function groupRowsByTable<T extends { table_id: string }>(rows: T[]): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const existing = grouped.get(row.table_id);
+    if (existing) {
+      existing.push(row);
+      continue;
+    }
+
+    grouped.set(row.table_id, [row]);
   }
 
   return grouped;

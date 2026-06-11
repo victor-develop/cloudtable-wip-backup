@@ -6,6 +6,7 @@ import type {
 } from "../permissions/types";
 import type {
   WorkflowActionManifest,
+  WorkflowAuthoringMetadata,
   WorkflowOperatorManifest,
   WorkflowTriggerManifest
 } from "../workflows/types";
@@ -418,6 +419,7 @@ export type WorkspaceInspection = {
     tableId: string;
     name: string;
     fieldIds: string[];
+    workflow: WorkflowAuthoringMetadata;
     viewIds: string[];
   }>;
   views: Array<{

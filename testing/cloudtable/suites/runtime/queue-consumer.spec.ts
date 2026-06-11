@@ -203,6 +203,7 @@ function insertRecordProjection(db: SqliteD1Database): void {
       "rec_1",
       JSON.stringify({
         fields: {
+          owner: null,
           source: null,
           status: null
         }
@@ -211,6 +212,67 @@ function insertRecordProjection(db: SqliteD1Database): void {
       1,
       "evt_seed_record_projection",
       "2026-06-06T00:00:00.000Z"
+    );
+}
+
+function insertCellCurrent(
+  db: SqliteD1Database,
+  input: {
+    fieldId: string;
+    fieldType: string;
+    recordId: string;
+    tableId: string;
+    value: unknown;
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO cell_current (
+         record_id,
+         field_id,
+         workspace_id,
+         table_id,
+         value_type,
+         value_version,
+         value_json,
+         text_value,
+         number_value,
+         bool_value,
+         datetime_value,
+         reference_value,
+         display_value,
+         search_text,
+         value_hash,
+         cell_revision,
+         last_event_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.recordId,
+      input.fieldId,
+      "ws_1",
+      input.tableId,
+      input.fieldType,
+      1,
+      JSON.stringify({
+        isEmpty:
+          input.value == null ||
+          input.value === "" ||
+          (Array.isArray(input.value) && input.value.length === 0),
+        raw: input.value,
+        valueType: input.fieldType,
+        version: 1
+      }),
+      typeof input.value === "string" ? input.value : null,
+      input.fieldType === "number.decimal" && input.value != null ? Number(input.value) : null,
+      typeof input.value === "boolean" ? Number(input.value) : null,
+      null,
+      null,
+      input.value == null ? "" : String(input.value),
+      input.value == null ? "" : String(input.value).toLowerCase(),
+      JSON.stringify(input.value ?? null),
+      1,
+      `evt_seed_${input.recordId}_${input.fieldId}`
     );
 }
 
@@ -421,6 +483,7 @@ function insertWorkflowDefinition(
   db: SqliteD1Database,
   input: {
     actions?: Array<Record<string, unknown>>;
+    conditions?: Array<Record<string, unknown>>;
     metadata?: Record<string, unknown>;
     principal?: Record<string, unknown>;
     publishedAt?: string | null;
@@ -493,7 +556,7 @@ function insertWorkflowDefinition(
               tableId: "tbl_1"
             }
           },
-        conditions: [],
+        conditions: input.conditions ?? [],
         ...(input.metadata ? { metadata: input.metadata } : {}),
         actions:
           input.actions ?? [
@@ -2361,6 +2424,132 @@ describe("workflow queue consumer", () => {
       eventId: notificationOutput.events?.[0]?.eventId,
       kind: "event-fanout",
       workspaceId: "ws_1"
+    });
+  });
+
+  it("delivers canonical row.owner bindings through published workflow action delivery", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    insertField(db, {
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1",
+      config: {
+        rowOwner: true
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db);
+    insertCellCurrent(db, {
+      fieldId: "fld_owner",
+      fieldType: "principal.user",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: ["usr_owner"]
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["notification.emit"]
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "emit_notification_event",
+          input: {
+            channel: "activity",
+            details: {
+              owner: {
+                path: "row.owner.value"
+              },
+              recordId: {
+                path: "row.recordId"
+              }
+            },
+            message: "Owner workflow step completed."
+          }
+        }
+      ],
+      conditions: [
+        {
+          operatorId: "equals",
+          input: {
+            left: {
+              path: "row.owner.value"
+            },
+            right: ["usr_owner"]
+          }
+        }
+      ]
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_owner_delivery_1",
+            idempotencyKey: "idem_trigger_owner_delivery_1",
+            payload: {
+              fieldType: "text.single_line",
+              value: "crm"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    const workflowRun = await db
+      .prepare(`SELECT id, status FROM workflow_runs ORDER BY id ASC LIMIT 1`)
+      .bind()
+      .first<{ id: string; status: string }>();
+    expect(workflowRun?.status).toBe("completed");
+
+    const workflowStep = await db
+      .prepare(
+        `SELECT status, last_error_code
+         FROM workflow_run_steps
+         ORDER BY id ASC
+         LIMIT 1`
+      )
+      .bind()
+      .first<{ last_error_code: string | null; status: string }>();
+    expect(workflowStep).toEqual({
+      last_error_code: null,
+      status: "completed"
+    });
+
+    const notificationCommand = await db
+      .prepare(
+        `SELECT payload_json
+         FROM event_ledger
+         WHERE command_id = ?`
+      )
+      .bind(`${workflowRun?.id}:action:0`)
+      .first<{ payload_json: string }>();
+    expect(JSON.parse(notificationCommand?.payload_json ?? "{}")).toMatchObject({
+      channel: "activity",
+      details: {
+        owner: ["usr_owner"],
+        recordId: "rec_1"
+      },
+      message: "Owner workflow step completed."
     });
   });
 

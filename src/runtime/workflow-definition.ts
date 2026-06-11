@@ -1,3 +1,7 @@
+import type { FieldTypeRegistry } from "../core/field-types/types";
+import type { WorkflowAuthoringMetadata } from "../core/workflows/types";
+import { readTableSchemaMetadata } from "./schema-metadata-read";
+
 type PersistedWorkflowDefinition = {
   metadata?: {
     status?: "draft" | "published" | "paused";
@@ -28,6 +32,7 @@ export type WorkflowDefinitionMetadata = {
   referencedFieldIds: string[];
   status: "draft" | "published" | "paused";
   triggerTableId: string | null;
+  workflow: WorkflowAuthoringMetadata;
   workflowId: string;
   workflowKey: string;
   workflowName: string;
@@ -156,6 +161,7 @@ async function readLatestPublishedWorkflowRow(
 
 export async function readWorkflowDefinitionMetadata(
   db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry | undefined,
   workspaceId: string,
   workflowId: string
 ): Promise<WorkflowDefinitionMetadata | null> {
@@ -197,6 +203,15 @@ export async function readWorkflowDefinitionMetadata(
     return null;
   }
 
+  const triggerTableId = readWorkflowTriggerTableId(parsedDefinition);
+  const tableMetadata =
+    triggerTableId && fieldTypeRegistry
+      ? await readTableSchemaMetadata(db, fieldTypeRegistry, {
+          tableId: triggerTableId,
+          workspaceId
+        })
+      : null;
+
   return {
     currentVersion: row.current_version ?? 0,
     definition,
@@ -206,7 +221,8 @@ export async function readWorkflowDefinitionMetadata(
     status: workflowStatus(
       isRecord(parsedDefinition) ? (parsedDefinition as PersistedWorkflowDefinition) : {}
     ),
-    triggerTableId: readWorkflowTriggerTableId(parsedDefinition),
+    triggerTableId,
+    workflow: tableMetadata?.workflow ?? { bindings: {} },
     workflowId: row.workflow_id ?? workflowId,
     workflowKey: row.workflow_key ?? "",
     workflowName: row.workflow_name ?? "",

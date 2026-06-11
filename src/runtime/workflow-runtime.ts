@@ -1,6 +1,8 @@
 import type { EventLedgerRecord } from "../core/events/types";
 import { cloneCommandResult } from "../core/commands/transcript";
+import type { JsonValue } from "../core/field-types/types";
 import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
+import { findRowOwnerField } from "../core/ownership/row-owner";
 import {
   executeWorkflowDefinition,
   matchWorkflowTrigger,
@@ -91,6 +93,7 @@ type EventRow = {
 };
 
 type FieldCellRow = {
+  config_json: string;
   field_id: string;
   field_key: string;
   field_type: string;
@@ -1049,6 +1052,7 @@ async function loadRecordContext(
          fields.id AS field_id,
          fields.field_key AS field_key,
          fields.field_type AS field_type,
+         fields.config_json AS config_json,
          cell_current.value_json AS value_json
        FROM cell_current
        INNER JOIN fields
@@ -1078,9 +1082,18 @@ async function loadRecordContext(
       return [cell.field_key, value];
     })
   );
+  const rowOwnerField = findRowOwnerField(
+    (cells.results ?? []).map((cell) => ({
+      config: JSON.parse(cell.config_json) as JsonValue,
+      fieldId: cell.field_id,
+      fieldKey: cell.field_key,
+      fieldType: cell.field_type
+    }))
+  );
 
   return {
     fields,
+    ...(rowOwnerField ? { owner: fields[rowOwnerField.fieldKey] } : {}),
     recordId: record.record_id
   };
 }

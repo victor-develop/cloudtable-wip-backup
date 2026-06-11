@@ -116,6 +116,22 @@ export type OperatorContext = {
   fieldConfig?: JsonValue;
 };
 
+export type FieldWorkflowProposalHint = {
+  draftInput?: Record<string, JsonValue>;
+  operatorId: string;
+  matchPhrases: readonly string[];
+  matchFieldPhrases?: readonly string[];
+};
+
+export type WorkflowProposalHintContext = {
+  aliasOf?: string;
+  binding: string;
+  bindingKind: "field" | "alias";
+  fieldType: string;
+  fieldConfig?: JsonValue;
+  isCanonical?: boolean;
+};
+
 export type SortContext = {
   fieldType: string;
   fieldConfig?: JsonValue;
@@ -194,6 +210,7 @@ export type FieldTypeDefinition = {
   toIndex(value: NormalizedCellValue | null, context: IndexContext): FieldIndexValue;
   toSearchText(value: NormalizedCellValue | null, context: SearchContext): string;
   getSupportedConditionOperators(context: OperatorContext): readonly string[];
+  getWorkflowProposalHints(context: WorkflowProposalHintContext): readonly FieldWorkflowProposalHint[];
   getSupportedSortModes(context: SortContext): readonly string[];
   getPermissionBehavior(context: PermissionContext): FieldPermissionBehavior;
   fixtures: readonly FieldTypeFixture[];

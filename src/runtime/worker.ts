@@ -450,7 +450,7 @@ export async function handleFetch(
       return auth.response;
     }
 
-    const detail = await readTableSchemaMetadata(env.DB, {
+    const detail = await readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
       tableId,
       workspaceId
     });
@@ -622,7 +622,12 @@ export async function handleFetch(
       return auth.response;
     }
 
-    const detail = await readWorkflowDefinitionMetadata(env.DB, auth.workspaceId, auth.workflowId);
+    const detail = await readWorkflowDefinitionMetadata(
+      env.DB,
+      runtime.fieldTypeRegistry,
+      auth.workspaceId,
+      auth.workflowId
+    );
     if (!detail) {
       return notFound(`Workflow ${auth.workflowId} was not found.`);
     }
@@ -882,7 +887,7 @@ export async function handleFetch(
     }
 
     const [, tableId] = tableActivityMatch;
-    const table = await readTableSchemaMetadata(env.DB, {
+    const table = await readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
       tableId,
       workspaceId
     });
@@ -1175,10 +1180,15 @@ export async function handleFetch(
     );
 
     const responseBody = (await response.json()) as Record<string, unknown>;
-    return json({
-      ...responseBody,
-      aggregate: aggregateDescriptorForCommand(normalized.command)
-    });
+    return json(
+      {
+        ...responseBody,
+        aggregate: aggregateDescriptorForCommand(normalized.command)
+      },
+      {
+        status: response.status
+      }
+    );
   }
 
   return notFound("CloudTable route not found.");
@@ -1333,11 +1343,16 @@ async function handleCommandExecuteIngress(
   const response = await dispatchCommandToCoordinator(env, new URL(request.url).origin, normalized.command);
   const responseBody = (await response.json()) as Record<string, unknown>;
 
-  return json({
-    ...responseBody,
-    aggregate: aggregateDescriptorForCommand(normalized.command),
-    command: normalized.command
-  });
+  return json(
+    {
+      ...responseBody,
+      aggregate: aggregateDescriptorForCommand(normalized.command),
+      command: normalized.command
+    },
+    {
+      status: response.status
+    }
+  );
 }
 
 async function readCommandIngressBody(request: Request): Promise<Record<string, unknown> | Response> {
@@ -1584,7 +1599,7 @@ async function handleGroupedViewMove(
   }
 
   const [table, viewDefinition, viewQuery] = await Promise.all([
-    readTableSchemaMetadata(env.DB, {
+    readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
       tableId: input.tableId,
       workspaceId
     }),
@@ -1710,18 +1725,23 @@ async function handleGroupedViewMove(
 
   const response = await dispatchCommandToCoordinator(env, new URL(request.url).origin, command);
   const responseBody = (await response.json()) as Record<string, unknown>;
-  return json({
-    ...responseBody,
-    aggregate: aggregateDescriptorForCommand(command),
-    viewAction: {
-      fieldId: groupField.fieldId,
-      recordId: input.recordId,
-      sourceBucketKey: currentMembership.bucketKey,
-      targetGroupValue,
-      type: "groupMove",
-      viewId: input.viewId
+  return json(
+    {
+      ...responseBody,
+      aggregate: aggregateDescriptorForCommand(command),
+      viewAction: {
+        fieldId: groupField.fieldId,
+        recordId: input.recordId,
+        sourceBucketKey: currentMembership.bucketKey,
+        targetGroupValue,
+        type: "groupMove",
+        viewId: input.viewId
+      }
+    },
+    {
+      status: response.status
     }
-  });
+  );
 }
 
 function canonicalizeRecordCells(
@@ -1880,7 +1900,7 @@ async function prepareViewScopedCreateInput(
   }
 
   const [table, viewDefinition, viewQuery] = await Promise.all([
-    readTableSchemaMetadata(env.DB, {
+    readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
       tableId,
       workspaceId: snapshot.workspaceId
     }),
@@ -2075,7 +2095,7 @@ async function handleViewScopedRecordCreate(
   }
 
   const [table, viewDefinition, viewQuery] = await Promise.all([
-    readTableSchemaMetadata(env.DB, {
+    readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
       tableId: input.tableId,
       workspaceId
     }),
@@ -2210,17 +2230,22 @@ async function handleViewScopedRecordCreate(
 
   const response = await dispatchCommandToCoordinator(env, new URL(request.url).origin, command);
   const responseBody = (await response.json()) as Record<string, unknown>;
-  return json({
-    ...responseBody,
-    aggregate: aggregateDescriptorForCommand(command),
-    viewAction: {
-      defaultedFieldIds: Object.keys(defaultPlan.defaultCells),
-      recordId,
-      targetGroupValue: hasTargetGroupValue ? targetGroupValue ?? null : null,
-      type: "createRecord",
-      viewId: input.viewId
+  return json(
+    {
+      ...responseBody,
+      aggregate: aggregateDescriptorForCommand(command),
+      viewAction: {
+        defaultedFieldIds: Object.keys(defaultPlan.defaultCells),
+        recordId,
+        targetGroupValue: hasTargetGroupValue ? targetGroupValue ?? null : null,
+        type: "createRecord",
+        viewId: input.viewId
+      }
+    },
+    {
+      status: response.status
     }
-  });
+  );
 }
 
 function evaluateViewFilterForValue(

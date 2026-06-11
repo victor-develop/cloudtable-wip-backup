@@ -1,4 +1,7 @@
 import type { JsonValue } from "../core/field-types/types";
+import type { FieldTypeRegistry } from "../core/field-types/types";
+import { buildWorkflowAuthoringMetadataForFields } from "../core/workflows/binding-metadata";
+import type { WorkflowAuthoringMetadata } from "../core/workflows/types";
 
 type TableRow = {
   app_id: string;
@@ -44,6 +47,7 @@ export type TableSchemaMetadata = {
   tableName: string;
   tableSchemaVersion: number;
   tableSlug: string;
+  workflow: WorkflowAuthoringMetadata;
   workspaceId: string;
 };
 
@@ -85,6 +89,7 @@ export class SchemaMetadataAccessError extends Error {
 
 export async function readTableSchemaMetadata(
   db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry | undefined,
   input: {
     tableId: string;
     workspaceId: string;
@@ -126,21 +131,26 @@ export async function readTableSchemaMetadata(
     .bind(input.workspaceId, input.tableId)
     .all<FieldRow>();
 
+  const fields = (fieldRows.results ?? []).map((field) => ({
+    config: JSON.parse(field.config_json) as JsonValue,
+    fieldId: field.id,
+    fieldKey: field.field_key,
+    fieldType: field.field_type,
+    fieldTypeVersion: field.field_type_version,
+    label: field.label
+  }));
   return {
     appId: table.app_id,
-    fields: (fieldRows.results ?? []).map((field) => ({
-      config: JSON.parse(field.config_json) as JsonValue,
-      fieldId: field.id,
-      fieldKey: field.field_key,
-      fieldType: field.field_type,
-      fieldTypeVersion: field.field_type_version,
-      label: field.label
-    })),
+    fields,
     schemaEpoch: table.schema_epoch,
     tableId: table.id,
     tableName: table.name,
     tableSchemaVersion: table.current_schema_version,
     tableSlug: table.slug,
+    workflow:
+      fieldTypeRegistry == null
+        ? { bindings: {} }
+        : buildWorkflowAuthoringMetadataForFields(fieldTypeRegistry, fields, (field) => field),
     workspaceId: input.workspaceId
   };
 }

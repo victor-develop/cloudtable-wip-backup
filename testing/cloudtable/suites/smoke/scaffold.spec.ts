@@ -184,6 +184,9 @@ function buildCustomFieldType(): FieldTypeDefinition {
     getSupportedConditionOperators() {
       return ["equals", "number_compare"];
     },
+    getWorkflowProposalHints(context) {
+      return mvpFieldTypes[0].getWorkflowProposalHints(context);
+    },
     getSupportedSortModes() {
       return ["ascending", "descending"];
     },

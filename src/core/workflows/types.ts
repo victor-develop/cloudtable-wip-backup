@@ -5,7 +5,7 @@ import type {
   CommandScope
 } from "../commands/types";
 import type { EventLedgerRecord } from "../events/types";
-import type { JsonSchema } from "../field-types/types";
+import type { FieldWorkflowProposalHint, JsonSchema } from "../field-types/types";
 
 export type WorkflowOperatorKind = "trigger" | "condition" | "action";
 
@@ -58,6 +58,7 @@ export type WorkflowFieldValue = {
 };
 
 export type WorkflowRowContext = {
+  owner?: WorkflowFieldValue;
   recordId: string;
   fields: Record<string, WorkflowFieldValue>;
 };
@@ -90,6 +91,7 @@ export type WorkflowExecutionScope = {
 
 export type WorkflowTriggerMatcher = {
   eventTypes?: readonly string[];
+  fieldIds?: readonly string[];
   fieldId?: string;
   fromWorkflow?: boolean;
   tableId?: string;
@@ -236,6 +238,25 @@ export type WorkflowOperatorManifest =
   | WorkflowTriggerManifest
   | WorkflowConditionManifest
   | WorkflowActionManifest;
+
+export type WorkflowConditionBindingMetadata = {
+  binding: string;
+  fieldId: string;
+  fieldKey: string;
+  fieldType: string;
+  proposalHints: FieldWorkflowProposalHint[];
+  supportedOperatorIds: string[];
+  supportedOperators: WorkflowConditionManifest[];
+  template: {
+    fieldIdPath: string;
+    fieldTypePath: string;
+    valuePath: string;
+  };
+};
+
+export type WorkflowAuthoringMetadata = {
+  bindings: Record<string, WorkflowConditionBindingMetadata>;
+};
 
 export type WorkflowOperatorDefinition =
   | WorkflowTriggerDefinition

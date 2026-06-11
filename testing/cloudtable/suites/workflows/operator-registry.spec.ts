@@ -158,7 +158,7 @@ function createWorkflowDefinition(): WorkflowDefinition {
     ],
     trigger: {
       match: {
-        fieldId: "fld_status",
+        fieldIds: ["fld_status"],
         fromWorkflow: false,
         tableId: "tbl_source"
       },
@@ -218,6 +218,25 @@ describe("workflow operator registry", () => {
         })
       )
     ).toBe(false);
+  });
+
+  it("keeps legacy single-field trigger selectors readable during matching", () => {
+    const definition = createWorkflowDefinition();
+
+    expect(
+      matchWorkflowTrigger(
+        requireTrigger("field_changed"),
+        {
+          ...definition.trigger,
+          match: {
+            ...definition.trigger.match,
+            fieldId: "fld_status",
+            fieldIds: undefined
+          }
+        },
+        createScope()
+      )
+    ).toBe(true);
   });
 
   it("executes cross-table cell updates through the normal command bus", async () => {
@@ -557,5 +576,99 @@ describe("workflow operator registry", () => {
     expect(loopGuardRun.executedActions[0]?.result.diagnostics).toEqual([
       "workflow_loop_guard"
     ]);
+  });
+
+  it("resolves the canonical row.owner binding through normal workflow templates", async () => {
+    const registry = createWorkflowOperatorRegistry();
+    const seenCommands: CommandEnvelope[] = [];
+
+    const result = await executeWorkflowDefinition(
+      {
+        actions: [
+          {
+            input: {
+              fieldId: "fld_status",
+              fieldType: "principal.user",
+              recordId: "rec_source_1",
+              tableId: "tbl_source",
+              value: {
+                path: "row.owner.value"
+              }
+            },
+            operatorId: "set_cell"
+          }
+        ],
+        conditions: [
+          {
+            input: {
+              left: {
+                path: "row.owner.value"
+              },
+              right: ["usr_owner"]
+            },
+            operatorId: "equals"
+          }
+        ],
+        trigger: {
+          match: {
+            fieldId: "fld_status",
+            tableId: "tbl_source"
+          },
+          operatorId: "field_changed"
+        },
+        workflowId: "wf_owner_binding"
+      },
+      createScope({
+        row: {
+          fields: {
+            owner: {
+              fieldId: "fld_owner",
+              fieldType: "principal.user",
+              value: ["usr_owner"]
+            },
+            status: {
+              fieldId: "fld_status",
+              fieldType: "text.single_line",
+              value: "approved"
+            }
+          },
+          owner: {
+            fieldId: "fld_owner",
+            fieldType: "principal.user",
+            value: ["usr_owner"]
+          },
+          recordId: "rec_source_1"
+        }
+      }),
+      registry,
+      {
+        async execute(command) {
+          seenCommands.push(command);
+          return {
+            accepted: true,
+            diagnostics: [],
+            events: [],
+            permission: {
+              allowed: true,
+              reasons: []
+            },
+            replayProjection: {
+              acceptedCommandIds: [],
+              lastLogicalTime: "2026-06-07T00:00:00.000Z",
+              receiptCount: 0,
+              receipts: []
+            },
+            sideEffects: [],
+            status: "accepted" as const
+          };
+        }
+      }
+    );
+
+    expect(result).toMatchObject({
+      matchedTrigger: true
+    });
+    expect(seenCommands).toHaveLength(1);
+    expect(seenCommands[0]?.payload.value).toEqual(["usr_owner"]);
   });
 });

@@ -23,6 +23,12 @@ import {
 const fieldTypeRegistry = createFieldTypeRegistry();
 const workflowOperatorRegistry = createWorkflowOperatorRegistry();
 
+function supportedConditionOperatorManifests(operatorIds: readonly string[]) {
+  return operatorIds.map((operatorId) =>
+    serializeWorkflowOperatorManifest(workflowOperatorRegistry.require(operatorId))
+  );
+}
+
 const snapshot: EffectivePermissionSnapshot = {
   snapshotId: "snap_001",
   workspaceId: "ws_demo",
@@ -189,6 +195,7 @@ function createRegistry(overrides?: {
           tableId: "tbl_accounts",
           name: "Accounts",
           fieldIds: ["title", "status"],
+          workflow: { bindings: {} },
           viewIds: ["view_open"]
         }
       ],
@@ -279,6 +286,7 @@ function createRegistry(overrides?: {
             tableName: "Accounts",
             tableSchemaVersion: 2,
             tableSlug: "accounts",
+            workflow: { bindings: {} },
             workspaceId: "ws_demo"
           }) as never;
       }
@@ -349,6 +357,7 @@ function createRegistry(overrides?: {
             publishedAt: "2026-06-06T00:00:00.000Z",
             status: "paused",
             triggerTableId: "tbl_accounts",
+            workflow: { bindings: {} },
             workflowId: "wf_demo",
             workflowKey: "demo",
             workflowName: "Demo Workflow",
@@ -1001,6 +1010,7 @@ describe("cloudtable agent tool registry", () => {
             tableId: "tbl_accounts",
             name: "Accounts",
             fieldIds: ["title", "status"],
+            workflow: { bindings: {} },
             viewIds: ["view_open"]
           }
         ],
@@ -1088,6 +1098,7 @@ describe("cloudtable agent tool registry", () => {
         tableName: "Accounts",
         tableSchemaVersion: 2,
         tableSlug: "accounts",
+        workflow: { bindings: {} },
         workspaceId: "ws_demo"
       }
     });
@@ -1154,6 +1165,7 @@ describe("cloudtable agent tool registry", () => {
         publishedAt: "2026-06-06T00:00:00.000Z",
         status: "paused",
         triggerTableId: "tbl_accounts",
+        workflow: { bindings: {} },
         workflowId: "wf_demo",
         workflowKey: "demo",
         workflowName: "Demo Workflow",
@@ -1819,12 +1831,75 @@ describe("cloudtable agent tool registry", () => {
             fieldIds: ["fld_name", "fld_status"],
             name: "Table 1",
             tableId: "tbl_accounts",
+            workflow: {
+              bindings: {
+                "row.fields.name": {
+                  binding: "row.fields.name",
+                  fieldId: "fld_name",
+                  fieldKey: "name",
+                  fieldType: "text.single_line",
+                  proposalHints: [
+                    {
+                      operatorId: "is_empty",
+                      matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+                      matchFieldPhrases: ["without {field}", "{field} missing"]
+                    },
+                    {
+                      operatorId: "is_not_empty",
+                      matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+                    }
+                  ],
+                  supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+                  supportedOperators: supportedConditionOperatorManifests([
+                    "equals",
+                    "not_equals",
+                    "is_empty",
+                    "is_not_empty"
+                  ]),
+                  template: {
+                    fieldIdPath: "row.fields.name.fieldId",
+                    fieldTypePath: "row.fields.name.fieldType",
+                    valuePath: "row.fields.name.value"
+                  }
+                },
+                "row.fields.status": {
+                  binding: "row.fields.status",
+                  fieldId: "fld_status",
+                  fieldKey: "status",
+                  fieldType: "status.semantic",
+                  proposalHints: [
+                    {
+                      operatorId: "is_empty",
+                      matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+                      matchFieldPhrases: ["without {field}", "{field} missing"]
+                    },
+                    {
+                      operatorId: "is_not_empty",
+                      matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+                    }
+                  ],
+                  supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+                  supportedOperators: supportedConditionOperatorManifests([
+                    "equals",
+                    "not_equals",
+                    "is_empty",
+                    "is_not_empty"
+                  ]),
+                  template: {
+                    fieldIdPath: "row.fields.status.fieldId",
+                    fieldTypePath: "row.fields.status.fieldType",
+                    valuePath: "row.fields.status.value"
+                  }
+                }
+              }
+            },
             viewIds: ["view_open"]
           },
           {
             fieldIds: [],
             name: "Contacts",
             tableId: "tbl_contacts",
+            workflow: { bindings: {} },
             viewIds: []
           }
         ],
@@ -2285,6 +2360,17 @@ describe("cloudtable agent tool registry", () => {
       kind: "workflow-proposal",
       command: {
         commandType: "workflow.create",
+        payload: {
+          definition: {
+            trigger: {
+              match: {
+                fieldIds: ["status"],
+                tableId: "tbl_accounts"
+              },
+              operatorId: "field_changed"
+            }
+          }
+        },
         scope: "workflow"
       },
       proposal: {
@@ -2306,6 +2392,394 @@ describe("cloudtable agent tool registry", () => {
           triggerEventTypes: ["cell.set"]
         },
         workflowId: "wf_qualify_lead"
+      }
+    });
+  });
+
+  it("drafts owner conditions for workflow proposals from generic binding metadata", async () => {
+    const registry = createRegistry({
+      tableSchemaInspectionResult: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: {
+              rowOwner: true
+            },
+            fieldId: "fld_owner",
+            fieldKey: "owner",
+            fieldType: "principal.user",
+            fieldTypeVersion: 1,
+            label: "Owner"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_accounts",
+        tableName: "Accounts",
+        tableSchemaVersion: 2,
+        tableSlug: "accounts",
+        workflow: {
+          bindings: {
+            "row.owner": {
+              binding: "row.owner",
+              fieldId: "fld_owner",
+              fieldKey: "owner",
+              fieldType: "principal.user",
+              proposalHints: [
+                {
+                  operatorId: "is_empty",
+                  matchPhrases: ["unassigned"],
+                  matchFieldPhrases: ["without {field}", "{field} missing"]
+                },
+                {
+                  operatorId: "is_not_empty",
+                  matchPhrases: ["assigned"]
+                }
+              ],
+              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+              supportedOperators: supportedConditionOperatorManifests([
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ]),
+              template: {
+                fieldIdPath: "row.owner.fieldId",
+                fieldTypePath: "row.owner.fieldType",
+                valuePath: "row.owner.value"
+              }
+            }
+          }
+        },
+        workspaceId: "ws_demo"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["update_record"],
+        businessRule: "Notify sales ops when the owner is assigned.",
+        fieldIds: ["fld_owner"],
+        name: "Owner assigned follow-up",
+        tableId: "tbl_accounts",
+        triggerId: "field_changed",
+        workflowId: "wf_owner_assigned"
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "workflow-proposal",
+      proposal: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.owner.fieldId"
+              },
+              fieldType: {
+                path: "row.owner.fieldType"
+              },
+              value: {
+                path: "row.owner.value"
+              }
+            },
+            operatorId: "is_not_empty"
+          }
+        ]
+      },
+      command: {
+        payload: {
+          definition: {
+            conditions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.owner.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.owner.fieldType"
+                  },
+                  value: {
+                    path: "row.owner.value"
+                  }
+                },
+                operatorId: "is_not_empty"
+              }
+            ]
+          }
+        }
+      }
+    });
+  });
+
+  it("drafts generic field presence conditions for workflow proposals from binding metadata", async () => {
+    const registry = createRegistry({
+      tableSchemaInspectionResult: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: {},
+            fieldId: "fld_note",
+            fieldKey: "customer_note",
+            fieldType: "text.long",
+            fieldTypeVersion: 1,
+            label: "Customer Note"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_accounts",
+        tableName: "Accounts",
+        tableSchemaVersion: 2,
+        tableSlug: "accounts",
+        workflow: {
+          bindings: {
+            "row.fields.customer_note": {
+              binding: "row.fields.customer_note",
+              fieldId: "fld_note",
+              fieldKey: "customer_note",
+              fieldType: "text.long",
+              proposalHints: [
+                {
+                  operatorId: "is_empty",
+                  matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+                  matchFieldPhrases: ["without {field}", "{field} missing"]
+                },
+                {
+                  operatorId: "is_not_empty",
+                  matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+                }
+              ],
+              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+              supportedOperators: supportedConditionOperatorManifests([
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ]),
+              template: {
+                fieldIdPath: "row.fields.customer_note.fieldId",
+                fieldTypePath: "row.fields.customer_note.fieldType",
+                valuePath: "row.fields.customer_note.value"
+              }
+            }
+          }
+        },
+        workspaceId: "ws_demo"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["update_record"],
+        businessRule: "Notify sales ops when the customer note is set.",
+        fieldIds: ["fld_note"],
+        name: "Customer note follow-up",
+        tableId: "tbl_accounts",
+        triggerId: "field_changed",
+        workflowId: "wf_customer_note_set"
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "workflow-proposal",
+      proposal: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.fields.customer_note.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.customer_note.fieldType"
+              },
+              value: {
+                path: "row.fields.customer_note.value"
+              }
+            },
+            operatorId: "is_not_empty"
+          }
+        ]
+      },
+      command: {
+        payload: {
+          definition: {
+            conditions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.fields.customer_note.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.fields.customer_note.fieldType"
+                  },
+                  value: {
+                    path: "row.fields.customer_note.value"
+                  }
+                },
+                operatorId: "is_not_empty"
+              }
+            ]
+          }
+        }
+      }
+    });
+  });
+
+  it("drafts configured status option comparisons for workflow proposals from binding metadata", async () => {
+    const registry = createRegistry({
+      tableSchemaInspectionResult: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: {
+              options: [
+                { id: "open", label: "Open", semantic: "todo" },
+                { id: "qualified", label: "Qualified", semantic: "done" }
+              ]
+            },
+            fieldId: "fld_status",
+            fieldKey: "status",
+            fieldType: "status.semantic",
+            fieldTypeVersion: 1,
+            label: "Status"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_accounts",
+        tableName: "Accounts",
+        tableSchemaVersion: 2,
+        tableSlug: "accounts",
+        workflow: {
+          bindings: {
+            "row.fields.status": {
+              binding: "row.fields.status",
+              fieldId: "fld_status",
+              fieldKey: "status",
+              fieldType: "status.semantic",
+              proposalHints: [
+                {
+                  operatorId: "equals",
+                  matchPhrases: [
+                    "changes to qualified",
+                    "becomes qualified",
+                    "is qualified",
+                    "set to qualified",
+                    "equals qualified",
+                    "changes to done",
+                    "becomes done",
+                    "is done",
+                    "set to done",
+                    "equals done"
+                  ],
+                  matchFieldPhrases: [
+                    "{field} changes to Qualified",
+                    "{field} becomes Qualified",
+                    "{field} is Qualified",
+                    "{field} set to Qualified",
+                    "{field} equals Qualified"
+                  ],
+                  draftInput: {
+                    left: {
+                      path: "row.fields.status.value"
+                    },
+                    right: "qualified"
+                  }
+                },
+                {
+                  operatorId: "is_empty",
+                  matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+                  matchFieldPhrases: ["without {field}", "{field} missing"]
+                },
+                {
+                  operatorId: "is_not_empty",
+                  matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+                }
+              ],
+              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+              supportedOperators: supportedConditionOperatorManifests([
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ]),
+              template: {
+                fieldIdPath: "row.fields.status.fieldId",
+                fieldTypePath: "row.fields.status.fieldType",
+                valuePath: "row.fields.status.value"
+              }
+            }
+          }
+        },
+        workspaceId: "ws_demo"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["update_record"],
+        businessRule: "When status changes to Qualified, notify sales ops.",
+        fieldIds: ["fld_status"],
+        name: "Qualified follow-up",
+        tableId: "tbl_accounts",
+        triggerId: "field_changed",
+        workflowId: "wf_qualified_follow_up"
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "workflow-proposal",
+      proposal: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.fields.status.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.status.fieldType"
+              },
+              value: {
+                path: "row.fields.status.value"
+              },
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "qualified"
+            },
+            operatorId: "equals"
+          }
+        ]
+      },
+      command: {
+        payload: {
+          definition: {
+            conditions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.fields.status.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.fields.status.fieldType"
+                  },
+                  value: {
+                    path: "row.fields.status.value"
+                  },
+                  left: {
+                    path: "row.fields.status.value"
+                  },
+                  right: "qualified"
+                },
+                operatorId: "equals"
+              }
+            ]
+          }
+        }
       }
     });
   });

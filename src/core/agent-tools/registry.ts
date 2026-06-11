@@ -6,10 +6,13 @@ import type {
   PermissionFieldDescriptor
 } from "../permissions/types";
 import type { ViewPlanner } from "../views/planner";
+import { draftWorkflowConditionsFromMetadata } from "../workflows/authoring";
+import { normalizeWorkflowAuthoringMetadata } from "../workflows/binding-metadata";
 import { serializeWorkflowOperatorManifest } from "../workflows/manifest";
 import type {
   WorkflowActionDefinition,
   WorkflowActionManifest,
+  WorkflowAuthoringMetadata,
   WorkflowOperatorRegistry,
   WorkflowTriggerDefinition,
   WorkflowTriggerManifest
@@ -2162,6 +2165,13 @@ export function createAgentToolRegistry({
         }
         case "proposeWorkflow": {
           const diagnostics: string[] = [];
+          const tableSchema = await Promise.resolve(
+            tableSchemaInspector.read({
+              tableId: invocation.input.tableId,
+              workspaceId: invocation.input.workspaceId
+            })
+          );
+          const authoringMetadata = readWorkflowAuthoringMetadata(tableSchema);
           const trigger = workflowOperatorRegistry.get(invocation.input.triggerId);
           const triggerManifest =
             trigger && trigger.kind === "trigger"
@@ -2187,6 +2197,10 @@ export function createAgentToolRegistry({
           const proposal = {
             actions: actions.map(toWorkflowActionProposal),
             businessRule: invocation.input.businessRule,
+            conditions: draftWorkflowConditionsFromMetadata(authoringMetadata, {
+              businessRule: invocation.input.businessRule,
+              fieldIds: invocation.input.fieldIds
+            }),
             name: invocation.input.name,
             tableId: invocation.input.tableId,
             trigger: triggerManifest,
@@ -2198,7 +2212,7 @@ export function createAgentToolRegistry({
                 input: {},
                 operatorId: action.id
               })),
-              conditions: [],
+              conditions: proposal.conditions,
               metadata: {
                 businessRule: invocation.input.businessRule,
                 name: invocation.input.name,
@@ -2515,6 +2529,10 @@ function summarizeCommand(command: CommandEnvelope): AgentToolAuditDiff[] {
 
 function toWorkflowActionProposal(action: WorkflowActionDefinition): WorkflowActionManifest {
   return serializeWorkflowOperatorManifest(action) as WorkflowActionManifest;
+}
+
+function readWorkflowAuthoringMetadata(value: unknown): WorkflowAuthoringMetadata {
+  return normalizeWorkflowAuthoringMetadata(value);
 }
 
 function toWorkflowTriggerProposal(trigger: WorkflowTriggerDefinition): WorkflowTriggerManifest {

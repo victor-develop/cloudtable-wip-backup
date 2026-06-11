@@ -95,6 +95,13 @@ class FakeNamespace {
   }
 }
 
+function supportedConditionOperatorManifests(operatorIds: readonly string[]) {
+  const registry = createWorkflowOperatorRegistry();
+  return operatorIds.map((operatorId) =>
+    serializeWorkflowOperatorManifest(registry.require(operatorId))
+  );
+}
+
 function createCommand(overrides: Partial<CommandEnvelope> = {}): CommandEnvelope {
   return {
     actor: {
@@ -1439,6 +1446,117 @@ describe("cloudtable runtime ingress", () => {
     ]);
   });
 
+  it("rejects incompatible row.owner workflow condition bindings through workflow create ingress", async () => {
+    const { db, env } = createEnv();
+    insertField(db, {
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "text.single_line",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_owner_guard",
+      workspaceId: "ws_1",
+      principalId: "agt_assist",
+      policyRevision: 22,
+      schemaEpoch: 1,
+      scopeHash: "scope:agent:workflow-owner-guard",
+      commandTypes: ["workflow.create"],
+      fields: {}
+    });
+
+    const createWorkflow = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflows", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_workflow_create_owner_guard",
+            idempotencyKey: "idem_workflow_create_owner_guard",
+            payload: {
+              definition: {
+                actions: [
+                  {
+                    input: {
+                      fieldId: "fld_status",
+                      fieldType: "text.single_line",
+                      recordId: {
+                        path: "row.recordId"
+                      },
+                      tableId: {
+                        path: "table.tableId"
+                      },
+                      value: "processed"
+                    },
+                    operatorId: "set_cell"
+                  }
+                ],
+                conditions: [
+                  {
+                    input: {
+                      comparator: "gt",
+                      left: {
+                        path: "row.owner.value"
+                      },
+                      right: 1
+                    },
+                    operatorId: "number_compare"
+                  }
+                ],
+                principal: {
+                  policyRevision: 7,
+                  principalId: "wf_service",
+                  schemaEpoch: 0,
+                  scopeHash: "scope:wf:status-sync"
+                },
+                trigger: {
+                  match: {
+                    fieldId: "fld_status",
+                    fromWorkflow: false,
+                    tableId: "tbl_1"
+                  },
+                  operatorId: "field_changed"
+                },
+                workflowId: "wf_owner_guard"
+              },
+              name: "Owner Guard",
+              workflowId: "wf_owner_guard",
+              workflowKey: "owner-guard"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(createWorkflow.status).toBe(200);
+    expect(
+      (await createWorkflow.json()) as {
+        result: { accepted: boolean; diagnostics: string[]; status: string };
+      }
+    ).toMatchObject({
+      result: {
+        accepted: false,
+        diagnostics: ["workflow_condition_binding_operator_unsupported:0:row.owner:number_compare"],
+        status: "rejected"
+      }
+    });
+  });
+
   it("updates workflows through the route ingress, forks drafts from published versions, and publishes the revised draft", async () => {
     const { db, env } = createEnv();
     insertField(db, {
@@ -2399,6 +2517,9 @@ describe("cloudtable runtime ingress", () => {
       publishedAt: "2026-06-06T00:00:00.000Z",
       status: "paused",
       triggerTableId: "tbl_1",
+      workflow: {
+        bindings: {}
+      },
       workflowId: "wf_definition_detail",
       workflowKey: "workflow-detail",
       workflowName: "Workflow Detail",
@@ -3371,6 +3492,213 @@ describe("cloudtable runtime ingress", () => {
       {} as ExecutionContext
     );
     expect(readArchivedRecord.status).toBe(404);
+  });
+
+  it("preserves the canonical row owner invariant across update ingress routes", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        owner: ["principal_1"]
+      },
+      recordId: "rec_owner_route_guard",
+      recordKey: "rec-owner-route-guard",
+      tableId: "tbl_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      recordId: "rec_owner_route_guard",
+      tableId: "tbl_1",
+      value: ["principal_1"]
+    });
+
+    const updateRecord = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_owner_route_guard", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_record_owner_route_guard",
+            idempotencyKey: "idem_record_owner_route_guard",
+            payload: {
+              patch: {
+                owner: []
+              }
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(updateRecord.status).toBe(200);
+    const updateBody = (await updateRecord.json()) as {
+      result: { diagnostics: string[]; status: string };
+    };
+    expect(updateBody.result.status).toBe("rejected");
+    expect(updateBody.result.diagnostics).toEqual(["row_owner_value_required:fld_owner"]);
+
+    const bulkPatch = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records:bulkPatch", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_bulk_owner_route_guard",
+            idempotencyKey: "idem_bulk_owner_route_guard",
+            payload: {
+              updates: [
+                {
+                  patch: {
+                    owner: []
+                  },
+                  recordId: "rec_owner_route_guard"
+                }
+              ]
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(bulkPatch.status).toBe(200);
+    const bulkBody = (await bulkPatch.json()) as {
+      result: { diagnostics: string[]; status: string };
+    };
+    expect(bulkBody.result.status).toBe("rejected");
+    expect(bulkBody.result.diagnostics).toEqual(["row_owner_value_required:fld_owner"]);
+
+    const setCell = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/records/rec_owner_route_guard/cells/fld_owner",
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify(
+            createRouteBody({
+              commandId: "cmd_cell_owner_route_guard",
+              idempotencyKey: "idem_cell_owner_route_guard",
+              payload: {
+                value: []
+              }
+            })
+          )
+        }
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(setCell.status).toBe(200);
+    const setCellBody = (await setCell.json()) as {
+      result: { diagnostics: string[]; status: string };
+    };
+    expect(setCellBody.result.status).toBe("rejected");
+    expect(setCellBody.result.diagnostics).toEqual(["row_owner_value_required:fld_owner"]);
+
+    const ownerCell = db.inner
+      .prepare(
+        `SELECT value_json
+         FROM cell_current
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .get("ws_1", "tbl_1", "rec_owner_route_guard", "fld_owner") as {
+      value_json: string;
+    };
+    expect(JSON.parse(ownerCell.value_json)).toMatchObject({
+      raw: ["principal_1"],
+      valueType: "principal.user"
+    });
+  });
+
+  it("allows canonical row owner reassignment through record.update ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        owner: ["principal_1"]
+      },
+      recordId: "rec_owner_route_reassign",
+      recordKey: "rec-owner-route-reassign",
+      tableId: "tbl_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      recordId: "rec_owner_route_reassign",
+      tableId: "tbl_1",
+      value: ["principal_1"]
+    });
+
+    const updateRecord = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_owner_route_reassign", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_record_owner_route_reassign",
+            idempotencyKey: "idem_record_owner_route_reassign",
+            payload: {
+              patch: {
+                owner: ["principal_2"]
+              }
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(updateRecord.status).toBe(200);
+    const updateBody = (await updateRecord.json()) as {
+      result: { status: string };
+    };
+    expect(updateBody.result.status).toBe("accepted");
+
+    const ownerCell = db.inner
+      .prepare(
+        `SELECT value_json
+         FROM cell_current
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .get("ws_1", "tbl_1", "rec_owner_route_reassign", "fld_owner") as {
+      value_json: string;
+    };
+    expect(JSON.parse(ownerCell.value_json)).toMatchObject({
+      raw: ["principal_2"],
+      valueType: "principal.user"
+    });
   });
 
   it("supports records.bulk_patch through preview and execute ingress", async () => {
@@ -8314,6 +8642,561 @@ describe("cloudtable runtime ingress", () => {
         label: "Estimate"
       }
     ]);
+  });
+
+  it("surfaces canonical row owner workflow metadata through schema and workspace inspection reads", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      config: {
+        options: [
+          { id: "open", label: "Open", semantic: "todo" },
+          { id: "qualified", label: "Qualified", semantic: "done" }
+        ]
+      },
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "status.semantic",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_title",
+      fieldKey: "title",
+      fieldType: "text.single_line",
+      label: "Title",
+      tableId: "tbl_1"
+    });
+    insertWorkflow(db, {
+      definition: {
+        metadata: {
+          status: "paused"
+        },
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "manual"
+        },
+        workflowId: "wf_owner_metadata"
+      },
+      name: "Owner Metadata",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_owner_metadata",
+      workflowKey: "owner-metadata"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_owner_table_metadata",
+      workspaceId: "ws_1",
+      principalId: "usr_owner_metadata",
+      policyRevision: 44,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {
+        fld_owner: {
+          agent: true,
+          fieldId: "fld_owner",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_status: {
+          agent: true,
+          fieldId: "fld_status",
+          fieldType: "status.semantic",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_title: {
+          agent: true,
+          fieldId: "fld_title",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_owner_workspace_metadata",
+      workspaceId: "ws_1",
+      principalId: "ops_owner_metadata",
+      policyRevision: 45,
+      schemaEpoch: 0,
+      scopeHash: "scope:workspace",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+
+    const schemaResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/schema?workspaceId=ws_1&principalId=usr_owner_metadata&permissionScopeHash=scope:table:tbl_1&policyRevision=44"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const workflowResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_owner_metadata/definition?workspaceId=ws_1&principalId=usr_owner_metadata&permissionScopeHash=scope:table:tbl_1&policyRevision=44"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const workspaceResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            include: ["tables"],
+            workspaceId: "ws_1"
+          },
+          permissionScopeHash: "scope:workspace",
+          policyRevision: 45,
+          principalId: "ops_owner_metadata",
+          toolId: "inspectWorkspace",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(schemaResponse.status).toBe(200);
+    expect(workflowResponse.status).toBe(200);
+    expect(workspaceResponse.status).toBe(200);
+
+    const expectedRowOwner = {
+      binding: "row.owner",
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      proposalHints: [
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["unassigned"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["assigned"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: supportedConditionOperatorManifests([
+        "equals",
+        "not_equals",
+        "is_empty",
+        "is_not_empty"
+      ]),
+      template: {
+        fieldIdPath: "row.owner.fieldId",
+        fieldTypePath: "row.owner.fieldType",
+        valuePath: "row.owner.value"
+      }
+    };
+    const expectedOwnerFieldBinding = {
+      binding: "row.fields.owner",
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      proposalHints: [
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: supportedConditionOperatorManifests([
+        "equals",
+        "not_equals",
+        "is_empty",
+        "is_not_empty"
+      ]),
+      template: {
+        fieldIdPath: "row.fields.owner.fieldId",
+        fieldTypePath: "row.fields.owner.fieldType",
+        valuePath: "row.fields.owner.value"
+      }
+    };
+    const expectedTitleFieldBinding = {
+      binding: "row.fields.title",
+      fieldId: "fld_title",
+      fieldKey: "title",
+      fieldType: "text.single_line",
+      proposalHints: [
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: supportedConditionOperatorManifests([
+        "equals",
+        "not_equals",
+        "is_empty",
+        "is_not_empty"
+      ]),
+      template: {
+        fieldIdPath: "row.fields.title.fieldId",
+        fieldTypePath: "row.fields.title.fieldType",
+        valuePath: "row.fields.title.value"
+      }
+    };
+    const expectedStatusFieldBinding = {
+      binding: "row.fields.status",
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "status.semantic",
+      proposalHints: [
+        {
+          operatorId: "equals",
+          matchPhrases: [
+            "changes to open",
+            "becomes open",
+            "is open",
+            "set to open",
+            "equals open",
+            "changes to todo",
+            "becomes todo",
+            "is todo",
+            "set to todo",
+            "equals todo"
+          ],
+          matchFieldPhrases: [
+            "{field} changes to Open",
+            "{field} becomes Open",
+            "{field} is Open",
+            "{field} set to Open",
+            "{field} equals Open"
+          ],
+          draftInput: {
+            left: {
+              path: "row.fields.status.value"
+            },
+            right: "open"
+          }
+        },
+        {
+          operatorId: "equals",
+          matchPhrases: [
+            "changes to qualified",
+            "becomes qualified",
+            "is qualified",
+            "set to qualified",
+            "equals qualified",
+            "changes to done",
+            "becomes done",
+            "is done",
+            "set to done",
+            "equals done"
+          ],
+          matchFieldPhrases: [
+            "{field} changes to Qualified",
+            "{field} becomes Qualified",
+            "{field} is Qualified",
+            "{field} set to Qualified",
+            "{field} equals Qualified"
+          ],
+          draftInput: {
+            left: {
+              path: "row.fields.status.value"
+            },
+            right: "qualified"
+          }
+        },
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: supportedConditionOperatorManifests([
+        "equals",
+        "not_equals",
+        "is_empty",
+        "is_not_empty"
+      ]),
+      template: {
+        fieldIdPath: "row.fields.status.fieldId",
+        fieldTypePath: "row.fields.status.fieldType",
+        valuePath: "row.fields.status.value"
+      }
+    };
+
+    const schemaBody = (await schemaResponse.json()) as {
+      workflow: {
+        bindings: Record<string, Record<string, unknown>>;
+      };
+    };
+    const workflowBody = (await workflowResponse.json()) as {
+      workflow: {
+        bindings: Record<string, Record<string, unknown>>;
+      };
+    };
+    const workspaceBody = (await workspaceResponse.json()) as {
+      output: {
+        workspace: {
+          tables: Array<{
+            tableId: string;
+            workflow: {
+              bindings: Record<string, Record<string, unknown>>;
+            };
+          }>;
+        };
+      };
+    };
+
+    expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwner);
+    expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
+    expect(schemaBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
+    expect(schemaBody.workflow.bindings["row.fields.title"]).toEqual(expectedTitleFieldBinding);
+    expect(workflowBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwner);
+    expect(workflowBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
+    expect(workflowBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
+    expect(workflowBody.workflow.bindings["row.fields.title"]).toEqual(expectedTitleFieldBinding);
+    expect(
+      workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings["row.owner"]
+    ).toEqual(expectedRowOwner);
+    expect(
+      workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
+        "row.fields.owner"
+      ]
+    ).toEqual(expectedOwnerFieldBinding);
+    expect(
+      workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
+        "row.fields.status"
+      ]
+    ).toEqual(expectedStatusFieldBinding);
+    expect(
+      workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
+        "row.fields.title"
+      ]
+    ).toEqual(expectedTitleFieldBinding);
+  });
+
+  it("drafts row.owner workflow proposal conditions through the agent-tool preview ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "text.single_line",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_owner_workflow_proposal",
+      workspaceId: "ws_1",
+      principalId: "agt_owner_workflow",
+      policyRevision: 46,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create"],
+      fields: {
+        fld_owner: {
+          agent: true,
+          fieldId: "fld_owner",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_status: {
+          agent: true,
+          fieldId: "fld_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "Notify sales ops when the owner is assigned.",
+            fieldIds: ["fld_owner"],
+            name: "Owner assigned follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_owner_assigned"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 46,
+          principalId: "agt_owner_workflow",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { output: { kind: string; proposal: { conditions: unknown[] } } }).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.owner.fieldId"
+                },
+                fieldType: {
+                  path: "row.owner.fieldType"
+                },
+                value: {
+                  path: "row.owner.value"
+                }
+              },
+              operatorId: "is_not_empty"
+            }
+          ]
+        }
+      }
+    });
+  });
+
+  it("drafts configured status workflow proposal conditions through the agent-tool preview ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        options: [
+          { id: "open", label: "Open", semantic: "todo" },
+          { id: "qualified", label: "Qualified", semantic: "done" }
+        ]
+      },
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "status.semantic",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_status_workflow_proposal",
+      workspaceId: "ws_1",
+      principalId: "agt_status_workflow",
+      policyRevision: 47,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create"],
+      fields: {
+        fld_status: {
+          agent: true,
+          fieldId: "fld_status",
+          fieldType: "status.semantic",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "When status changes to Qualified, notify sales ops.",
+            fieldIds: ["fld_status"],
+            name: "Qualified follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_status_qualified"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 47,
+          principalId: "agt_status_workflow",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { output: { kind: string; proposal: { conditions: unknown[] } } }).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.fields.status.fieldId"
+                },
+                fieldType: {
+                  path: "row.fields.status.fieldType"
+                },
+                value: {
+                  path: "row.fields.status.value"
+                },
+                left: {
+                  path: "row.fields.status.value"
+                },
+                right: "qualified"
+              },
+              operatorId: "equals"
+            }
+          ]
+        }
+      }
+    });
   });
 
   it("rejects table schema metadata reads when the permission snapshot hides fields", async () => {

@@ -1299,6 +1299,103 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
   },
   {
     "actual": {
+      "notificationCommand": {
+        "channel": "activity",
+        "details": {
+          "owner": [
+            "usr_owner"
+          ],
+          "recordId": "rec_1"
+        },
+        "fieldType": "text.single_line",
+        "message": "Owner workflow step completed.",
+        "triggerEventId": "00000000-0000-4000-8000-000000000201",
+        "workflowId": "wf_status_sync",
+        "workflowRunId": "wfr:wf_status_sync:00000000-0000-4000-8000-000000000201",
+        "workflowStepId": "wf_status_sync:action:0"
+      },
+      "response": {
+        "body": {
+          "aggregate": {
+            "id": "rec_1:fld_source",
+            "type": "cell"
+          },
+          "coordinator": {
+            "durableObject": "table-coordinator",
+            "lease": {
+              "endSequence": 256,
+              "leaseId": "lease:ws_1:ws_1:tbl_1:1",
+              "ownerKey": "ws_1:tbl_1",
+              "size": 256,
+              "startSequence": 1
+            },
+            "objectId": "ws_1:tbl_1",
+            "published": [
+              {
+                "outboxId": "outbox:00000000-0000-4000-8000-000000000201:event-fanout",
+                "queue": "event-fanout"
+              }
+            ]
+          },
+          "result": {
+            "accepted": true,
+            "diagnostics": [],
+            "events": [
+              {
+                "aggregateId": "rec_1:fld_source",
+                "aggregateType": "cell",
+                "commandId": "cmd_trigger_owner_delivery_matrix_1",
+                "commandType": "cell.set",
+                "eventId": "00000000-0000-4000-8000-000000000201",
+                "eventType": "cell.set",
+                "tableId": "tbl_1",
+                "workspaceId": "ws_1"
+              }
+            ],
+            "permission": {
+              "allowed": true,
+              "reasons": []
+            },
+            "replayProjection": {
+              "acceptedCommandIds": [
+                "cmd_trigger_owner_delivery_matrix_1"
+              ],
+              "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+              "receiptCount": 1,
+              "receipts": [
+                {
+                  "idempotencyKey": "idem_trigger_owner_delivery_matrix_1",
+                  "payloadHash": "{\\n  \\"actor\\": {\\n    \\"mode\\": \\"user\\",\\n    \\"principalId\\": \\"usr_owner\\"\\n  },\\n  \\"commandType\\": \\"cell.set\\",\\n  \\"payload\\": {\\n    \\"fieldId\\": \\"fld_source\\",\\n    \\"fieldType\\": \\"text.single_line\\",\\n    \\"recordId\\": \\"rec_1\\",\\n    \\"tableId\\": \\"tbl_1\\",\\n    \\"value\\": \\"crm\\"\\n  },\\n  \\"scope\\": \\"table\\",\\n  \\"tableId\\": \\"tbl_1\\",\\n  \\"workspaceId\\": \\"ws_1\\"\\n}",
+                  "status": "accepted"
+                }
+              ]
+            },
+            "sideEffects": [
+              {
+                "eventId": "00000000-0000-4000-8000-000000000201",
+                "queue": "event-fanout",
+                "reason": "cell_set_fanout"
+              }
+            ],
+            "status": "accepted"
+          }
+        },
+        "status": 200
+      },
+      "workflowRun": {
+        "id": "wfr:wf_status_sync:00000000-0000-4000-8000-000000000201",
+        "status": "completed"
+      },
+      "workflowStep": {
+        "last_error_code": null,
+        "status": "completed"
+      }
+    },
+    "category": "workflow_execution",
+    "scenario": "workflow_row_owner_notification_delivery"
+  },
+  {
+    "actual": {
       "directRead": {
         "diagnostics": [
           "field_hidden:salary",

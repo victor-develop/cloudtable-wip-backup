@@ -639,6 +639,7 @@ function validateWorkflowDefinition(
     diagnostics.push("workflow_trigger_missing");
   } else {
     const triggerId = typeof trigger.operatorId === "string" ? trigger.operatorId : null;
+    const triggerMatch = isRecord(trigger.match) ? trigger.match : null;
     if (!triggerId) {
       diagnostics.push("workflow_trigger_operator_missing");
     } else {
@@ -647,6 +648,32 @@ function validateWorkflowDefinition(
         diagnostics.push(`workflow_trigger_unknown:${triggerId}`);
       } else if (operator.kind !== "trigger") {
         diagnostics.push(`workflow_trigger_wrong_kind:${triggerId}`);
+      }
+    }
+
+    if (triggerMatch) {
+      const hasFieldId =
+        typeof triggerMatch.fieldId === "string" && triggerMatch.fieldId.length > 0;
+      const triggerMatchFieldIds = Array.isArray(triggerMatch.fieldIds)
+        ? triggerMatch.fieldIds
+        : null;
+      const hasFieldIds = triggerMatchFieldIds !== null;
+
+      if ("fieldId" in triggerMatch && !hasFieldId && triggerMatch.fieldId !== undefined) {
+        diagnostics.push("workflow_trigger_match_fieldId_invalid");
+      }
+
+      if (
+        hasFieldIds &&
+        triggerMatchFieldIds.some((fieldId) => typeof fieldId !== "string" || fieldId.length === 0)
+      ) {
+        diagnostics.push("workflow_trigger_match_fieldIds_invalid");
+      } else if ("fieldIds" in triggerMatch && !hasFieldIds) {
+        diagnostics.push("workflow_trigger_match_fieldIds_invalid");
+      }
+
+      if (hasFieldId && hasFieldIds) {
+        diagnostics.push("workflow_trigger_match_field_selector_conflict");
       }
     }
   }

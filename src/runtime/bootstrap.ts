@@ -210,13 +210,14 @@ function createActivityHistoryReader(env: CloudTableEnv) {
 function createTableSchemaInspector(
   env: CloudTableEnv,
   runtime: {
+    fieldTypeRegistry: ReturnType<typeof createFieldTypeRegistry>;
     permissionEngine: ReturnType<typeof createPermissionEngine>;
   },
   snapshot?: EffectivePermissionSnapshot
 ) {
   return {
     async read(input: { tableId: string; workspaceId: string }) {
-      const detail = await readTableSchemaMetadata(env.DB, input);
+      const detail = await readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, input);
       if (!detail || !snapshot) {
         return detail;
       }
@@ -319,13 +320,19 @@ function createViewDefinitionInspector(
 function createWorkflowDefinitionInspector(
   env: CloudTableEnv,
   runtime: {
+    fieldTypeRegistry: ReturnType<typeof createFieldTypeRegistry>;
     permissionEngine: ReturnType<typeof createPermissionEngine>;
   },
   snapshot?: EffectivePermissionSnapshot
 ) {
   return {
     async read(input: { workflowId: string; workspaceId: string }) {
-      const detail = await readWorkflowDefinitionMetadata(env.DB, input.workspaceId, input.workflowId);
+      const detail = await readWorkflowDefinitionMetadata(
+        env.DB,
+        runtime.fieldTypeRegistry,
+        input.workspaceId,
+        input.workflowId
+      );
       if (!detail || !snapshot) {
         if (!detail) {
           return detail;
@@ -372,7 +379,7 @@ function createPermissionPersonaPreviewReader(
   return {
     async read(input: { tableId: string; viewId: string; workspaceId: string }) {
       const [table, view, viewQuery] = await Promise.all([
-        readTableSchemaMetadata(env.DB, {
+        readTableSchemaMetadata(env.DB, runtime.fieldTypeRegistry, {
           tableId: input.tableId,
           workspaceId: input.workspaceId
         }),
@@ -643,6 +650,7 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
   const tableSchemaInspector = createTableSchemaInspector(
     env,
     {
+      fieldTypeRegistry,
       permissionEngine
     },
     undefined
@@ -657,6 +665,7 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
   const workflowDefinitionInspector = createWorkflowDefinitionInspector(
     env,
     {
+      fieldTypeRegistry,
       permissionEngine
     },
     undefined
@@ -795,6 +804,7 @@ export function createRuntimeWithSnapshot(
   const tableSchemaInspector = createTableSchemaInspector(
     env,
     {
+      fieldTypeRegistry,
       permissionEngine
     },
     snapshot
@@ -809,6 +819,7 @@ export function createRuntimeWithSnapshot(
   const workflowDefinitionInspector = createWorkflowDefinitionInspector(
     env,
     {
+      fieldTypeRegistry,
       permissionEngine
     },
     snapshot

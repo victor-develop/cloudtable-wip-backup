@@ -12,9 +12,26 @@ import type {
   WorkflowExecutionResult,
   WorkflowExecutionScope,
   WorkflowOperatorRegistry,
+  WorkflowTriggerBinding,
   WorkflowTriggerDefinition,
   WorkflowValueTemplate
 } from "./types";
+
+function resolveTriggerFieldIds(
+  matcher: WorkflowTriggerBinding["match"]
+): readonly string[] {
+  if (Array.isArray(matcher?.fieldIds)) {
+    return matcher.fieldIds.filter(
+      (fieldId): fieldId is string => typeof fieldId === "string" && fieldId.length > 0
+    );
+  }
+
+  if (typeof matcher?.fieldId === "string" && matcher.fieldId.length > 0) {
+    return [matcher.fieldId];
+  }
+
+  return [];
+}
 
 export function evaluateWorkflowCondition(
   operator: WorkflowConditionDefinition,
@@ -95,6 +112,7 @@ export function matchWorkflowTrigger(
   scope: WorkflowExecutionScope
 ): boolean {
   const matcher = trigger.match;
+  const matcherFieldIds = resolveTriggerFieldIds(matcher);
   const eventTypes = matcher?.eventTypes ?? operator.triggerEventTypes;
 
   if (eventTypes.length > 0 && !eventTypes.includes(scope.event.eventType)) {
@@ -105,10 +123,10 @@ export function matchWorkflowTrigger(
     return false;
   }
 
-  if (matcher?.fieldId) {
+  if (matcherFieldIds.length > 0) {
     const payloadFieldId =
       typeof scope.event.payload.fieldId === "string" ? scope.event.payload.fieldId : null;
-    if (payloadFieldId !== matcher.fieldId) {
+    if (!payloadFieldId || !matcherFieldIds.includes(payloadFieldId)) {
       return false;
     }
   }

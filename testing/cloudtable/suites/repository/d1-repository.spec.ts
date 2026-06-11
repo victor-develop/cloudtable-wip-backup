@@ -1371,6 +1371,576 @@ describe("cloudtable D1 repository", () => {
     });
   });
 
+  it("auto-fills the canonical row owner field from the actor principal on record.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_1",
+        idempotencyKey: "idem_field_owner_1",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("record.create", {
+        commandId: "cmd_record_owner_1",
+        idempotencyKey: "idem_record_owner_1",
+        payload: {
+          recordId: "rec_owner_1"
+        }
+      })
+    );
+
+    expect(result.status).toBe("accepted");
+
+    const cellRow = db.inner
+      .prepare(
+        `SELECT value_json
+         FROM cell_current
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .get("ws_1", "tbl_tickets", "rec_owner_1", "fld_owner") as {
+      value_json: string;
+    };
+    expect(JSON.parse(cellRow.value_json)).toMatchObject({
+      raw: ["principal_1"],
+      valueType: "principal.user"
+    });
+  });
+
+  it("rejects owner-enabled record.create commands when the configured owner field is explicitly emptied", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_required",
+        idempotencyKey: "idem_field_owner_required",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("record.create", {
+        commandId: "cmd_record_owner_missing",
+        idempotencyKey: "idem_record_owner_missing",
+        payload: {
+          cells: {
+            fld_owner: []
+          },
+          recordId: "rec_owner_missing"
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toContain("row_owner_value_required:fld_owner");
+
+    const recordCount = db.inner
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM records
+         WHERE workspace_id = ? AND table_id = ? AND id = ?`
+      )
+      .get("ws_1", "tbl_tickets", "rec_owner_missing") as { count: number };
+    expect(recordCount.count).toBe(0);
+  });
+
+  it("rejects record.update when the canonical row owner field would become empty", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_update_guard",
+        idempotencyKey: "idem_field_owner_update_guard",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("record.create", {
+        commandId: "cmd_record_owner_update_guard_create",
+        idempotencyKey: "idem_record_owner_update_guard_create",
+        payload: {
+          recordId: "rec_owner_update_guard"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("record.update", {
+        commandId: "cmd_record_owner_update_guard",
+        idempotencyKey: "idem_record_owner_update_guard",
+        payload: {
+          patch: {
+            owner: []
+          },
+          recordId: "rec_owner_update_guard"
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toContain("row_owner_value_required:fld_owner");
+
+    const cellRow = db.inner
+      .prepare(
+        `SELECT value_json
+         FROM cell_current
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .get("ws_1", "tbl_tickets", "rec_owner_update_guard", "fld_owner") as {
+      value_json: string;
+    };
+    expect(JSON.parse(cellRow.value_json)).toMatchObject({
+      raw: ["principal_1"],
+      valueType: "principal.user"
+    });
+  });
+
+  it("allows record.update to reassign the canonical row owner to another principal", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_reassign",
+        idempotencyKey: "idem_field_owner_reassign",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("record.create", {
+        commandId: "cmd_record_owner_reassign_create",
+        idempotencyKey: "idem_record_owner_reassign_create",
+        payload: {
+          recordId: "rec_owner_reassign"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("record.update", {
+        commandId: "cmd_record_owner_reassign",
+        idempotencyKey: "idem_record_owner_reassign",
+        payload: {
+          patch: {
+            owner: ["principal_2"]
+          },
+          recordId: "rec_owner_reassign"
+        }
+      })
+    );
+
+    expect(result.status).toBe("accepted");
+
+    const cellRow = db.inner
+      .prepare(
+        `SELECT value_json
+         FROM cell_current
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .get("ws_1", "tbl_tickets", "rec_owner_reassign", "fld_owner") as {
+      value_json: string;
+    };
+    expect(JSON.parse(cellRow.value_json)).toMatchObject({
+      raw: ["principal_2"],
+      valueType: "principal.user"
+    });
+  });
+
+  it("rejects records.bulk_patch when the canonical row owner field would become empty", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_bulk_guard",
+        idempotencyKey: "idem_field_owner_bulk_guard",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("record.create", {
+        commandId: "cmd_record_owner_bulk_guard_create",
+        idempotencyKey: "idem_record_owner_bulk_guard_create",
+        payload: {
+          recordId: "rec_owner_bulk_guard"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("records.bulk_patch", {
+        commandId: "cmd_records_owner_bulk_guard",
+        idempotencyKey: "idem_records_owner_bulk_guard",
+        payload: {
+          updates: [
+            {
+              patch: {
+                owner: []
+              },
+              recordId: "rec_owner_bulk_guard"
+            }
+          ]
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toContain("row_owner_value_required:fld_owner");
+  });
+
+  it("rejects cell.set when the canonical row owner field would become empty", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_cell_guard",
+        idempotencyKey: "idem_field_owner_cell_guard",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("record.create", {
+        commandId: "cmd_record_owner_cell_guard_create",
+        idempotencyKey: "idem_record_owner_cell_guard_create",
+        payload: {
+          recordId: "rec_owner_cell_guard"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("cell.set", {
+        commandId: "cmd_cell_owner_cell_guard",
+        idempotencyKey: "idem_cell_owner_cell_guard",
+        payload: {
+          fieldId: "fld_owner",
+          recordId: "rec_owner_cell_guard",
+          value: []
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toContain("row_owner_value_required:fld_owner");
+  });
+
+  it("rejects multiple canonical row-owner fields on the same table", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_primary",
+        idempotencyKey: "idem_field_owner_primary",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner_primary",
+          fieldKey: "ownerPrimary",
+          fieldType: "principal.user",
+          label: "Primary Owner"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_secondary",
+        idempotencyKey: "idem_field_owner_secondary",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner_secondary",
+          fieldKey: "ownerSecondary",
+          fieldType: "principal.user",
+          label: "Secondary Owner"
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toContain("row_owner_field_conflict:fld_owner_primary");
+  });
+
+  it("rejects creating a canonical row-owner field after records already exist", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(createDomainCommand("field.create"));
+    await commandBus.execute(
+      createDomainCommand("record.create", {
+        commandId: "cmd_record_existing_before_owner_create",
+        idempotencyKey: "idem_record_existing_before_owner_create",
+        payload: {
+          cells: {
+            fld_title: "Existing ticket"
+          },
+          recordId: "rec_existing_before_owner_create"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_after_records_create",
+        idempotencyKey: "idem_field_owner_after_records_create",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toEqual(["row_owner_backfill_required:fld_owner"]);
+  });
+
+  it("rejects enabling a canonical row-owner field when existing rows are missing owner values", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(createDomainCommand("field.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_candidate_create",
+        idempotencyKey: "idem_field_owner_candidate_create",
+        payload: {
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("record.create", {
+        commandId: "cmd_record_missing_owner_before_enable",
+        idempotencyKey: "idem_record_missing_owner_before_enable",
+        payload: {
+          cells: {
+            fld_title: "Existing ticket"
+          },
+          recordId: "rec_missing_owner_before_enable"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("field.update", {
+        commandId: "cmd_field_enable_owner_missing_values",
+        idempotencyKey: "idem_field_enable_owner_missing_values",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner"
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toEqual(["row_owner_backfill_required:fld_owner"]);
+  });
+
+  it("allows enabling a canonical row-owner field once existing rows are already backfilled", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(createDomainCommand("field.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_ready_create",
+        idempotencyKey: "idem_field_owner_ready_create",
+        payload: {
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("record.create", {
+        commandId: "cmd_record_backfilled_owner_before_enable",
+        idempotencyKey: "idem_record_backfilled_owner_before_enable",
+        payload: {
+          cells: {
+            fld_owner: ["usr_owner"],
+            fld_title: "Backfilled ticket"
+          },
+          recordId: "rec_backfilled_owner_before_enable"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("field.update", {
+        commandId: "cmd_field_enable_owner_backfilled",
+        idempotencyKey: "idem_field_enable_owner_backfilled",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner"
+        }
+      })
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it("updates saved-view definitions by versioning schema history and current view state", async () => {
     const db = createDatabase();
     const fieldTypeRegistry = createFieldTypeRegistry();
@@ -3287,6 +3857,604 @@ describe("cloudtable D1 repository", () => {
         operator_version: 1
       }
     ]);
+  });
+
+  it("normalizes legacy field_changed trigger selectors to canonical fieldIds on workflow.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(createDomainCommand("field.create"));
+
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_title",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "Escalated case"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_title",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_escalation"
+          }
+        }
+      })
+    );
+
+    expect(createResult.status).toBe("accepted");
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_escalation")
+      .first<{ definition_json: string }>();
+    expect(JSON.parse(versionRow?.definition_json ?? "{}")).toMatchObject({
+      trigger: {
+        match: {
+          fieldIds: ["fld_title"],
+          fromWorkflow: false,
+          tableId: "tbl_tickets"
+        },
+        operatorId: "field_changed"
+      }
+    });
+    expect(
+      (JSON.parse(versionRow?.definition_json ?? "{}") as {
+        trigger?: { match?: { fieldId?: string } };
+      }).trigger?.match?.fieldId
+    ).toBeUndefined();
+  });
+
+  it("rejects workflow trigger definitions that mix fieldId and fieldIds selectors", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(createDomainCommand("field.create"));
+
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_title",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "Escalated case"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_title",
+                fieldIds: ["fld_title"],
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_escalation"
+          }
+        }
+      })
+    );
+
+    expect(createResult.status).toBe("rejected");
+    expect(createResult.diagnostics).toContain("workflow_trigger_match_field_selector_conflict");
+  });
+
+  it("rejects row.owner workflow conditions when the table has no canonical owner field", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(createDomainCommand("field.create"));
+
+    const result = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_title",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "Escalated case"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [
+              {
+                input: {
+                  left: {
+                    path: "row.owner.value"
+                  },
+                  right: ["usr_owner"]
+                },
+                operatorId: "equals"
+              }
+            ],
+            metadata: {
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                tableId: "tbl_tickets"
+              },
+              operatorId: "record_updated"
+            },
+            workflowId: "wf_ticket_escalation"
+          }
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toEqual(["workflow_condition_binding_missing:0:row.owner"]);
+  });
+
+  it("rejects incompatible row.owner workflow condition bindings and allows valid ones", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(createDomainCommand("field.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_primary",
+        idempotencyKey: "idem_field_owner_primary",
+        payload: {
+          config: {
+            rowOwner: true
+          },
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          label: "Owner"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_owner_secondary",
+        idempotencyKey: "idem_field_owner_secondary",
+        payload: {
+          fieldId: "fld_owner_secondary",
+          fieldKey: "owner_secondary",
+          fieldType: "principal.user",
+          label: "Secondary Owner"
+        }
+      })
+    );
+
+    const unsupportedOperator = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        commandId: "cmd_workflow_create_owner_operator",
+        idempotencyKey: "idem_workflow_create_owner_operator",
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_title",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "Escalated case"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [
+              {
+                input: {
+                  comparator: "gt",
+                  left: {
+                    path: "row.owner.value"
+                  },
+                  right: 1
+                },
+                operatorId: "number_compare"
+              }
+            ],
+            metadata: {
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                tableId: "tbl_tickets"
+              },
+              operatorId: "record_updated"
+            },
+            workflowId: "wf_ticket_escalation"
+          }
+        }
+      })
+    );
+    expect(unsupportedOperator.diagnostics).toEqual([
+      "workflow_condition_binding_operator_unsupported:0:row.owner:number_compare"
+    ]);
+
+    const mismatchedField = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        commandId: "cmd_workflow_create_owner_mismatch",
+        idempotencyKey: "idem_workflow_create_owner_mismatch",
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_title",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "Escalated case"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [
+              {
+                input: {
+                  fieldId: "fld_owner_secondary",
+                  fieldType: {
+                    path: "row.owner.fieldType"
+                  },
+                  left: {
+                    path: "row.owner.value"
+                  },
+                  right: ["usr_owner"]
+                },
+                operatorId: "equals"
+              }
+            ],
+            metadata: {
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                tableId: "tbl_tickets"
+              },
+              operatorId: "record_updated"
+            },
+            workflowId: "wf_ticket_escalation"
+          }
+        }
+      })
+    );
+    expect(mismatchedField.diagnostics).toEqual([
+      "workflow_condition_binding_field_id_mismatch:0:row.owner"
+    ]);
+
+    const validDefinition = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        commandId: "cmd_workflow_create_owner_valid",
+        idempotencyKey: "idem_workflow_create_owner_valid",
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_title",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "Escalated case"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.owner.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.owner.fieldType"
+                  },
+                  left: {
+                    path: "row.owner.value"
+                  },
+                  right: ["usr_owner"]
+                },
+                operatorId: "equals"
+              }
+            ],
+            metadata: {
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                tableId: "tbl_tickets"
+              },
+              operatorId: "record_updated"
+            },
+            workflowId: "wf_ticket_escalation_valid"
+          },
+          workflowId: "wf_ticket_escalation_valid",
+          workflowKey: "ticket-escalation-valid"
+        }
+      })
+    );
+    expect(validDefinition.status).toBe("accepted");
+    expect(validDefinition.diagnostics).toEqual([]);
+
+    const publish = await commandBus.execute(
+      createDomainCommand("workflow.publish", {
+        commandId: "cmd_workflow_publish_owner_valid",
+        idempotencyKey: "idem_workflow_publish_owner_valid",
+        payload: {
+          workflowId: "wf_ticket_escalation_valid"
+        }
+      })
+    );
+    expect(publish.status).toBe("accepted");
+    expect(publish.diagnostics).toEqual([]);
+  });
+
+  it("validates generic row.fields workflow condition bindings for non-owner fields", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(createDomainCommand("field.create"));
+
+    const unsupportedOperator = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        commandId: "cmd_workflow_create_title_operator",
+        idempotencyKey: "idem_workflow_create_title_operator",
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_title",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "Escalated case"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [
+              {
+                input: {
+                  comparator: "gt",
+                  left: {
+                    path: "row.fields.title.value"
+                  },
+                  right: 1
+                },
+                operatorId: "number_compare"
+              }
+            ],
+            metadata: {
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                tableId: "tbl_tickets"
+              },
+              operatorId: "record_updated"
+            },
+            workflowId: "wf_title_guard"
+          },
+          workflowId: "wf_title_guard",
+          workflowKey: "title-guard"
+        }
+      })
+    );
+    expect(unsupportedOperator.diagnostics).toEqual([
+      "workflow_condition_binding_operator_unsupported:0:row.fields.title:number_compare"
+    ]);
+
+    const validDefinition = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        commandId: "cmd_workflow_create_title_valid",
+        idempotencyKey: "idem_workflow_create_title_valid",
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_title",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "Escalated case"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.fields.title.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.fields.title.fieldType"
+                  },
+                  left: {
+                    path: "row.fields.title.value"
+                  },
+                  right: "Urgent"
+                },
+                operatorId: "equals"
+              }
+            ],
+            metadata: {
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                tableId: "tbl_tickets"
+              },
+              operatorId: "record_updated"
+            },
+            workflowId: "wf_title_guard_valid"
+          },
+          workflowId: "wf_title_guard_valid",
+          workflowKey: "title-guard-valid"
+        }
+      })
+    );
+    expect(validDefinition.status).toBe("accepted");
+    expect(validDefinition.diagnostics).toEqual([]);
   });
 
   it("rejects invalid table and field references without committing domain state", async () => {
