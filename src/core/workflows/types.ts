@@ -213,6 +213,7 @@ export type WorkflowActionDefinition = WorkflowOperatorDefinitionBase & {
   kind: "action";
   commandType: string;
   commandScope: CommandScope;
+  proposalTemplate: WorkflowActionInput;
   createCommand(
     input: WorkflowActionInput,
     context: WorkflowActionExecutionContext
@@ -232,6 +233,7 @@ export type WorkflowActionManifest = WorkflowOperatorManifestBase & {
   kind: "action";
   commandScope: CommandScope;
   commandType: string;
+  proposalTemplate: WorkflowActionInput;
 };
 
 export type WorkflowOperatorManifest =

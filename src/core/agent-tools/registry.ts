@@ -2195,6 +2195,10 @@ export function createAgentToolRegistry({
 
             return [action];
           });
+          const draftedActionBindings = actions.map((action) => ({
+            input: cloneWorkflowActionInput(action.proposalTemplate),
+            operatorId: action.id
+          }));
 
           const proposal = {
             actions: actions.map(toWorkflowActionProposal),
@@ -2210,10 +2214,7 @@ export function createAgentToolRegistry({
           };
           const command = buildCommandEnvelope("workflow.create", "workflow", invocation.input, {
             definition: {
-              actions: actions.map((action) => ({
-                input: {},
-                operatorId: action.id
-              })),
+              actions: draftedActionBindings,
               conditions: proposal.conditions,
               metadata: {
                 businessRule: invocation.input.businessRule,
@@ -2531,6 +2532,10 @@ function summarizeCommand(command: CommandEnvelope): AgentToolAuditDiff[] {
 
 function toWorkflowActionProposal(action: WorkflowActionDefinition): WorkflowActionManifest {
   return serializeWorkflowOperatorManifest(action) as WorkflowActionManifest;
+}
+
+function cloneWorkflowActionInput(input: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
 }
 
 function readWorkflowAuthoringMetadata(value: unknown): WorkflowAuthoringMetadata {

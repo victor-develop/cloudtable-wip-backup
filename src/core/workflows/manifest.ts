@@ -36,7 +36,8 @@ export function serializeWorkflowOperatorManifest(
       ...base,
       commandScope: definition.commandScope,
       commandType: definition.commandType,
-      kind: "action"
+      kind: "action",
+      proposalTemplate: definition.proposalTemplate
     };
   }
 

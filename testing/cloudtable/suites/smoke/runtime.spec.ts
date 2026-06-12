@@ -1486,12 +1486,14 @@ describe("cloudtable runtime smoke", () => {
           command: {
             payload: {
               definition: {
+                actions: unknown[];
                 conditions: unknown[];
               };
             };
           };
           kind: string;
           proposal: {
+            actions: unknown[];
             conditions: unknown[];
           };
         };
@@ -1500,6 +1502,17 @@ describe("cloudtable runtime smoke", () => {
       output: {
         kind: "workflow-proposal",
         proposal: {
+          actions: [
+            {
+              id: "update_record",
+              proposalTemplate: {
+                patch: {
+                  title: "Bravo"
+                },
+                recordId: "rec_001"
+              }
+            }
+          ],
           conditions: [
             {
               input: {
@@ -1524,6 +1537,17 @@ describe("cloudtable runtime smoke", () => {
         command: {
           payload: {
             definition: {
+              actions: [
+                {
+                  input: {
+                    patch: {
+                      title: "Bravo"
+                    },
+                    recordId: "rec_001"
+                  },
+                  operatorId: "update_record"
+                }
+              ],
               conditions: [
                 {
                   input: {

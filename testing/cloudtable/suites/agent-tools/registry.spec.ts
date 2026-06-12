@@ -2446,12 +2446,24 @@ describe("cloudtable agent tool registry", () => {
           {
             commandType: "record.update",
             fixtureContract: [{ id: "update_record.action.sample", kind: "action" }],
-            id: "update_record"
+            id: "update_record",
+            proposalTemplate: {
+              patch: {
+                title: "Bravo"
+              },
+              recordId: "rec_001"
+            }
           },
           {
             commandType: "workflow.webhook.enqueue",
             fixtureContract: [{ id: "send_webhook.action.sample", kind: "action" }],
-            id: "send_webhook"
+            id: "send_webhook",
+            proposalTemplate: {
+              body: {
+                event: "record.updated"
+              },
+              destination: "https://example.test/hooks/cloudtable"
+            }
           }
         ],
         trigger: {
@@ -2460,6 +2472,34 @@ describe("cloudtable agent tool registry", () => {
           triggerEventTypes: ["cell.set"]
         },
         workflowId: "wf_qualify_lead"
+      }
+    });
+    expect(result).toMatchObject({
+      command: {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  patch: {
+                    title: "Bravo"
+                  },
+                  recordId: "rec_001"
+                },
+                operatorId: "update_record"
+              },
+              {
+                input: {
+                  body: {
+                    event: "record.updated"
+                  },
+                  destination: "https://example.test/hooks/cloudtable"
+                },
+                operatorId: "send_webhook"
+              }
+            ]
+          }
+        }
       }
     });
   });
@@ -3417,7 +3457,13 @@ describe("cloudtable agent tool registry", () => {
           {
             commandType: "record.update",
             fixtureContract: [{ id: "update_record.action.sample", kind: "action" }],
-            id: "update_record"
+            id: "update_record",
+            proposalTemplate: {
+              patch: {
+                title: "Bravo"
+              },
+              recordId: "rec_001"
+            }
           }
         ],
         trigger: {

@@ -155,6 +155,7 @@ function defineAction(
     timeoutClass: commandType === "workflow.webhook.enqueue" ? "network" : "standard",
     retryClass: commandType === "workflow.webhook.enqueue" ? "network" : "standard",
     commandScope,
+    proposalTemplate: fixturePayload,
     createCommand(input, context) {
       return createActionCommand(commandScope, commandType, input, context);
     },

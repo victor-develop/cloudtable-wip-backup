@@ -8887,6 +8887,12 @@ describe("cloudtable runtime ingress", () => {
         description: "Command result emitted through the normal command bus.",
         type: "object"
       },
+      proposalTemplate: {
+        body: {
+          event: "record.updated"
+        },
+        destination: "https://example.test/hooks/cloudtable"
+      },
       purity: "impure",
       requiredCapabilities: ["webhooks.deliver"],
       retryClass: "network",
@@ -10138,6 +10144,117 @@ describe("cloudtable runtime ingress", () => {
               operatorId: "equals"
             }
           ]
+        }
+      }
+    });
+  });
+
+  it("drafts metadata-derived non-record action templates through the agent-tool preview ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "text.single_line",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_webhook_workflow_proposal",
+      workspaceId: "ws_1",
+      principalId: "agt_webhook_workflow",
+      policyRevision: 49,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create"],
+      fields: {
+        fld_status: {
+          agent: true,
+          fieldId: "fld_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["send_webhook"],
+            businessRule: "When status changes, call the outbound workflow webhook.",
+            fieldIds: ["fld_status"],
+            name: "Webhook follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_webhook_follow_up"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 49,
+          principalId: "agt_webhook_workflow",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect(
+      (await response.json()) as {
+        output: {
+          command: {
+            payload: {
+              definition: {
+                actions: unknown[];
+              };
+            };
+          };
+          kind: string;
+          proposal: {
+            actions: unknown[];
+          };
+        };
+      }
+    ).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          actions: [
+            {
+              id: "send_webhook",
+              proposalTemplate: {
+                body: {
+                  event: "record.updated"
+                },
+                destination: "https://example.test/hooks/cloudtable"
+              }
+            }
+          ]
+        },
+        command: {
+          payload: {
+            definition: {
+              actions: [
+                {
+                  input: {
+                    body: {
+                      event: "record.updated"
+                    },
+                    destination: "https://example.test/hooks/cloudtable"
+                  },
+                  operatorId: "send_webhook"
+                }
+              ]
+            }
+          }
         }
       }
     });
