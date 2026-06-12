@@ -7,6 +7,7 @@ As semantic suites expand, keep the same one-scenario-per-directory layout under
 - `testing/cloudtable/fixtures/permissions`
 - `testing/cloudtable/fixtures/workflows`
 - `testing/cloudtable/fixtures/views`
+- `testing/cloudtable/fixtures/invariants`
 
 Required files:
 
@@ -39,3 +40,4 @@ Suggested verification commands:
 - `npm run test:permissions`
 - `npm run test:workflows`
 - `npm run test:views`
+- `npm run test:invariants`
