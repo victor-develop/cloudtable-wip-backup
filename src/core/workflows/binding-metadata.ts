@@ -39,6 +39,10 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
+function asWorkflowConditionInput(value: unknown): Record<string, JsonValue> | undefined {
+  return isRecord(value) ? (value as Record<string, JsonValue>) : undefined;
+}
+
 function buildBindingMetadata({
   aliasOf,
   binding,
@@ -152,8 +156,14 @@ function normalizeBindingMetadata(
   const fieldIdPath = asString(template?.fieldIdPath);
   const fieldTypePath = asString(template?.fieldTypePath);
   const valuePath = asString(template?.valuePath);
+  const input = asWorkflowConditionInput(template?.input);
 
-  if (!fieldId || !fieldKey || !fieldType || !fieldIdPath || !fieldTypePath || !valuePath) {
+  if (
+    !fieldId ||
+    !fieldKey ||
+    !fieldType ||
+    ((!fieldIdPath || !fieldTypePath || !valuePath) && input === undefined)
+  ) {
     return null;
   }
 
@@ -198,9 +208,10 @@ function normalizeBindingMetadata(
     supportedOperatorIds,
     supportedOperators,
     template: {
-      fieldIdPath,
-      fieldTypePath,
-      valuePath
+      ...(fieldIdPath ? { fieldIdPath } : {}),
+      ...(fieldTypePath ? { fieldTypePath } : {}),
+      ...(input ? { input } : {}),
+      ...(valuePath ? { valuePath } : {})
     }
   };
 }

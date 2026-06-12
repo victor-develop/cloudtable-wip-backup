@@ -250,9 +250,10 @@ export type WorkflowConditionBindingMetadata = {
   supportedOperatorIds: string[];
   supportedOperators: WorkflowConditionManifest[];
   template: {
-    fieldIdPath: string;
-    fieldTypePath: string;
-    valuePath: string;
+    fieldIdPath?: string;
+    fieldTypePath?: string;
+    input?: WorkflowConditionInput;
+    valuePath?: string;
   };
 };
 

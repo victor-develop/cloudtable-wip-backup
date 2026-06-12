@@ -167,6 +167,52 @@ describe("workflow authoring", () => {
     ]);
   });
 
+  it("drafts operator-specific condition input from metadata templates without hard-coded field/value scaffolding", () => {
+    const metadata = {
+      bindings: {
+        "row.fields.status": {
+          binding: "row.fields.status",
+          fieldId: "fld_status",
+          fieldKey: "status",
+          fieldType: "status.semantic",
+          proposalHints: [
+            {
+              matchPhrases: ["status is qualified"],
+              operatorId: "equals"
+            }
+          ],
+          supportedOperatorIds: ["equals"],
+          supportedOperators: supportedOperators(["equals"]),
+          template: {
+            input: {
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "qualified"
+            }
+          }
+        }
+      }
+    };
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Notify sales ops when status is qualified.",
+        fieldIds: ["fld_status"]
+      })
+    ).toEqual([
+      {
+        input: {
+          left: {
+            path: "row.fields.status.value"
+          },
+          right: "qualified"
+        },
+        operatorId: "equals"
+      }
+    ]);
+  });
+
   it("inspects saved conditions through canonical binding and operator metadata", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
       {
@@ -324,6 +370,64 @@ describe("workflow authoring", () => {
     ]);
   });
 
+  it("resolves referenced bindings from metadata-defined template input paths", () => {
+    const metadata = {
+      bindings: {
+        "row.conditions.owner_assigned": {
+          binding: "row.conditions.owner_assigned",
+          fieldId: "fld_owner",
+          fieldKey: "owner",
+          fieldType: "principal.user",
+          proposalHints: [],
+          supportedOperatorIds: ["equals"],
+          supportedOperators: supportedOperators(["equals"]),
+          template: {
+            input: {
+              left: {
+                path: "row.owner.value"
+              },
+              right: ["usr_owner"]
+            }
+          }
+        }
+      }
+    };
+
+    expect(
+      inspectWorkflowConditionsFromMetadata(
+        {
+          actions: [],
+          conditions: [
+            {
+              input: {
+                left: {
+                  path: "row.owner.value"
+                },
+                right: ["usr_owner"]
+              },
+              operatorId: "equals"
+            }
+          ],
+          trigger: {
+            operatorId: "record_updated"
+          },
+          workflowId: "wf_template_metadata_paths"
+        },
+        metadata,
+        workflowOperatorRegistry
+      )
+    ).toEqual([
+      {
+        diagnostics: [],
+        index: 0,
+        operator: supportedOperators(["equals"])[0],
+        operatorId: "equals",
+        referencedBindingNames: ["row.conditions.owner_assigned"],
+        resolvedBindings: [metadata.bindings["row.conditions.owner_assigned"]]
+      }
+    ]);
+  });
+
   it("normalizes wrapped workflow metadata and filters malformed bindings", () => {
     expect(
       normalizeWorkflowAuthoringMetadata({
@@ -356,6 +460,11 @@ describe("workflow authoring", () => {
               template: {
                 fieldIdPath: "row.fields.customer_note.fieldId",
                 fieldTypePath: "row.fields.customer_note.fieldType",
+                input: {
+                  value: {
+                    path: "row.fields.customer_note.value"
+                  }
+                },
                 valuePath: "row.fields.customer_note.value"
               }
             },
@@ -395,6 +504,11 @@ describe("workflow authoring", () => {
           template: {
             fieldIdPath: "row.fields.customer_note.fieldId",
             fieldTypePath: "row.fields.customer_note.fieldType",
+            input: {
+              value: {
+                path: "row.fields.customer_note.value"
+              }
+            },
             valuePath: "row.fields.customer_note.value"
           }
         }

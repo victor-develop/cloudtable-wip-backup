@@ -21,6 +21,37 @@ function readTemplatePath(value: unknown): string | null {
   return value.path;
 }
 
+function buildDefaultConditionInput(
+  metadata: WorkflowConditionBindingMetadata
+): WorkflowConditionBinding["input"] {
+  if (isRecord(metadata.template.input)) {
+    return metadata.template.input;
+  }
+
+  const { fieldIdPath, fieldTypePath, valuePath } = metadata.template;
+  if (!fieldIdPath || !fieldTypePath || !valuePath) {
+    return {};
+  }
+
+  return {
+    fieldId: {
+      path: fieldIdPath
+    },
+    fieldType: {
+      path: fieldTypePath
+    },
+    value: {
+      path: valuePath
+    }
+  };
+}
+
+function bindingTemplatePaths(metadata: WorkflowConditionBindingMetadata): string[] {
+  const templatePaths: string[] = [];
+  collectTemplatePaths(buildDefaultConditionInput(metadata), templatePaths);
+  return templatePaths;
+}
+
 function collectTemplatePaths(value: unknown, paths: string[]): void {
   const templatePath = readTemplatePath(value);
   if (templatePath) {
@@ -58,6 +89,10 @@ function validateCanonicalBindingValue(
   const expectedLiteral = metadata[metadataKey];
   const expectedTemplate =
     metadataKey === "fieldId" ? metadata.template.fieldIdPath : metadata.template.fieldTypePath;
+  if (!expectedTemplate) {
+    return [];
+  }
+
   if (value === expectedLiteral || readTemplatePath(value) === expectedTemplate) {
     return [];
   }
@@ -76,16 +111,21 @@ function findReferencedBindingNames(
 
   const referencedBindings = new Set<string>();
   for (const path of paths) {
+    let matchedMetadataBinding = false;
     for (const [bindingName, metadata] of Object.entries(authoringMetadata.bindings)) {
+      const templatePaths = bindingTemplatePaths(metadata);
       if (
         path === bindingName ||
-        path === metadata.template.fieldIdPath ||
-        path === metadata.template.fieldTypePath ||
-        path === metadata.template.valuePath ||
+        templatePaths.includes(path) ||
         path.startsWith(`${bindingName}.`)
       ) {
         referencedBindings.add(bindingName);
+        matchedMetadataBinding = true;
       }
+    }
+
+    if (matchedMetadataBinding) {
+      continue;
     }
 
     for (const suffix of [".fieldId", ".fieldType", ".value"]) {
@@ -128,14 +168,14 @@ function resolveBindingsByFieldId(
     (candidate) =>
       candidate.aliasOf &&
       candidate.isCanonical === true &&
-      conditionPaths.some(
-        (path) =>
+      conditionPaths.some((path) => {
+        const templatePaths = bindingTemplatePaths(candidate);
+        return (
           path === candidate.binding ||
-          path === candidate.template.fieldIdPath ||
-          path === candidate.template.fieldTypePath ||
-          path === candidate.template.valuePath ||
+          templatePaths.includes(path) ||
           path.startsWith(`${candidate.binding}.`)
-      )
+        );
+      })
   );
   if (canonicalAlias) {
     return [canonicalAlias.binding];
@@ -396,20 +436,9 @@ export function draftWorkflowConditionsFromMetadata(
       continue;
     }
 
-    const baseInput: WorkflowConditionBinding["input"] = {
-      fieldId: {
-        path: metadata.template.fieldIdPath
-      },
-      fieldType: {
-        path: metadata.template.fieldTypePath
-      },
-      value: {
-        path: metadata.template.valuePath
-      }
-    };
     draftedConditions.push({
       input: {
-        ...baseInput,
+        ...buildDefaultConditionInput(metadata),
         ...(proposalHint.draftInput ?? {})
       },
       operatorId: proposalHint.operatorId
