@@ -1480,6 +1480,7 @@ describe("cloudtable agent tool registry", () => {
         fieldId: "customer_note",
         fieldType: "text.long",
         scope: {
+          recordId: null,
           tableId: "tbl_accounts",
           viewId: "view_open",
           workspaceId: "ws_demo"

@@ -291,6 +291,7 @@ export type ExplainPermissionsToolInput = {
   workspaceId: string;
   tableId?: string;
   viewId?: string;
+  recordId?: string;
   fieldId: string;
   fieldType?: string;
   surfaces?: ExplainablePermissionSurface[];
@@ -749,6 +750,7 @@ export type AgentToolInvocationResult =
       kind: "permission-explanation";
       explanation: FieldPermissionExplanation & {
         scope: {
+          recordId: string | null;
           workspaceId: string;
           tableId: string | null;
           viewId: string | null;

@@ -5,6 +5,7 @@ import type {
   AgentToolFieldVisibility,
   ExplainablePermissionSurface,
   EffectivePermissionSnapshot,
+  PermissionEvaluationContext,
   FieldPermissionExplanation,
   FieldAccessDecision,
   FieldReadState,
@@ -208,33 +209,39 @@ function summarizeFieldExplanation(
   surface: ExplainablePermissionSurface,
   decision: FieldAccessDecision
 ): string {
+  const rowOwnerSummary = decision.evaluationContext?.rowOwner
+    ? decision.evaluationContext.rowOwner.matchesPrincipal
+      ? " Row owner matches the current principal."
+      : " Row owner does not match the current principal."
+    : "";
+
   if (decision.readState === "hidden") {
-    return `Field is hidden for ${surfaceLabel(surface)}.`;
+    return `Field is hidden for ${surfaceLabel(surface)}.${rowOwnerSummary}`;
   }
 
   if (decision.readState === "redacted") {
-    return `Field value is redacted for ${surfaceLabel(surface)}.`;
+    return `Field value is redacted for ${surfaceLabel(surface)}.${rowOwnerSummary}`;
   }
 
   if (surface === "command-ingress") {
     return decision.writeAllowed
-      ? `Field can be written through commands.`
-      : `Field is visible but cannot be written through commands.`;
+      ? `Field can be written through commands.${rowOwnerSummary}`
+      : `Field is visible but cannot be written through commands.${rowOwnerSummary}`;
   }
 
   if (surface === "workflow-step") {
     return decision.writeAllowed
-      ? `Workflow steps can read and write this field in the current scope.`
-      : `Workflow steps can read this field, but they cannot write it in the current scope.`;
+      ? `Workflow steps can read and write this field in the current scope.${rowOwnerSummary}`
+      : `Workflow steps can read this field, but they cannot write it in the current scope.${rowOwnerSummary}`;
   }
 
   if (surface === "agent-tool") {
     return decision.writeAllowed
-      ? `Agent tools can read and write this field in the current scope.`
-      : `Agent tools can read this field, but they cannot write it in the current scope.`;
+      ? `Agent tools can read and write this field in the current scope.${rowOwnerSummary}`
+      : `Agent tools can read this field, but they cannot write it in the current scope.${rowOwnerSummary}`;
   }
 
-  return `Field is visible for ${surfaceLabel(surface)}.`;
+  return `Field is visible for ${surfaceLabel(surface)}.${rowOwnerSummary}`;
 }
 
 export function createPermissionEngine(
@@ -249,7 +256,7 @@ export function createPermissionEngine(
         fieldType
       });
     },
-    evaluateFieldAccess(field, surface, snapshot = defaultSnapshot) {
+    evaluateFieldAccess(field, surface, snapshot = defaultSnapshot, evaluationContext) {
       const definition = fieldTypeRegistry.require(field.fieldType);
       const behavior = definition.getPermissionBehavior({
         fieldType: field.fieldType
@@ -280,6 +287,7 @@ export function createPermissionEngine(
 
       return {
         allowed: readState !== "hidden" || writeAllowed,
+        evaluationContext,
         fieldId: field.fieldId,
         fieldType: field.fieldType,
         readState,
@@ -287,14 +295,16 @@ export function createPermissionEngine(
         writeAllowed
       } satisfies FieldAccessDecision;
     },
-    explainFieldAccess(field, surfaces, snapshot = defaultSnapshot) {
+    explainFieldAccess(field, surfaces, snapshot = defaultSnapshot, evaluationContext) {
       return {
+        evaluationContext,
         fieldId: field.fieldId,
         fieldType: field.fieldType,
         surfaces: uniqueExplainableSurfaces(surfaces).map((surface) => {
-          const decision = this.evaluateFieldAccess(field, surface, snapshot);
+          const decision = this.evaluateFieldAccess(field, surface, snapshot, evaluationContext);
           return {
             allowed: decision.allowed,
+            evaluationContext,
             message: summarizeFieldExplanation(surface, decision),
             readState: decision.readState,
             reasonMessages: decision.reasons.map((reason) => describeReason(reason, surface)),

@@ -5,7 +5,10 @@ import type { CommandBus } from "../../../../src/core/commands/command-bus";
 import type { CommandEnvelope } from "../../../../src/core/commands/types";
 import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
 import { createPermissionEngine } from "../../../../src/core/permissions/engine";
-import type { EffectivePermissionSnapshot } from "../../../../src/core/permissions/types";
+import type {
+  EffectivePermissionSnapshot,
+  PermissionEvaluationContext
+} from "../../../../src/core/permissions/types";
 import { createViewPlanner } from "../../../../src/core/views/planner";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
 
@@ -60,6 +63,26 @@ const snapshot: EffectivePermissionSnapshot = {
       workflow: true,
       agent: true
     }
+  }
+};
+
+const ownerMatchContext: PermissionEvaluationContext = {
+  rowOwner: {
+    fieldId: "owner",
+    fieldType: "principal.user",
+    matchesPrincipal: true,
+    principalIds: ["usr_alice"],
+    recordId: "rec_owned"
+  }
+};
+
+const ownerMismatchContext: PermissionEvaluationContext = {
+  rowOwner: {
+    fieldId: "owner",
+    fieldType: "principal.user",
+    matchesPrincipal: false,
+    principalIds: ["usr_bob"],
+    recordId: "rec_not_owned"
   }
 };
 
@@ -281,16 +304,20 @@ describe("cloudtable permission engine", () => {
         "command-ingress",
         "workflow-step",
         "agent-tool"
-      ]
+      ],
+      undefined,
+      ownerMismatchContext
     );
 
     expect(explanation).toEqual({
+      evaluationContext: ownerMismatchContext,
       fieldId: "customer_note",
       fieldType: "text.long",
       surfaces: [
         {
           allowed: true,
-          message: "Field value is redacted for direct record reads.",
+          evaluationContext: ownerMismatchContext,
+          message: "Field value is redacted for direct record reads. Row owner does not match the current principal.",
           readState: "redacted",
           reasonMessages: ["Field value is redacted for direct record reads."],
           reasons: ["field_redacted:customer_note"],
@@ -299,7 +326,8 @@ describe("cloudtable permission engine", () => {
         },
         {
           allowed: true,
-          message: "Field value is redacted for view queries.",
+          evaluationContext: ownerMismatchContext,
+          message: "Field value is redacted for view queries. Row owner does not match the current principal.",
           readState: "redacted",
           reasonMessages: ["Field value is redacted for view queries."],
           reasons: ["field_redacted:customer_note"],
@@ -308,7 +336,8 @@ describe("cloudtable permission engine", () => {
         },
         {
           allowed: true,
-          message: "Field value is redacted for command writes.",
+          evaluationContext: ownerMismatchContext,
+          message: "Field value is redacted for command writes. Row owner does not match the current principal.",
           readState: "redacted",
           reasonMessages: ["Field value is redacted for command writes."],
           reasons: ["field_redacted:customer_note"],
@@ -317,7 +346,8 @@ describe("cloudtable permission engine", () => {
         },
         {
           allowed: true,
-          message: "Field value is redacted for workflow steps.",
+          evaluationContext: ownerMismatchContext,
+          message: "Field value is redacted for workflow steps. Row owner does not match the current principal.",
           readState: "redacted",
           reasonMessages: ["Field value is redacted for workflow steps."],
           reasons: ["workflow_redacted:customer_note"],
@@ -326,7 +356,8 @@ describe("cloudtable permission engine", () => {
         },
         {
           allowed: false,
-          message: "Field is hidden for agent tools.",
+          evaluationContext: ownerMismatchContext,
+          message: "Field is hidden for agent tools. Row owner does not match the current principal.",
           readState: "hidden",
           reasonMessages: ["Field is hidden for agent tools."],
           reasons: ["agent_hidden:customer_note"],
@@ -335,6 +366,38 @@ describe("cloudtable permission engine", () => {
         }
       ]
     });
+  });
+
+  it("threads canonical row owner context through field evaluation for owner matches and mismatches", () => {
+    const permissionEngine = createPermissionEngine(registry, {
+      snapshot
+    });
+
+    const ownerMatchDecision = permissionEngine.evaluateFieldAccess(
+      {
+        fieldId: "title",
+        fieldType: "text.single_line"
+      },
+      "command-ingress",
+      undefined,
+      ownerMatchContext
+    );
+    const ownerMismatchDecision = permissionEngine.evaluateFieldAccess(
+      {
+        fieldId: "title",
+        fieldType: "text.single_line"
+      },
+      "command-ingress",
+      undefined,
+      ownerMismatchContext
+    );
+
+    expect(ownerMatchDecision.evaluationContext?.rowOwner).toEqual(ownerMatchContext.rowOwner);
+    expect(ownerMismatchDecision.evaluationContext?.rowOwner).toEqual(
+      ownerMismatchContext.rowOwner
+    );
+    expect(ownerMatchDecision.allowed).toBe(true);
+    expect(ownerMismatchDecision.allowed).toBe(true);
   });
 
   it("filters agent tools against visible writable fields", () => {

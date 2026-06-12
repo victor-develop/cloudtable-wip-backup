@@ -41,8 +41,21 @@ export type EffectivePermissionSnapshot = {
   fields: Record<string, PermissionFieldAccess>;
 };
 
+export type PermissionRowOwnerContext = {
+  fieldId: string;
+  fieldType: string;
+  matchesPrincipal: boolean;
+  principalIds: string[];
+  recordId: string;
+};
+
+export type PermissionEvaluationContext = {
+  rowOwner?: PermissionRowOwnerContext;
+};
+
 export type FieldAccessDecision = {
   allowed: boolean;
+  evaluationContext?: PermissionEvaluationContext;
   fieldId: string;
   fieldType: string;
   readState: FieldReadState;
@@ -60,6 +73,7 @@ export type ExplainablePermissionSurface =
 export type PermissionSurfaceExplanation = {
   surface: ExplainablePermissionSurface;
   allowed: boolean;
+  evaluationContext?: PermissionEvaluationContext;
   readState: FieldReadState;
   writeAllowed: boolean;
   reasons: string[];
@@ -68,6 +82,7 @@ export type PermissionSurfaceExplanation = {
 };
 
 export type FieldPermissionExplanation = {
+  evaluationContext?: PermissionEvaluationContext;
   fieldId: string;
   fieldType: string;
   surfaces: PermissionSurfaceExplanation[];
@@ -104,12 +119,14 @@ export type PermissionEngine = {
   evaluateFieldAccess(
     field: PermissionFieldDescriptor,
     surface: PermissionSurface,
-    snapshot?: EffectivePermissionSnapshot
+    snapshot?: EffectivePermissionSnapshot,
+    evaluationContext?: PermissionEvaluationContext
   ): FieldAccessDecision;
   explainFieldAccess(
     field: PermissionFieldDescriptor,
     surfaces?: readonly ExplainablePermissionSurface[],
-    snapshot?: EffectivePermissionSnapshot
+    snapshot?: EffectivePermissionSnapshot,
+    evaluationContext?: PermissionEvaluationContext
   ): FieldPermissionExplanation;
   evaluateCommand(
     command: CommandEnvelope,

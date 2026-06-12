@@ -44,7 +44,11 @@ import type { CommandEnvelope, CommandResult } from "../core/commands/types";
 import { serializeFieldTypeManifest } from "../core/field-types/manifest";
 import type { JsonValue } from "../core/field-types/types";
 import type { EffectivePermissionSnapshot } from "../core/permissions/types";
-import type { PermissionProjectionInput } from "../core/permissions/types";
+import type {
+  PermissionEvaluationContext,
+  PermissionProjectionInput
+} from "../core/permissions/types";
+import { findRowOwnerField } from "../core/ownership/row-owner";
 import { aggregateDescriptorForCommand } from "../core/commands/domain";
 import {
   dispatchCommandToCoordinator,
@@ -2380,6 +2384,7 @@ function buildAgentToolInvocation(
           fieldType:
             readOptionalAgentToolString(input.fieldType) ??
             context.snapshot.fields[fieldId]?.fieldType,
+          recordId: readOptionalAgentToolString(input.recordId) ?? undefined,
           surfaces: readExplainablePermissionSurfaces(input.surfaces),
           tableId: readOptionalAgentToolString(input.tableId) ?? undefined,
           viewId: readOptionalAgentToolString(input.viewId) ?? undefined,
@@ -2928,7 +2933,13 @@ async function handleAgentToolIngress(
           ? explainPermissionsWithResolvedSnapshot(
               invocation.input,
               snapshot,
-              permissionedRuntime.permissionEngine
+              permissionedRuntime.permissionEngine,
+              await resolvePermissionEvaluationContext(env.DB, {
+                principalId,
+                recordId: invocation.input.recordId,
+                tableId: invocation.input.tableId,
+                workspaceId
+              })
             )
         : await permissionedRuntime.agentToolRegistry.invoke(invocation);
   } catch (error) {
@@ -3000,6 +3011,7 @@ async function handlePermissionExplainIngress(
   const principalId = readNonEmptyString(body.principalId);
   const tableId = readNonEmptyString(body.tableId);
   const viewId = readNonEmptyString(body.viewId);
+  const recordId = readNonEmptyString(body.recordId);
   const fieldId = readNonEmptyString(body.fieldId);
   const permissionScopeHash = readNonEmptyString(body.permissionScopeHash);
   const policyRevision =
@@ -3054,13 +3066,20 @@ async function handlePermissionExplainIngress(
     {
       fieldId,
       fieldType: readOptionalAgentToolString(body.fieldType) ?? undefined,
+      recordId: recordId ?? undefined,
       surfaces,
       tableId,
       viewId: viewId ?? undefined,
       workspaceId
     },
     resolvedSnapshot.snapshot,
-    runtime.permissionEngine
+    runtime.permissionEngine,
+    await resolvePermissionEvaluationContext(env.DB, {
+      principalId,
+      recordId: recordId ?? undefined,
+      tableId,
+      workspaceId
+    })
   );
 
   return json({
@@ -3125,6 +3144,7 @@ async function handlePermissionExplanationIngress(
 
   const workspaceId = readNonEmptyString(body.workspaceId);
   const principalId = readNonEmptyString(body.principalId);
+  const recordId = readNonEmptyString(body.recordId);
   const fieldId = readNonEmptyString(body.fieldId);
   const permissionScopeHash = readNonEmptyString(body.permissionScopeHash);
   const policyRevision =
@@ -3159,6 +3179,7 @@ async function handlePermissionExplanationIngress(
 
   const rawInput: Record<string, unknown> = {
     fieldId,
+    recordId,
     surfaces,
     tableId: body.tableId,
     viewId: body.viewId
@@ -3210,10 +3231,18 @@ async function handlePermissionExplanationIngress(
     );
   }
 
-  const result = await permissionedRuntime.agentToolRegistry.invoke(invocation);
-  if (result.kind !== "permission-explanation") {
-    throw new Error("Permission explanation ingress returned an unexpected agent tool result.");
-  }
+  const explainInvocation = invocation as Extract<AgentToolInvocation, { toolId: "explainPermissions" }>;
+  const result = explainPermissionsWithResolvedSnapshot(
+    explainInvocation.input,
+    snapshot,
+    permissionedRuntime.permissionEngine,
+    await resolvePermissionEvaluationContext(env.DB, {
+      principalId,
+      recordId: explainInvocation.input.recordId,
+      tableId: explainInvocation.input.tableId,
+      workspaceId
+    })
+  );
 
   return json({
     explanation: result.explanation,
@@ -3540,7 +3569,8 @@ function readExplainablePermissionSurfaces(
 function explainPermissionsWithResolvedSnapshot(
   input: ExplainPermissionsToolInput,
   snapshot: EffectivePermissionSnapshot,
-  permissionEngine: ReturnType<typeof createRuntime>["permissionEngine"]
+  permissionEngine: ReturnType<typeof createRuntime>["permissionEngine"],
+  evaluationContext?: PermissionEvaluationContext
 ): Extract<AgentToolInvocationResult, { kind: "permission-explanation" }> {
   const field = snapshot.fields[input.fieldId];
   if (!field) {
@@ -3560,15 +3590,83 @@ function explainPermissionsWithResolvedSnapshot(
           fieldType: field.fieldType
         },
         input.surfaces,
-        snapshot
+        snapshot,
+        evaluationContext
       ),
       scope: {
+        recordId: input.recordId ?? null,
         tableId: input.tableId ?? null,
         viewId: input.viewId ?? null,
         workspaceId: input.workspaceId
       }
     },
     kind: "permission-explanation"
+  };
+}
+
+type PermissionContextFieldRow = {
+  config_json: string;
+  field_key: string;
+  field_type: string;
+  id: string;
+};
+
+async function resolvePermissionEvaluationContext(
+  db: D1Database,
+  input: {
+    principalId: string;
+    recordId?: string;
+    tableId?: string;
+    workspaceId: string;
+  }
+): Promise<PermissionEvaluationContext | undefined> {
+  if (!input.recordId || !input.tableId) {
+    return undefined;
+  }
+
+  const detail = await readRecordDetail(db, input.workspaceId, input.tableId, input.recordId);
+  if (!detail?.projection) {
+    return undefined;
+  }
+
+  const fieldRows = await db
+    .prepare(
+      `SELECT id, field_key, field_type, config_json
+       FROM fields
+       WHERE workspace_id = ? AND table_id = ? AND archived_at IS NULL`
+    )
+    .bind(input.workspaceId, input.tableId)
+    .all<PermissionContextFieldRow>();
+  const rowOwnerField = findRowOwnerField(
+    (fieldRows.results ?? []).map((field) => ({
+      config: JSON.parse(field.config_json) as JsonValue,
+      fieldId: field.id,
+      fieldKey: field.field_key,
+      fieldType: field.field_type
+    }))
+  );
+  if (!rowOwnerField) {
+    return undefined;
+  }
+
+  const projection = JSON.parse(detail.projection.projection_json) as {
+    fields?: Record<string, unknown>;
+  };
+  const rawOwnerValue = projection.fields?.[rowOwnerField.fieldKey];
+  const principalIds = Array.isArray(rawOwnerValue)
+    ? rawOwnerValue.filter((value): value is string => typeof value === "string")
+    : typeof rawOwnerValue === "string"
+      ? [rawOwnerValue]
+      : [];
+
+  return {
+    rowOwner: {
+      fieldId: rowOwnerField.fieldId,
+      fieldType: rowOwnerField.fieldType,
+      matchesPrincipal: principalIds.includes(input.principalId),
+      principalIds,
+      recordId: input.recordId
+    }
   };
 }
 

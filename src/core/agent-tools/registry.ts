@@ -375,6 +375,7 @@ const tools: AgentToolDefinition[] = [
       properties: {
         fieldId: jsonStringSchema,
         fieldType: jsonStringSchema,
+        recordId: jsonStringSchema,
         surfaces: {
           items: jsonStringSchema,
           type: "array"
@@ -1868,6 +1869,7 @@ export function createAgentToolRegistry({
                 invocation.input.surfaces
               ),
               scope: {
+                recordId: invocation.input.recordId ?? null,
                 tableId: invocation.input.tableId ?? null,
                 viewId: invocation.input.viewId ?? null,
                 workspaceId: invocation.input.workspaceId

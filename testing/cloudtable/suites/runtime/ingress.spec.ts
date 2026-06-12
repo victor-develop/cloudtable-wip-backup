@@ -6438,6 +6438,16 @@ describe("cloudtable runtime ingress", () => {
     const { db, env } = createEnv();
 
     insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
       fieldId: "fld_title",
       fieldKey: "title",
       fieldType: "text.single_line",
@@ -6449,6 +6459,16 @@ describe("cloudtable runtime ingress", () => {
       fieldKey: "secret_note",
       fieldType: "text.long",
       label: "Secret Note",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        owner: ["usr_owner"],
+        secret_note: "hidden note",
+        title: "Acme"
+      },
+      recordId: "rec_permission_owner_context",
+      recordKey: "permission-owner-context",
       tableId: "tbl_1"
     });
     insertView(db, {
@@ -6494,6 +6514,7 @@ describe("cloudtable runtime ingress", () => {
         body: JSON.stringify({
           input: {
             fieldId: "fld_secret_note",
+            recordId: "rec_permission_owner_context",
             surfaces: ["view-query", "agent-tool"],
             tableId: "tbl_1",
             viewId: "view_private"
@@ -6517,9 +6538,19 @@ describe("cloudtable runtime ingress", () => {
       };
       output: {
         explanation: {
+          evaluationContext?: {
+            rowOwner?: {
+              fieldId: string;
+              fieldType: string;
+              matchesPrincipal: boolean;
+              principalIds: string[];
+              recordId: string;
+            };
+          };
           fieldId: string;
           fieldType: string;
           scope: {
+            recordId: string | null;
             tableId: string | null;
             viewId: string | null;
             workspaceId: string;
@@ -6564,9 +6595,19 @@ describe("cloudtable runtime ingress", () => {
     });
     expect(body.output).toEqual({
       explanation: {
+        evaluationContext: {
+          rowOwner: {
+            fieldId: "fld_owner",
+            fieldType: "principal.user",
+            matchesPrincipal: false,
+            principalIds: ["usr_owner"],
+            recordId: "rec_permission_owner_context"
+          }
+        },
         fieldId: "fld_secret_note",
         fieldType: "text.long",
         scope: {
+          recordId: "rec_permission_owner_context",
           tableId: "tbl_1",
           viewId: "view_private",
           workspaceId: "ws_1"
@@ -6574,7 +6615,16 @@ describe("cloudtable runtime ingress", () => {
         surfaces: [
           {
             allowed: false,
-            message: "Field is hidden for view queries.",
+            evaluationContext: {
+              rowOwner: {
+                fieldId: "fld_owner",
+                fieldType: "principal.user",
+                matchesPrincipal: false,
+                principalIds: ["usr_owner"],
+                recordId: "rec_permission_owner_context"
+              }
+            },
+            message: "Field is hidden for view queries. Row owner does not match the current principal.",
             readState: "hidden",
             reasonMessages: [
               "Field is hidden for view queries.",
@@ -6586,7 +6636,16 @@ describe("cloudtable runtime ingress", () => {
           },
           {
             allowed: false,
-            message: "Field is hidden for agent tools.",
+            evaluationContext: {
+              rowOwner: {
+                fieldId: "fld_owner",
+                fieldType: "principal.user",
+                matchesPrincipal: false,
+                principalIds: ["usr_owner"],
+                recordId: "rec_permission_owner_context"
+              }
+            },
+            message: "Field is hidden for agent tools. Row owner does not match the current principal.",
             readState: "hidden",
             reasonMessages: [
               "Field is hidden for agent tools.",
@@ -6606,6 +6665,16 @@ describe("cloudtable runtime ingress", () => {
     const { db, env } = createEnv();
 
     insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
       fieldId: "fld_title",
       fieldKey: "title",
       fieldType: "text.single_line",
@@ -6617,6 +6686,16 @@ describe("cloudtable runtime ingress", () => {
       fieldKey: "secret_note",
       fieldType: "text.long",
       label: "Secret Note",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        owner: ["agt_reviewer"],
+        secret_note: "hidden note",
+        title: "Acme"
+      },
+      recordId: "rec_permission_owner_match",
+      recordKey: "permission-owner-match",
       tableId: "tbl_1"
     });
     insertView(db, {
@@ -6664,6 +6743,7 @@ describe("cloudtable runtime ingress", () => {
           permissionScopeHash: "scope:view:view_private",
           policyRevision: 14,
           principalId: "agt_reviewer",
+          recordId: "rec_permission_owner_match",
           surfaces: ["view-query", "agent-tool"],
           tableId: "tbl_1",
           viewId: "view_private",
@@ -6684,6 +6764,7 @@ describe("cloudtable runtime ingress", () => {
         body: JSON.stringify({
           input: {
             fieldId: "fld_secret_note",
+            recordId: "rec_permission_owner_match",
             surfaces: ["view-query", "agent-tool"],
             tableId: "tbl_1",
             viewId: "view_private"
@@ -6891,6 +6972,7 @@ describe("cloudtable runtime ingress", () => {
         fieldId: "fld_salary",
         fieldType: "number.decimal",
         scope: {
+          recordId: null,
           tableId: "tbl_1",
           viewId: null,
           workspaceId: "ws_1"
