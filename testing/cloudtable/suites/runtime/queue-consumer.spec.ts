@@ -2556,6 +2556,266 @@ describe("workflow queue consumer", () => {
     });
   });
 
+  it("delivers canonical row.owner bindings through published workflow action delivery", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db);
+    insertCellCurrent(db, {
+      fieldId: "fld_owner",
+      fieldType: "principal.user",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "usr_owner"
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["notification.emit"]
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "emit_notification_event",
+          input: {
+            channel: "activity",
+            details: {
+              ownerId: {
+                path: "row.owner.value"
+              },
+              recordId: {
+                path: "row.recordId"
+              }
+            },
+            message: "Owner workflow step completed."
+          }
+        }
+      ],
+      conditions: [
+        {
+          operatorId: "equals",
+          input: {
+            left: {
+              path: "row.owner.value"
+            },
+            right: "usr_owner"
+          }
+        }
+      ]
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_row_owner_delivery_1",
+            idempotencyKey: "idem_trigger_row_owner_delivery_1",
+            payload: {
+              fieldType: "text.single_line",
+              value: "crm"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    const workflowRun = await db
+      .prepare(`SELECT id, status FROM workflow_runs ORDER BY id ASC LIMIT 1`)
+      .bind()
+      .first<{ id: string; status: string }>();
+    expect(workflowRun?.status).toBe("completed");
+
+    const workflowStep = await db
+      .prepare(
+        `SELECT status, last_error_code
+         FROM workflow_run_steps
+         ORDER BY id ASC
+         LIMIT 1`
+      )
+      .bind()
+      .first<{ last_error_code: string | null; status: string }>();
+    expect(workflowStep).toEqual({
+      last_error_code: null,
+      status: "completed"
+    });
+
+    const notificationCommand = await db
+      .prepare(
+        `SELECT payload_json
+         FROM event_ledger
+         WHERE command_id = ?`
+      )
+      .bind(`${workflowRun?.id}:action:0`)
+      .first<{ payload_json: string }>();
+    expect(JSON.parse(notificationCommand?.payload_json ?? "{}")).toMatchObject({
+      channel: "activity",
+      details: {
+        ownerId: "usr_owner",
+        recordId: "rec_1"
+      },
+      message: "Owner workflow step completed."
+    });
+  });
+
+  it("keeps canonical row.owner condition misses on the generic conditions-failed runtime path", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db);
+    insertCellCurrent(db, {
+      fieldId: "fld_owner",
+      fieldType: "principal.user",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "usr_other"
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["notification.emit"]
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "emit_notification_event",
+          input: {
+            channel: "activity",
+            details: {
+              ownerId: {
+                path: "row.owner.value"
+              },
+              recordId: {
+                path: "row.recordId"
+              }
+            },
+            message: "Owner workflow step completed."
+          }
+        }
+      ],
+      conditions: [
+        {
+          operatorId: "equals",
+          input: {
+            left: {
+              path: "row.owner.value"
+            },
+            right: "usr_owner"
+          }
+        }
+      ]
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_row_owner_delivery_negative_1",
+            idempotencyKey: "idem_trigger_row_owner_delivery_negative_1",
+            payload: {
+              fieldType: "text.single_line",
+              value: "crm"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    const workflowRun = await db
+      .prepare(`SELECT id, status FROM workflow_runs ORDER BY id ASC LIMIT 1`)
+      .bind()
+      .first<{ id: string; status: string }>();
+    expect(workflowRun?.status).toBe("failed");
+
+    const workflowStep = await db
+      .prepare(
+        `SELECT status, last_error_code, output_json
+         FROM workflow_run_steps
+         ORDER BY id ASC
+         LIMIT 1`
+      )
+      .bind()
+      .first<{ last_error_code: string | null; output_json: string; status: string }>();
+    expect(workflowStep?.status).toBe("failed");
+    expect(workflowStep?.last_error_code).toBe("workflow_action_failed");
+    expect(JSON.parse(workflowStep?.output_json ?? "{}")).toMatchObject({
+      conditionResults: [
+        {
+          operatorId: "equals",
+          passed: false,
+          resolvedInput: {
+            left: "usr_other",
+            right: "usr_owner"
+          }
+        }
+      ],
+      executedActions: [],
+      matchedTrigger: true,
+      skippedReason: "conditions_failed",
+      workflowId: "wf_status_sync"
+    });
+
+    const notificationEvents = await db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM event_ledger
+         WHERE event_type = ?`
+      )
+      .bind("notification.emitted")
+      .first<{ count: number }>();
+    expect(notificationEvents?.count).toBe(0);
+    expect(eventFanoutQueue.sent).toHaveLength(1);
+  });
+
   it("schedules retryable webhook failures with bounded backoff and keeps duplicate delivery idempotent", async () => {
     const {
       db,
