@@ -2652,6 +2652,139 @@ describe("cloudtable runtime ingress", () => {
     });
   });
 
+  it("inspects saved template.input-shaped workflow conditions through the worker read ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "status.semantic",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [
+          {
+            input: {
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "qualified"
+            },
+            operatorId: "equals"
+          }
+        ],
+        metadata: {
+          status: "published"
+        },
+        trigger: {
+          match: {
+            eventTypes: ["record_updated"],
+            fieldId: "fld_status",
+            tableId: "tbl_1"
+          },
+          operatorId: "record_updated"
+        },
+        workflowId: "wf_template_input_detail"
+      },
+      name: "Template Input Detail",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_template_input_detail",
+      workflowKey: "template-input-detail"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_template_input_read",
+      workspaceId: "ws_1",
+      principalId: "usr_workflow_template_input",
+      policyRevision: 39,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {
+        fld_status: {
+          agent: true,
+          fieldId: "fld_status",
+          fieldType: "status.semantic",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_template_input_detail/definition?workspaceId=ws_1&principalId=usr_workflow_template_input&permissionScopeHash=scope:table:tbl_1&policyRevision=39"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as Record<string, unknown>).toMatchObject({
+      conditionMetadata: [
+        {
+          diagnostics: [],
+          index: 0,
+          operator: supportedConditionOperatorManifests(["equals"])[0],
+          operatorId: "equals",
+          referencedBindingNames: ["row.fields.status"],
+          resolvedBindings: [
+            {
+              binding: "row.fields.status",
+              fieldId: "fld_status",
+              fieldKey: "status",
+              fieldType: "status.semantic",
+              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+              supportedOperators: supportedConditionOperatorManifests([
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ]),
+              template: {
+                fieldIdPath: "row.fields.status.fieldId",
+                fieldTypePath: "row.fields.status.fieldType",
+                valuePath: "row.fields.status.value"
+              }
+            }
+          ]
+        }
+      ],
+      definition: {
+        actions: [],
+        conditions: [
+          {
+            input: {
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "qualified"
+            },
+            operatorId: "equals"
+          }
+        ],
+        metadata: {
+          status: "published"
+        },
+        trigger: {
+          match: {
+            eventTypes: ["record_updated"],
+            fieldId: "fld_status",
+            tableId: "tbl_1"
+          },
+          operatorId: "record_updated"
+        },
+        workflowId: "wf_template_input_detail"
+      },
+      workflowId: "wf_template_input_detail",
+      workflowKey: "template-input-detail",
+      workflowName: "Template Input Detail"
+    });
+  });
+
   it("routes permission-scoped workflow definition reads through the inspectWorkflowDefinition agent tool", async () => {
     const { db, env } = createEnv();
     insertField(db, {

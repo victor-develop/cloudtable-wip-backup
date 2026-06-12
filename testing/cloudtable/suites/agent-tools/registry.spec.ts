@@ -2884,6 +2884,122 @@ describe("cloudtable agent tool registry", () => {
     });
   });
 
+  it("drafts metadata-defined template.input conditions for workflow proposals without default field scaffolding", async () => {
+    const registry = createRegistry({
+      tableSchemaInspectionResult: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: {
+              options: [
+                { id: "open", label: "Open", semantic: "todo" },
+                { id: "qualified", label: "Qualified", semantic: "done" }
+              ]
+            },
+            fieldId: "fld_status",
+            fieldKey: "status",
+            fieldType: "status.semantic",
+            fieldTypeVersion: 1,
+            label: "Status"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_accounts",
+        tableName: "Accounts",
+        tableSchemaVersion: 2,
+        tableSlug: "accounts",
+        workflow: {
+          bindings: {
+            "row.conditions.status_qualified": {
+              binding: "row.conditions.status_qualified",
+              fieldId: "fld_status",
+              fieldKey: "status",
+              fieldType: "status.semantic",
+              proposalHints: [
+                {
+                  operatorId: "equals",
+                  matchPhrases: [
+                    "changes to qualified",
+                    "becomes qualified",
+                    "is qualified",
+                    "set to qualified",
+                    "equals qualified"
+                  ],
+                  matchFieldPhrases: [
+                    "{field} changes to Qualified",
+                    "{field} becomes Qualified",
+                    "{field} is Qualified",
+                    "{field} set to Qualified",
+                    "{field} equals Qualified"
+                  ]
+                }
+              ],
+              supportedOperatorIds: ["equals"],
+              supportedOperators: supportedConditionOperatorManifests(["equals"]),
+              template: {
+                input: {
+                  left: {
+                    path: "row.fields.status.value"
+                  },
+                  right: "qualified"
+                }
+              }
+            }
+          }
+        },
+        workspaceId: "ws_demo"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["update_record"],
+        businessRule: "When status changes to Qualified, notify sales ops.",
+        fieldIds: ["fld_status"],
+        name: "Qualified follow-up",
+        tableId: "tbl_accounts",
+        triggerId: "field_changed",
+        workflowId: "wf_qualified_follow_up"
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "workflow-proposal",
+      proposal: {
+        conditions: [
+          {
+            input: {
+              left: {
+                path: "row.fields.status.value"
+              },
+              right: "qualified"
+            },
+            operatorId: "equals"
+          }
+        ]
+      },
+      command: {
+        payload: {
+          definition: {
+            conditions: [
+              {
+                input: {
+                  left: {
+                    path: "row.fields.status.value"
+                  },
+                  right: "qualified"
+                },
+                operatorId: "equals"
+              }
+            ]
+          }
+        }
+      }
+    });
+  });
+
   it("builds explicit workflow lifecycle commands on the audited path", async () => {
     const registry = createRegistry();
 
