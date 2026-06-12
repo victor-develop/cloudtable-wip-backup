@@ -9342,6 +9342,38 @@ describe("cloudtable runtime ingress", () => {
       isCanonical: true,
       proposalHints: [
         {
+          operatorId: "not_equals",
+          matchPhrases: ["does not equal", "not equals", "not assigned to"],
+          matchFieldPhrases: [
+            "{field} does not equal",
+            "{field} not equals",
+            "{field} is not",
+            "{field} is not assigned to",
+            "{field} not assigned to"
+          ],
+          draftInput: {
+            left: {
+              path: "row.owner.value"
+            },
+            right: null
+          }
+        },
+        {
+          operatorId: "equals",
+          matchPhrases: ["equals", "assigned to"],
+          matchFieldPhrases: [
+            "{field} equals",
+            "{field} is assigned to",
+            "{field} assigned to"
+          ],
+          draftInput: {
+            left: {
+              path: "row.owner.value"
+            },
+            right: null
+          }
+        },
+        {
           operatorId: "is_empty",
           matchPhrases: ["unassigned"],
           matchFieldPhrases: ["without {field}", "{field} missing"]
@@ -9788,6 +9820,96 @@ describe("cloudtable runtime ingress", () => {
                 }
               },
               operatorId: "is_not_empty"
+            }
+          ]
+        }
+      }
+    });
+  });
+
+  it("drafts canonical row.owner comparison workflow proposal conditions through the agent-tool preview ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        rowOwner: true
+      },
+      fieldId: "fld_owner",
+      fieldKey: "owner",
+      fieldType: "principal.user",
+      label: "Owner",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_owner_workflow_comparison_proposal",
+      workspaceId: "ws_1",
+      principalId: "agt_owner_workflow_compare",
+      policyRevision: 48,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create"],
+      fields: {
+        fld_owner: {
+          agent: true,
+          fieldId: "fld_owner",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "Notify sales ops when the owner is not assigned to the fallback user.",
+            fieldIds: ["fld_owner"],
+            name: "Owner differs from fallback",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_owner_not_fallback"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 48,
+          principalId: "agt_owner_workflow_compare",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { output: { kind: string; proposal: { conditions: unknown[] } } }).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.owner.fieldId"
+                },
+                fieldType: {
+                  path: "row.owner.fieldType"
+                },
+                value: {
+                  path: "row.owner.value"
+                },
+                left: {
+                  path: "row.owner.value"
+                },
+                right: null
+              },
+              operatorId: "not_equals"
             }
           ]
         }

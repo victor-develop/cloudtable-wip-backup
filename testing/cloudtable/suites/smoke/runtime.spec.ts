@@ -834,6 +834,38 @@ describe("cloudtable runtime smoke", () => {
       isCanonical: true,
       proposalHints: [
         {
+          operatorId: "not_equals",
+          matchPhrases: ["does not equal", "not equals", "not assigned to"],
+          matchFieldPhrases: [
+            "{field} does not equal",
+            "{field} not equals",
+            "{field} is not",
+            "{field} is not assigned to",
+            "{field} not assigned to"
+          ],
+          draftInput: {
+            left: {
+              path: "row.owner.value"
+            },
+            right: null
+          }
+        },
+        {
+          operatorId: "equals",
+          matchPhrases: ["equals", "assigned to"],
+          matchFieldPhrases: [
+            "{field} equals",
+            "{field} is assigned to",
+            "{field} assigned to"
+          ],
+          draftInput: {
+            left: {
+              path: "row.owner.value"
+            },
+            right: null
+          }
+        },
+        {
           operatorId: "is_empty",
           matchPhrases: ["unassigned"],
           matchFieldPhrases: ["without {field}", "{field} missing"]

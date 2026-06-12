@@ -79,6 +79,104 @@ describe("workflow authoring", () => {
     ]);
   });
 
+  it("drafts canonical row.owner comparisons from metadata-defined proposal templates", () => {
+    const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {
+          rowOwner: true
+        },
+        fieldId: "fld_owner",
+        fieldKey: "owner",
+        fieldType: "principal.user"
+      }
+    ]);
+
+    expect(metadata.bindings["row.owner"].proposalHints).toContainEqual({
+      operatorId: "equals",
+      matchPhrases: ["equals", "assigned to"],
+      matchFieldPhrases: [
+        "{field} equals",
+        "{field} is assigned to",
+        "{field} assigned to"
+      ],
+      draftInput: {
+        left: {
+          path: "row.owner.value"
+        },
+        right: null
+      }
+    });
+    expect(metadata.bindings["row.owner"].proposalHints).toContainEqual({
+      operatorId: "not_equals",
+      matchPhrases: ["does not equal", "not equals", "not assigned to"],
+      matchFieldPhrases: [
+        "{field} does not equal",
+        "{field} not equals",
+        "{field} is not",
+        "{field} is not assigned to",
+        "{field} not assigned to"
+      ],
+      draftInput: {
+        left: {
+          path: "row.owner.value"
+        },
+        right: null
+      }
+    });
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Notify sales ops when the owner is assigned to a specific teammate.",
+        fieldIds: ["fld_owner"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.owner.fieldId"
+          },
+          fieldType: {
+            path: "row.owner.fieldType"
+          },
+          value: {
+            path: "row.owner.value"
+          },
+          left: {
+            path: "row.owner.value"
+          },
+          right: null
+        },
+        operatorId: "equals"
+      }
+    ]);
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Notify sales ops when the owner is not assigned to the fallback user.",
+        fieldIds: ["fld_owner"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.owner.fieldId"
+          },
+          fieldType: {
+            path: "row.owner.fieldType"
+          },
+          value: {
+            path: "row.owner.value"
+          },
+          left: {
+            path: "row.owner.value"
+          },
+          right: null
+        },
+        operatorId: "not_equals"
+      }
+    ]);
+  });
+
   it("drafts generic missing-field conditions from metadata-declared proposal hints", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
       {
