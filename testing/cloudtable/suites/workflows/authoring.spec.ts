@@ -325,6 +325,106 @@ describe("workflow authoring", () => {
     ]);
   });
 
+  it("drafts checkbox equality conditions from metadata-defined proposal templates", () => {
+    const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {},
+        fieldId: "fld_verified",
+        fieldKey: "is_verified",
+        fieldType: "boolean.checkbox"
+      }
+    ]);
+
+    expect(metadata.bindings["row.fields.is_verified"].proposalHints).toEqual(
+      expect.arrayContaining([
+        {
+          operatorId: "equals",
+          matchPhrases: ["is unchecked", "unchecked", "is not checked", "not checked", "is false"],
+          matchFieldPhrases: [
+            "{field} is unchecked",
+            "{field} unchecked",
+            "{field} is not checked",
+            "{field} not checked",
+            "{field} is false"
+          ],
+          draftInput: {
+            left: {
+              path: "row.fields.is_verified.value"
+            },
+            right: false
+          }
+        },
+        {
+          operatorId: "equals",
+          matchPhrases: ["is checked", "checked", "is true"],
+          matchFieldPhrases: [
+            "{field} is checked",
+            "{field} checked",
+            "{field} is true"
+          ],
+          draftInput: {
+            left: {
+              path: "row.fields.is_verified.value"
+            },
+            right: true
+          }
+        }
+      ])
+    );
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Notify finance when is verified is checked.",
+        fieldIds: ["fld_verified"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.fields.is_verified.fieldId"
+          },
+          fieldType: {
+            path: "row.fields.is_verified.fieldType"
+          },
+          value: {
+            path: "row.fields.is_verified.value"
+          },
+          left: {
+            path: "row.fields.is_verified.value"
+          },
+          right: true
+        },
+        operatorId: "equals"
+      }
+    ]);
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Notify finance when is verified is unchecked.",
+        fieldIds: ["fld_verified"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.fields.is_verified.fieldId"
+          },
+          fieldType: {
+            path: "row.fields.is_verified.fieldType"
+          },
+          value: {
+            path: "row.fields.is_verified.value"
+          },
+          left: {
+            path: "row.fields.is_verified.value"
+          },
+          right: false
+        },
+        operatorId: "equals"
+      }
+    ]);
+  });
+
   it("drafts numeric comparison conditions from metadata-defined proposal templates", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
       {

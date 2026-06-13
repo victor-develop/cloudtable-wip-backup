@@ -909,6 +909,43 @@ function buildNumberComparisonWorkflowProposalHints(binding: string): FieldWorkf
   }));
 }
 
+function buildBooleanEqualityWorkflowProposalHints(binding: string): FieldWorkflowProposalHint[] {
+  return [
+    {
+      draftInput: {
+        left: {
+          path: `${binding}.value`
+        },
+        right: false
+      },
+      matchFieldPhrases: [
+        "{field} is unchecked",
+        "{field} unchecked",
+        "{field} is not checked",
+        "{field} not checked",
+        "{field} is false"
+      ],
+      matchPhrases: ["is unchecked", "unchecked", "is not checked", "not checked", "is false"],
+      operatorId: "equals"
+    },
+    {
+      draftInput: {
+        left: {
+          path: `${binding}.value`
+        },
+        right: true
+      },
+      matchFieldPhrases: [
+        "{field} is checked",
+        "{field} checked",
+        "{field} is true"
+      ],
+      matchPhrases: ["is checked", "checked", "is true"],
+      operatorId: "equals"
+    }
+  ];
+}
+
 function buildDateComparisonWorkflowProposalHints(binding: string): FieldWorkflowProposalHint[] {
   const comparisons: ReadonlyArray<{
     comparator: string;
@@ -2278,6 +2315,10 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
     sampleInput: true,
     normalize: (input) => normalizeBooleanValue("boolean.checkbox", input),
     normalizeSample: (input) => normalizeBooleanValue("boolean.checkbox", input),
+    workflowProposalHints: ({ binding }) => [
+      ...buildBooleanEqualityWorkflowProposalHints(binding),
+      ...defaultWorkflowProposalHints
+    ],
     validateConfig: (config) => validateStrictObjectConfig(config, []),
     validateValue: (value) => validateBooleanValue("boolean.checkbox", value),
     invalidConfigFixtures: [

@@ -10480,6 +10480,94 @@ describe("cloudtable runtime ingress", () => {
     });
   });
 
+  it("drafts checkbox workflow proposal conditions through the agent-tool preview ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {},
+      fieldId: "fld_verified",
+      fieldKey: "is_verified",
+      fieldType: "boolean.checkbox",
+      label: "Is Verified",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_checkbox_workflow_proposal",
+      workspaceId: "ws_1",
+      principalId: "agt_checkbox_workflow",
+      policyRevision: 470,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create"],
+      fields: {
+        fld_verified: {
+          agent: true,
+          fieldId: "fld_verified",
+          fieldType: "boolean.checkbox",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "Notify finance when is verified is unchecked.",
+            fieldIds: ["fld_verified"],
+            name: "Verification missing follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_verified_unchecked"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 470,
+          principalId: "agt_checkbox_workflow",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { output: { kind: string; proposal: { conditions: unknown[] } } }).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.fields.is_verified.fieldId"
+                },
+                fieldType: {
+                  path: "row.fields.is_verified.fieldType"
+                },
+                value: {
+                  path: "row.fields.is_verified.value"
+                },
+                left: {
+                  path: "row.fields.is_verified.value"
+                },
+                right: false
+              },
+              operatorId: "equals"
+            }
+          ]
+        }
+      }
+    });
+  });
+
   it("drafts metadata-derived non-record action templates through the agent-tool preview ingress", async () => {
     const { db, env } = createEnv();
 
