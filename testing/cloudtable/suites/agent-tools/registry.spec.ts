@@ -26,6 +26,7 @@ import {
   createDateWorkflowBindingField,
   createLongTextWorkflowBindingField,
   createNumberWorkflowBindingField,
+  createRelationWorkflowBindingField,
   createRowOwnerWorkflowBindingField,
   createStatusWorkflowBindingField
 } from "../../harness/workflow-binding-contract";
@@ -2858,6 +2859,94 @@ describe("cloudtable agent tool registry", () => {
                   right: "qualified"
                 },
                 operatorId: "equals"
+              }
+            ]
+          }
+        }
+      }
+    });
+  });
+
+  it("drafts relation contains-record conditions for workflow proposals from binding metadata", async () => {
+    const relationField = createRelationWorkflowBindingField();
+    const registry = createRegistry({
+      tableSchemaInspectionResult: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: relationField.config,
+            fieldId: relationField.fieldId,
+            fieldKey: relationField.fieldKey,
+            fieldType: relationField.fieldType,
+            fieldTypeVersion: 1,
+            label: "Related Companies"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_accounts",
+        tableName: "Accounts",
+        tableSchemaVersion: 2,
+        tableSlug: "accounts",
+        workflow: {
+          bindings: buildWorkflowBindingContract([relationField]).bindings
+        },
+        workspaceId: "ws_demo"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["update_record"],
+        businessRule: "Notify sales ops when related companies includes the parent account.",
+        fieldIds: [relationField.fieldId],
+        name: "Parent account follow-up",
+        tableId: "tbl_accounts",
+        triggerId: "field_changed",
+        workflowId: "wf_related_companies_parent"
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "workflow-proposal",
+      proposal: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.fields.related_companies.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.related_companies.fieldType"
+              },
+              value: {
+                path: "row.fields.related_companies.value"
+              },
+              recordId: null
+            },
+            operatorId: "relation_contains_record"
+          }
+        ]
+      },
+      command: {
+        payload: {
+          definition: {
+            conditions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.fields.related_companies.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.fields.related_companies.fieldType"
+                  },
+                  value: {
+                    path: "row.fields.related_companies.value"
+                  },
+                  recordId: null
+                },
+                operatorId: "relation_contains_record"
               }
             ]
           }

@@ -21,6 +21,7 @@ import {
   buildWorkflowBindingContract,
   createAssigneeAliasWorkflowBindingField,
   createCheckboxWorkflowBindingField,
+  createRelationWorkflowBindingField,
   createRowOwnerWorkflowBindingField,
   createSingleSelectWorkflowBindingField,
   createStatusWorkflowBindingField,
@@ -10359,6 +10360,92 @@ describe("cloudtable runtime ingress", () => {
                 right: false
               },
               operatorId: "equals"
+            }
+          ]
+        }
+      }
+    });
+  });
+
+  it("drafts relation contains-record workflow proposal conditions through the agent-tool preview ingress", async () => {
+    const { db, env } = createEnv();
+    const relationField = createRelationWorkflowBindingField();
+
+    insertField(db, {
+      config: relationField.config,
+      fieldId: relationField.fieldId,
+      fieldKey: relationField.fieldKey,
+      fieldType: relationField.fieldType,
+      label: "Related Companies",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_relation_workflow_proposal",
+      workspaceId: "ws_1",
+      principalId: "agt_relation_workflow",
+      policyRevision: 471,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create"],
+      fields: {
+        fld_related_companies: {
+          agent: true,
+          fieldId: "fld_related_companies",
+          fieldType: "relation.record",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "Notify sales ops when related companies includes the parent account.",
+            fieldIds: ["fld_related_companies"],
+            name: "Parent account follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_related_companies_parent"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 471,
+          principalId: "agt_relation_workflow",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { output: { kind: string; proposal: { conditions: unknown[] } } }).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.fields.related_companies.fieldId"
+                },
+                fieldType: {
+                  path: "row.fields.related_companies.fieldType"
+                },
+                value: {
+                  path: "row.fields.related_companies.value"
+                },
+                recordId: null
+              },
+              operatorId: "relation_contains_record"
             }
           ]
         }

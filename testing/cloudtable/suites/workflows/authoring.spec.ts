@@ -12,6 +12,7 @@ import type { WorkflowConditionManifest } from "../../../../src/core/workflows/t
 import {
   buildWorkflowBindingContract,
   createAssigneeAliasWorkflowBindingField,
+  createRelationWorkflowBindingField,
   createRowOwnerWorkflowBindingField
 } from "../../harness/workflow-binding-contract";
 
@@ -462,6 +463,54 @@ describe("workflow authoring", () => {
           right: false
         },
         operatorId: "equals"
+      }
+    ]);
+  });
+
+  it("drafts relation contains-record conditions from metadata-defined proposal templates", () => {
+    const relationField = createRelationWorkflowBindingField();
+    const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [relationField]);
+
+    expect(metadata.bindings["row.fields.related_companies"].proposalHints).toContainEqual({
+      operatorId: "relation_contains_record",
+      matchPhrases: ["contains", "includes", "linked to", "related to", "references"],
+      matchFieldPhrases: [
+        "{field} contains",
+        "{field} includes",
+        "{field} is linked to",
+        "{field} linked to",
+        "{field} is related to",
+        "{field} related to",
+        "{field} references"
+      ],
+      draftInput: {
+        recordId: null,
+        value: {
+          path: "row.fields.related_companies.value"
+        }
+      }
+    });
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Notify sales ops when related companies includes the parent account.",
+        fieldIds: [relationField.fieldId]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.fields.related_companies.fieldId"
+          },
+          fieldType: {
+            path: "row.fields.related_companies.fieldType"
+          },
+          value: {
+            path: "row.fields.related_companies.value"
+          },
+          recordId: null
+        },
+        operatorId: "relation_contains_record"
       }
     ]);
   });

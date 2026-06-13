@@ -125,6 +125,23 @@ export function createCheckboxWorkflowBindingField(
   );
 }
 
+export function createRelationWorkflowBindingField(
+  overrides?: WorkflowBindingFieldOverrides
+): WorkflowBindingContractField {
+  return createWorkflowBindingField(
+    {
+      config: {
+        allowMultiple: true,
+        targetTableId: "tbl_companies"
+      },
+      fieldId: "fld_related_companies",
+      fieldKey: "related_companies",
+      fieldType: "relation.record"
+    },
+    overrides
+  );
+}
+
 export function createNumberWorkflowBindingField(
   overrides?: WorkflowBindingFieldOverrides
 ): WorkflowBindingContractField {

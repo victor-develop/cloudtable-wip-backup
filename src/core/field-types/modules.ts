@@ -1036,6 +1036,31 @@ function buildDateComparisonWorkflowProposalHints(binding: string): FieldWorkflo
   }));
 }
 
+function buildRelationWorkflowProposalHints(binding: string): FieldWorkflowProposalHint[] {
+  return [
+    {
+      operatorId: "relation_contains_record",
+      matchPhrases: ["contains", "includes", "linked to", "related to", "references"],
+      matchFieldPhrases: [
+        "{field} contains",
+        "{field} includes",
+        "{field} is linked to",
+        "{field} linked to",
+        "{field} is related to",
+        "{field} related to",
+        "{field} references"
+      ],
+      draftInput: {
+        recordId: null,
+        value: {
+          path: `${binding}.value`
+        }
+      }
+    },
+    ...defaultWorkflowProposalHints
+  ];
+}
+
 function buildSelectMeta(option: SelectOption | undefined): Record<string, JsonValue> | undefined {
   if (!option) {
     return undefined;
@@ -2709,6 +2734,7 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
     sampleInput: ["rec_002", "rec_001"],
     normalize: (input) => normalizeReferenceValue("relation.record", input),
     normalizeSample: (input) => normalizeReferenceValue("relation.record", input),
+    workflowProposalHints: ({ binding }) => buildRelationWorkflowProposalHints(binding),
     validateConfig: (config) => validateRelationConfig(config),
     validateValue: (value, context) =>
       validateReferenceValue("relation.record", value, {
