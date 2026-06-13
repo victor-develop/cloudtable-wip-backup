@@ -317,6 +317,55 @@ describe("workflow authoring", () => {
     ]);
   });
 
+  it("drafts configured multi-select option comparisons from metadata-declared proposal inputs", () => {
+    const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {
+          options: [
+            { id: "vip", label: "VIP" },
+            { id: "renewal", label: "Renewal" }
+          ]
+        },
+        fieldId: "fld_segments",
+        fieldKey: "segments",
+        fieldType: "select.multi"
+      }
+    ]);
+
+    expect(metadata.bindings["row.fields.segments"]).toMatchObject({
+      proposalHints: expect.arrayContaining([
+        expect.objectContaining({
+          operatorId: "select_has_option",
+          draftInput: {
+            option: "renewal"
+          }
+        })
+      ])
+    });
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Notify sales ops when segments includes Renewal.",
+        fieldIds: ["fld_segments"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.fields.segments.fieldId"
+          },
+          fieldType: {
+            path: "row.fields.segments.fieldType"
+          },
+          value: {
+            path: "row.fields.segments.value"
+          },
+          option: "renewal"
+        },
+        operatorId: "select_has_option"
+      }
+    ]);
+  });
+
   it("drafts checkbox equality conditions from metadata-defined proposal templates", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
       {

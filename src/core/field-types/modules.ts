@@ -867,6 +867,54 @@ function buildConfiguredOptionWorkflowProposalHints(
   });
 }
 
+function buildConfiguredMultiSelectOptionWorkflowProposalHints(
+  options: readonly SelectOption[]
+): FieldWorkflowProposalHint[] {
+  const semanticCounts = new Map<string, number>();
+  for (const option of options) {
+    if (!option.semantic) {
+      continue;
+    }
+
+    semanticCounts.set(option.semantic, (semanticCounts.get(option.semantic) ?? 0) + 1);
+  }
+
+  return options.map((option) => {
+    const optionPhrases = new Set<string>([
+      ...buildOptionPhraseVariants(option.id),
+      ...buildOptionPhraseVariants(option.label)
+    ]);
+    if (option.semantic && semanticCounts.get(option.semantic) === 1) {
+      for (const phrase of buildOptionPhraseVariants(option.semantic)) {
+        optionPhrases.add(phrase);
+      }
+    }
+
+    const contextualPhrases = Array.from(optionPhrases).flatMap((phrase) => [
+      `includes ${phrase}`,
+      `contains ${phrase}`,
+      `has ${phrase}`,
+      `tagged ${phrase}`,
+      `tagged with ${phrase}`
+    ]);
+
+    return {
+      draftInput: {
+        option: option.id
+      },
+      matchFieldPhrases: [
+        "{field} includes " + option.label,
+        "{field} contains " + option.label,
+        "{field} has " + option.label,
+        "{field} tagged " + option.label,
+        "{field} tagged with " + option.label
+      ],
+      matchPhrases: contextualPhrases,
+      operatorId: "select_has_option"
+    };
+  });
+}
+
 function buildNumberComparisonWorkflowProposalHints(binding: string): FieldWorkflowProposalHint[] {
   const comparisons: ReadonlyArray<{
     comparator: string;
@@ -1408,18 +1456,23 @@ function createSelectFieldType(input: {
     },
     getWorkflowProposalHints(context) {
       const parsedConfig = parseSelectConfig(context.fieldConfig);
-      const configuredOptionHints =
-        !input.multiValue
-          ? buildConfiguredOptionWorkflowProposalHints(parsedConfig.options).map((hint) => ({
-              ...hint,
-              draftInput: {
-                left: {
-                  path: `${context.binding}.value`
-                },
-                right: hint.draftInput?.right ?? null
-              }
-            }))
-          : [];
+      const configuredOptionHints = (
+        input.multiValue
+          ? buildConfiguredMultiSelectOptionWorkflowProposalHints(parsedConfig.options)
+          : buildConfiguredOptionWorkflowProposalHints(parsedConfig.options)
+      ).map((hint) => ({
+        ...hint,
+        draftInput: input.multiValue
+          ? {
+              option: hint.draftInput?.option ?? null
+            }
+          : {
+              left: {
+                path: `${context.binding}.value`
+              },
+              right: hint.draftInput?.right ?? null
+            }
+      }));
 
       return [...configuredOptionHints, ...defaultWorkflowProposalHints].map(cloneProposalHint);
     },
