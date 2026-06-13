@@ -867,6 +867,48 @@ function buildConfiguredOptionWorkflowProposalHints(
   });
 }
 
+function buildNumberComparisonWorkflowProposalHints(binding: string): FieldWorkflowProposalHint[] {
+  const comparisons: ReadonlyArray<{
+    comparator: string;
+    fieldPhrases: readonly string[];
+    phrases: readonly string[];
+  }> = [
+    {
+      comparator: "gt",
+      fieldPhrases: ["{field} greater than", "{field} is greater than", "{field} more than", "{field} above"],
+      phrases: ["greater than", "more than", "above", "over"]
+    },
+    {
+      comparator: "gte",
+      fieldPhrases: ["{field} at least", "{field} is at least", "{field} no less than"],
+      phrases: ["at least", "no less than", "greater than or equal to"]
+    },
+    {
+      comparator: "lt",
+      fieldPhrases: ["{field} less than", "{field} is less than", "{field} under", "{field} below"],
+      phrases: ["less than", "under", "below"]
+    },
+    {
+      comparator: "lte",
+      fieldPhrases: ["{field} at most", "{field} is at most", "{field} no more than"],
+      phrases: ["at most", "no more than", "less than or equal to"]
+    }
+  ];
+
+  return comparisons.map((comparison) => ({
+    draftInput: {
+      comparator: comparison.comparator,
+      left: {
+        path: `${binding}.value`
+      },
+      right: null
+    },
+    matchFieldPhrases: [...comparison.fieldPhrases],
+    matchPhrases: [...comparison.phrases],
+    operatorId: "number_compare"
+  }));
+}
+
 function buildSelectMeta(option: SelectOption | undefined): Record<string, JsonValue> | undefined {
   if (!option) {
     return undefined;
@@ -2148,6 +2190,10 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
     normalize: (input) => normalizeNumberValue("number.decimal", input),
     normalizeSample: (input) => normalizeNumberValue("number.decimal", input),
     validateConfig: (config) => validateNumberConfig(config),
+    workflowProposalHints: ({ binding }) => [
+      ...buildNumberComparisonWorkflowProposalHints(binding),
+      ...defaultWorkflowProposalHints
+    ],
     validateValue: (value, context) =>
       validateNumberValue("number.decimal", value, context.fieldConfig),
     invalidConfigFixtures: [

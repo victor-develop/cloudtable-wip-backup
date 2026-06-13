@@ -12,6 +12,7 @@ import type { EffectivePermissionSnapshot } from "../../../../src/core/permissio
 import { createViewPlanner } from "../../../../src/core/views/planner";
 import { serializeWorkflowOperatorManifest } from "../../../../src/core/workflows/manifest";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
+import { buildWorkflowAuthoringMetadata } from "../../../../src/core/workflows/binding-metadata";
 import { createAppInspector } from "../../../../src/runtime/app-inspector";
 import { createWorkspaceInspector } from "../../../../src/runtime/workspace-inspector";
 import {
@@ -3067,6 +3068,112 @@ describe("cloudtable agent tool registry", () => {
                   right: "qualified"
                 },
                 operatorId: "equals"
+              }
+            ]
+          }
+        }
+      }
+    });
+  });
+
+  it("drafts numeric comparisons for workflow proposals from binding metadata", async () => {
+    const workflow = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {
+          precision: 2
+        },
+        fieldId: "fld_amount",
+        fieldKey: "deal_amount",
+        fieldType: "number.decimal"
+      }
+    ]);
+
+    const registry = createRegistry({
+      tableSchemaInspectionResult: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: {
+              precision: 2
+            },
+            fieldId: "fld_amount",
+            fieldKey: "deal_amount",
+            fieldType: "number.decimal",
+            fieldTypeVersion: 1,
+            label: "Deal Amount"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_accounts",
+        tableName: "Accounts",
+        tableSchemaVersion: 2,
+        tableSlug: "accounts",
+        workflow,
+        workspaceId: "ws_demo"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["update_record"],
+        businessRule: "Notify finance when deal amount is at most the approved cap.",
+        fieldIds: ["fld_amount"],
+        name: "Large deal guardrail",
+        tableId: "tbl_accounts",
+        triggerId: "field_changed",
+        workflowId: "wf_large_deal_guardrail"
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "workflow-proposal",
+      proposal: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.fields.deal_amount.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.deal_amount.fieldType"
+              },
+              value: {
+                path: "row.fields.deal_amount.value"
+              },
+              comparator: "lte",
+              left: {
+                path: "row.fields.deal_amount.value"
+              },
+              right: null
+            },
+            operatorId: "number_compare"
+          }
+        ]
+      },
+      command: {
+        payload: {
+          definition: {
+            conditions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.fields.deal_amount.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.fields.deal_amount.fieldType"
+                  },
+                  value: {
+                    path: "row.fields.deal_amount.value"
+                  },
+                  comparator: "lte",
+                  left: {
+                    path: "row.fields.deal_amount.value"
+                  },
+                  right: null
+                },
+                operatorId: "number_compare"
               }
             ]
           }

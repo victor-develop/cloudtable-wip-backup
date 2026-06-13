@@ -325,6 +325,125 @@ describe("workflow authoring", () => {
     ]);
   });
 
+  it("drafts numeric comparison conditions from metadata-defined proposal templates", () => {
+    const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {
+          precision: 2
+        },
+        fieldId: "fld_amount",
+        fieldKey: "deal_amount",
+        fieldType: "number.decimal"
+      },
+      {
+        config: {
+          integerOnly: true
+        },
+        fieldId: "fld_seats",
+        fieldKey: "seat_count",
+        fieldType: "number.decimal"
+      }
+    ]);
+
+    expect(metadata.bindings["row.fields.deal_amount"].proposalHints).toContainEqual({
+      operatorId: "number_compare",
+      matchPhrases: ["at least", "no less than", "greater than or equal to"],
+      matchFieldPhrases: [
+        "{field} at least",
+        "{field} is at least",
+        "{field} no less than"
+      ],
+      draftInput: {
+        comparator: "gte",
+        left: {
+          path: "row.fields.deal_amount.value"
+        },
+        right: null
+      }
+    });
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Alert finance when deal amount is at least the approval floor.",
+        fieldIds: ["fld_amount"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.fields.deal_amount.fieldId"
+          },
+          fieldType: {
+            path: "row.fields.deal_amount.fieldType"
+          },
+          value: {
+            path: "row.fields.deal_amount.value"
+          },
+          comparator: "gte",
+          left: {
+            path: "row.fields.deal_amount.value"
+          },
+          right: null
+        },
+        operatorId: "number_compare"
+      }
+    ]);
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Escalate when seat count is more than the approved limit.",
+        fieldIds: ["fld_seats"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.fields.seat_count.fieldId"
+          },
+          fieldType: {
+            path: "row.fields.seat_count.fieldType"
+          },
+          value: {
+            path: "row.fields.seat_count.value"
+          },
+          comparator: "gt",
+          left: {
+            path: "row.fields.seat_count.value"
+          },
+          right: null
+        },
+        operatorId: "number_compare"
+      }
+    ]);
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Alert finance when deal amount is less than the cap.",
+        fieldIds: ["fld_amount"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.fields.deal_amount.fieldId"
+          },
+          fieldType: {
+            path: "row.fields.deal_amount.fieldType"
+          },
+          value: {
+            path: "row.fields.deal_amount.value"
+          },
+          comparator: "lt",
+          left: {
+            path: "row.fields.deal_amount.value"
+          },
+          right: null
+        },
+        operatorId: "number_compare"
+      }
+    ]);
+  });
+
   it("drafts operator-specific condition input from metadata templates without hard-coded field/value scaffolding", () => {
     const metadata = {
       bindings: {
