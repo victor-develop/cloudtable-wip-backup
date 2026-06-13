@@ -1,3 +1,3 @@
 # Workflow Create Owner Binding Basic
 
-Proves the command transcript fixture corpus accepts canonical `row.owner` condition bindings through the generic workflow authoring metadata path.
+Proves the persistence-backed command fixture executor corpus hydrates canonical `row.owner` binding metadata from seeded field config.

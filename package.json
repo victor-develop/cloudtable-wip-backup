@@ -9,7 +9,7 @@
     "d1:migrate:local": "wrangler d1 migrations apply cloudtable --local",
     "d1:migrate:remote": "wrangler d1 migrations apply cloudtable --remote",
     "test:command-golden": "vitest run testing/cloudtable/suites/command-golden",
-    "test:command-harness": "npm run test:command-golden",
+    "test:command-fixture-executor": "npm run test:command-golden",
     "test:agent-tools": "vitest run testing/cloudtable/suites/agent-tools",
     "test:field-types": "vitest run testing/cloudtable/suites/field-types",
     "test:invariants": "vitest run testing/cloudtable/suites/invariants",

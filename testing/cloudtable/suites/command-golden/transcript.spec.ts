@@ -4,22 +4,22 @@ import {
   listCommandFixtureScenarioIds,
   loadCommandFixture
 } from "../../harness/fixtures/command-fixture";
-import { executeCommandFixture } from "../../harness/runners/command-transcript";
+import {
+  executeCommandFixture,
+  toExpectedCommandResult
+} from "../../harness/runners/command-fixture-executor";
 import { toCanonicalJson } from "../../harness/serializers/canonical-json";
 
-describe("cloudtable command transcript harness", () => {
+describe("cloudtable command fixture executor", () => {
   for (const scenarioId of listCommandFixtureScenarioIds()) {
     const fixture = loadCommandFixture(scenarioId);
 
-    if (fixture.seedState.persistence) {
-      it.skip(`matches fixture ${scenarioId}`, () => {});
-      continue;
-    }
+    it(`matches fixture ${scenarioId}`, async () => {
+      const actual = await executeCommandFixture(fixture);
 
-    it(`matches fixture ${scenarioId}`, () => {
-      const actual = executeCommandFixture(fixture);
-
-      expect(toCanonicalJson(actual)).toBe(toCanonicalJson(fixture.expected));
+      expect(toCanonicalJson(actual)).toBe(
+        toCanonicalJson(toExpectedCommandResult(fixture))
+      );
     });
   }
 });
