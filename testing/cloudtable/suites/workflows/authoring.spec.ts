@@ -325,6 +325,61 @@ describe("workflow authoring", () => {
     ]);
   });
 
+  it("drafts configured single-select option comparisons from metadata-declared proposal inputs", () => {
+    const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {
+          options: [
+            { id: "lead", label: "Lead" },
+            { id: "customer", label: "Customer" }
+          ]
+        },
+        fieldId: "fld_stage",
+        fieldKey: "lifecycle_stage",
+        fieldType: "select.single"
+      }
+    ]);
+
+    expect(metadata.bindings["row.fields.lifecycle_stage"]).toMatchObject({
+      proposalHints: expect.arrayContaining([
+        expect.objectContaining({
+          operatorId: "equals",
+          draftInput: {
+            left: {
+              path: "row.fields.lifecycle_stage.value"
+            },
+            right: "customer"
+          }
+        })
+      ])
+    });
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Notify sales ops when lifecycle stage changes to Customer.",
+        fieldIds: ["fld_stage"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.fields.lifecycle_stage.fieldId"
+          },
+          fieldType: {
+            path: "row.fields.lifecycle_stage.fieldType"
+          },
+          value: {
+            path: "row.fields.lifecycle_stage.value"
+          },
+          left: {
+            path: "row.fields.lifecycle_stage.value"
+          },
+          right: "customer"
+        },
+        operatorId: "equals"
+      }
+    ]);
+  });
+
   it("drafts checkbox equality conditions from metadata-defined proposal templates", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
       {

@@ -1409,7 +1409,7 @@ function createSelectFieldType(input: {
     getWorkflowProposalHints(context) {
       const parsedConfig = parseSelectConfig(context.fieldConfig);
       const configuredOptionHints =
-        input.type === "status.semantic"
+        !input.multiValue
           ? buildConfiguredOptionWorkflowProposalHints(parsedConfig.options).map((hint) => ({
               ...hint,
               draftInput: {

@@ -10480,6 +10480,99 @@ describe("cloudtable runtime ingress", () => {
     });
   });
 
+  it("drafts configured single-select workflow proposal conditions through the agent-tool preview ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        options: [
+          { id: "lead", label: "Lead" },
+          { id: "customer", label: "Customer" }
+        ]
+      },
+      fieldId: "fld_stage",
+      fieldKey: "lifecycle_stage",
+      fieldType: "select.single",
+      label: "Lifecycle Stage",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_stage_workflow_proposal",
+      workspaceId: "ws_1",
+      principalId: "agt_stage_workflow",
+      policyRevision: 49,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create"],
+      fields: {
+        fld_stage: {
+          agent: true,
+          fieldId: "fld_stage",
+          fieldType: "select.single",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "When lifecycle stage changes to Customer, notify sales ops.",
+            fieldIds: ["fld_stage"],
+            name: "Customer follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_stage_customer"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 49,
+          principalId: "agt_stage_workflow",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { output: { kind: string; proposal: { conditions: unknown[] } } }).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.fields.lifecycle_stage.fieldId"
+                },
+                fieldType: {
+                  path: "row.fields.lifecycle_stage.fieldType"
+                },
+                value: {
+                  path: "row.fields.lifecycle_stage.value"
+                },
+                left: {
+                  path: "row.fields.lifecycle_stage.value"
+                },
+                right: "customer"
+              },
+              operatorId: "equals"
+            }
+          ]
+        }
+      }
+    });
+  });
+
   it("drafts checkbox workflow proposal conditions through the agent-tool preview ingress", async () => {
     const { db, env } = createEnv();
 
