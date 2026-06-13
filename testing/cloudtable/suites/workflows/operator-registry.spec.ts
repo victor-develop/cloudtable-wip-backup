@@ -77,6 +77,7 @@ function createScope(
     },
     relatedTables: {
       destination: {
+        recordIds: ["rec_dest_1"],
         row: {
           fields: {
             owner_status: {
@@ -376,6 +377,98 @@ describe("workflow operator registry", () => {
     expect(result.executedActions).toHaveLength(1);
     expect(result.executedActions[0]?.result.status).toBe("accepted");
     expect(result.executedActions[0]?.result.events[0]?.eventType).toBe("cell.set");
+  });
+
+  it("fans out sync_related_field updates across every matched target record", async () => {
+    const workflowOperatorRegistry = createWorkflowOperatorRegistry();
+    const seenCommands: CommandEnvelope[] = [];
+
+    const result = await executeWorkflowDefinition(
+      {
+        actions: [
+          {
+            input: {
+              resolverAlias: "destination",
+              sourceFieldId: "fld_status",
+              targetFieldId: "fld_owner_status"
+            },
+            operatorId: "sync_related_field"
+          }
+        ],
+        conditions: [],
+        trigger: {
+          match: {
+            fieldId: "fld_status",
+            fromWorkflow: false,
+            tableId: "tbl_source"
+          },
+          operatorId: "field_changed"
+        },
+        workflowId: "wf_related_sync"
+      },
+      createScope({
+        relatedTables: {
+          destination: {
+            recordIds: ["rec_dest_2", "rec_dest_1"],
+            tableId: "tbl_dest"
+          }
+        }
+      }),
+      workflowOperatorRegistry,
+      {
+        async execute(command) {
+          seenCommands.push(command);
+          return {
+            accepted: true,
+            diagnostics: [],
+            events: [],
+            permission: {
+              allowed: true,
+              reasons: []
+            },
+            replayProjection: {
+              acceptedCommandIds: [command.commandId],
+              lastLogicalTime: "2026-06-07T00:00:00.000Z",
+              receiptCount: 0,
+              receipts: []
+            },
+            sideEffects: [],
+            status: "accepted"
+          };
+        }
+      }
+    );
+
+    expect(result.matchedTrigger).toBe(true);
+    if (!result.matchedTrigger) {
+      return;
+    }
+
+    expect(seenCommands).toHaveLength(2);
+    expect(seenCommands.map((command) => command.payload)).toEqual([
+      {
+        triggerEventId: "evt_source_1",
+        workflowId: "wf_related_sync",
+        workflowRunId: "run_001",
+        workflowStepId: "wf_related_sync:action:0",
+        fieldId: "fld_owner_status",
+        fieldType: "text.single_line",
+        recordId: "rec_dest_1",
+        tableId: "tbl_dest",
+        value: "approved"
+      },
+      {
+        triggerEventId: "evt_source_1",
+        workflowId: "wf_related_sync",
+        workflowRunId: "run_001",
+        workflowStepId: "wf_related_sync:action:0",
+        fieldId: "fld_owner_status",
+        fieldType: "text.single_line",
+        recordId: "rec_dest_2",
+        tableId: "tbl_dest",
+        value: "approved"
+      }
+    ]);
   });
 
   it("skips execution when conditions fail", async () => {

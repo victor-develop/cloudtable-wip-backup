@@ -1,18 +1,119 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS workspaces (
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  primary_email TEXT,
+  display_name TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS external_identities (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  provider_key TEXT NOT NULL,
+  external_subject TEXT NOT NULL,
+  email TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT,
+  UNIQUE (provider_key, external_subject),
+  FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  active_workspace_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_authenticated_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  archived_at TEXT,
+  FOREIGN KEY (user_id) REFERENCES users (id),
+  FOREIGN KEY (active_workspace_id) REFERENCES workspaces (id)
+);
+
+CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  archived_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS workspaces (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT,
+  slug TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
   archived_at TEXT,
-  last_event_id TEXT
+  last_event_id TEXT,
+  FOREIGN KEY (organization_id) REFERENCES organizations (id)
+);
+
+CREATE TABLE IF NOT EXISTS organization_memberships (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  role_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT,
+  UNIQUE (organization_id, user_id),
+  FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
+CREATE TABLE IF NOT EXISTS workspace_memberships (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  organization_membership_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  role_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT,
+  UNIQUE (workspace_id, user_id),
+  UNIQUE (workspace_id, principal_id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces (id),
+  FOREIGN KEY (organization_membership_id) REFERENCES organization_memberships (id),
+  FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
+CREATE TABLE IF NOT EXISTS invitations (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  invited_email TEXT NOT NULL,
+  role_key TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL,
+  invited_by_user_id TEXT,
+  accepted_by_user_id TEXT,
+  expires_at TEXT NOT NULL,
+  accepted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  archived_at TEXT,
+  FOREIGN KEY (organization_id) REFERENCES organizations (id),
+  FOREIGN KEY (workspace_id) REFERENCES workspaces (id),
+  FOREIGN KEY (invited_by_user_id) REFERENCES users (id),
+  FOREIGN KEY (accepted_by_user_id) REFERENCES users (id)
 );
 
 CREATE TABLE IF NOT EXISTS workspace_principals (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
+  user_id TEXT,
+  workspace_membership_id TEXT,
   principal_type TEXT NOT NULL,
   external_principal_id TEXT NOT NULL,
   role_key TEXT NOT NULL,
@@ -21,7 +122,9 @@ CREATE TABLE IF NOT EXISTS workspace_principals (
   archived_at TEXT,
   last_event_id TEXT,
   UNIQUE (workspace_id, principal_type, external_principal_id),
-  FOREIGN KEY (workspace_id) REFERENCES workspaces (id)
+  FOREIGN KEY (workspace_id) REFERENCES workspaces (id),
+  FOREIGN KEY (user_id) REFERENCES users (id),
+  FOREIGN KEY (workspace_membership_id) REFERENCES workspace_memberships (id)
 );
 
 CREATE TABLE IF NOT EXISTS apps (

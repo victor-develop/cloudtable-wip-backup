@@ -79,9 +79,9 @@ import {
 } from "./workflow-operations";
 import { createRuntime, createRuntimeWithSnapshot } from "./bootstrap";
 import type { CloudTableRuntime } from "./bootstrap";
-import { badRequest, conflict, forbidden, json, methodNotAllowed, notFound } from "./http";
+import { badRequest, conflict, forbidden, json, methodNotAllowed, notFound, unauthorized } from "./http";
 import type { CloudTableEnv } from "./env";
-import { enqueueScheduledWorkflowDispatches } from "./workflow-runtime";
+import { enqueueScheduledWorkflowDispatches, requestManualAggregateMaintenance } from "./workflow-runtime";
 import {
   readWorkflowDefinitionMetadata,
   readWorkflowExecutionCandidate,
@@ -91,6 +91,7 @@ import { createWorkspaceInspector } from "./workspace-inspector";
 import { serializeWorkflowOperatorManifest } from "../core/workflows/manifest";
 import { createWorkflowOperatorRegistry } from "../core/workflows/operator-registry";
 import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
+import type { AuthSessionRecord } from "../core/persistence/types";
 import { drainPendingOutboxEntries } from "./queue-publisher";
 
 type CommandPermissionScope =
@@ -101,6 +102,19 @@ type CommandPermissionScope =
       kind: "table";
       tableId: string;
     };
+
+type GoogleUserInfo = {
+  email: string | null;
+  name: string | null;
+  subject: string;
+};
+
+type SignedTokenPayload = {
+  invitationToken?: string;
+  issuedAt: string;
+  redirectTo: string;
+  workspaceId?: string;
+};
 
 export async function handleFetch(
   request: Request,
@@ -130,6 +144,113 @@ export async function handleFetch(
       workflowOperators: runtime.workflowOperatorRegistry.list().map(serializeWorkflowOperatorManifest),
       agentTools: runtime.agentToolRegistry.list().map(serializeAgentToolManifest)
     });
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/auth/google/login") {
+    const redirectTo = sanitizeRedirectTarget(url.searchParams.get("redirectTo"));
+    if (!redirectTo) {
+      return badRequest("redirectTo is required for Google login ingress.");
+    }
+
+    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_OAUTH_REDIRECT_URI || !env.AUTH_SESSION_SECRET) {
+      return badRequest("Google auth ingress is not configured.");
+    }
+
+    const state = await encodeSignedToken(
+      {
+        ...(readNonEmptyString(url.searchParams.get("invitationToken"))
+          ? { invitationToken: readNonEmptyString(url.searchParams.get("invitationToken"))! }
+          : {}),
+        issuedAt: new Date().toISOString(),
+        redirectTo,
+        ...(readNonEmptyString(url.searchParams.get("workspaceId"))
+          ? { workspaceId: readNonEmptyString(url.searchParams.get("workspaceId"))! }
+          : {})
+      },
+      env.AUTH_SESSION_SECRET
+    );
+    const redirectUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    redirectUrl.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
+    redirectUrl.searchParams.set("redirect_uri", env.GOOGLE_OAUTH_REDIRECT_URI);
+    redirectUrl.searchParams.set("response_type", "code");
+    redirectUrl.searchParams.set("scope", "openid email profile");
+    redirectUrl.searchParams.set("state", state);
+
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: redirectUrl.toString()
+      }
+    });
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/auth/google/callback") {
+    return handleGoogleAuthCallback(request, env);
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/auth/session") {
+    return handleSessionIngress(request, env);
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/auth/session/selection") {
+    return handleSessionSelectionIngress(request, env);
+  }
+
+  const workspaceInvitationCollectionMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([^/]+)\/invitations$/
+  );
+  if (workspaceInvitationCollectionMatch && request.method === "POST") {
+    return handleInvitationIssuance(request, env, workspaceInvitationCollectionMatch[1]!);
+  }
+
+  const workspaceMembershipCollectionMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([^/]+)\/memberships$/
+  );
+  if (workspaceMembershipCollectionMatch && request.method === "POST") {
+    let body: Record<string, unknown>;
+    try {
+      body = ((await request.json()) as Record<string, unknown>) ?? {};
+    } catch {
+      return badRequest("Request body must be valid JSON.");
+    }
+
+    const workspaceId = workspaceMembershipCollectionMatch[1]!;
+    const stub = env.WORKSPACE_CONTROL_DO.get(env.WORKSPACE_CONTROL_DO.idFromName(workspaceId));
+    return stub.fetch(
+      new Request(new URL("/memberships", url.origin), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          ...body,
+          workspace: {
+            ...((isRecord(body.workspace) ? body.workspace : {}) as Record<string, unknown>),
+            id: workspaceId
+          }
+        })
+      })
+    );
+  }
+
+  const workspaceMembershipDetailMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([^/]+)\/memberships\/([^/]+)$/
+  );
+  if (workspaceMembershipDetailMatch && request.method === "GET") {
+    const workspaceId = workspaceMembershipDetailMatch[1]!;
+    const principalId = workspaceMembershipDetailMatch[2]!;
+    const stub = env.WORKSPACE_CONTROL_DO.get(env.WORKSPACE_CONTROL_DO.idFromName(workspaceId));
+    return stub.fetch(
+      new Request(
+        new URL(
+          `/memberships/${encodeURIComponent(principalId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
+          url.origin
+        ),
+        {
+          method: "GET"
+        }
+      )
+    );
   }
 
   const workspaceActivityMatch = url.pathname.match(/^\/v1\/workspaces\/([^/]+)\/activity$/);
@@ -214,7 +335,7 @@ export async function handleFetch(
       return badRequest("workspaceId query parameter is required.");
     }
 
-    const auth = await resolveWorkspaceCatalogAccess(env, {
+    const auth = await resolveWorkspaceCatalogAccess(request, env, {
       permissionScopeHash: url.searchParams.get("permissionScopeHash"),
       policyRevisionValue: url.searchParams.get("policyRevision"),
       principalId: url.searchParams.get("principalId"),
@@ -325,7 +446,7 @@ export async function handleFetch(
     }
 
     const workspaceId = workspaceCatalogMatch[1]!;
-    const auth = await resolveWorkspaceCatalogAccess(env, {
+    const auth = await resolveWorkspaceCatalogAccess(request, env, {
       permissionScopeHash: url.searchParams.get("permissionScopeHash"),
       policyRevisionValue: url.searchParams.get("policyRevision"),
       principalId: url.searchParams.get("principalId"),
@@ -365,7 +486,7 @@ export async function handleFetch(
     }
 
     const workspaceId = workflowOperatorCatalogMatch[1]!;
-    const auth = await resolveWorkspaceCatalogAccess(env, {
+    const auth = await resolveWorkspaceCatalogAccess(request, env, {
       permissionScopeHash: url.searchParams.get("permissionScopeHash"),
       policyRevisionValue: url.searchParams.get("policyRevision"),
       principalId: url.searchParams.get("principalId"),
@@ -390,7 +511,7 @@ export async function handleFetch(
     }
 
     const workspaceId = fieldTypeCatalogMatch[1]!;
-    const auth = await resolveWorkspaceCatalogAccess(env, {
+    const auth = await resolveWorkspaceCatalogAccess(request, env, {
       permissionScopeHash: url.searchParams.get("permissionScopeHash"),
       policyRevisionValue: url.searchParams.get("policyRevision"),
       principalId: url.searchParams.get("principalId"),
@@ -413,7 +534,7 @@ export async function handleFetch(
     }
 
     const workspaceId = agentToolCatalogMatch[1]!;
-    const auth = await resolveWorkspaceCatalogAccess(env, {
+    const auth = await resolveWorkspaceCatalogAccess(request, env, {
       permissionScopeHash: url.searchParams.get("permissionScopeHash"),
       policyRevisionValue: url.searchParams.get("policyRevision"),
       principalId: url.searchParams.get("principalId"),
@@ -441,7 +562,7 @@ export async function handleFetch(
     }
 
     const tableId = tableSchemaMatch[1]!;
-    const auth = await resolveSchemaMetadataAccess(env, {
+    const auth = await resolveSchemaMetadataAccess(request, env, {
       permissionScopeHash: url.searchParams.get("permissionScopeHash"),
       policyRevisionValue: url.searchParams.get("policyRevision"),
       principalId: url.searchParams.get("principalId"),
@@ -510,7 +631,7 @@ export async function handleFetch(
 
     const tableId = viewDefinitionMatch[1]!;
     const viewId = viewDefinitionMatch[2]!;
-    const auth = await resolveSchemaMetadataAccess(env, {
+    const auth = await resolveSchemaMetadataAccess(request, env, {
       permissionScopeHash: url.searchParams.get("permissionScopeHash"),
       policyRevisionValue: url.searchParams.get("policyRevision"),
       principalId: url.searchParams.get("principalId"),
@@ -622,7 +743,7 @@ export async function handleFetch(
       return methodNotAllowed(request.method, ["GET"]);
     }
 
-    const auth = await resolveWorkflowOperationsAccess(env, {
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
       principalId: url.searchParams.get("principalId"),
       workflowId: workflowDefinitionMatch[1] ?? null,
       workspaceId: url.searchParams.get("workspaceId"),
@@ -674,7 +795,7 @@ export async function handleFetch(
       return methodNotAllowed(request.method, ["GET"]);
     }
 
-    const auth = await resolveWorkflowOperationsAccess(env, {
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
       principalId: url.searchParams.get("principalId"),
       workflowId: workflowHistoryMatch[1] ?? null,
       workspaceId: url.searchParams.get("workspaceId"),
@@ -688,13 +809,118 @@ export async function handleFetch(
     return json(await readWorkflowHistoryForWorkflow(env.DB, auth.workspaceId, auth.workflowId));
   }
 
+  const workflowAggregateMaintenanceMatch = url.pathname.match(
+    /^\/v1\/workflows\/([^/]+)\/aggregate-maintenance$/
+  );
+  if (workflowAggregateMaintenanceMatch) {
+    if (request.method !== "POST") {
+      return methodNotAllowed(request.method, ["POST"]);
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      return badRequest("Workflow aggregate-maintenance body must be valid JSON.");
+    }
+
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
+      principalId: readNonEmptyString(body.principalId),
+      workflowId: workflowAggregateMaintenanceMatch[1] ?? null,
+      workspaceId: readNonEmptyString(body.workspaceId),
+      permissionScopeHash: readNonEmptyString(body.permissionScopeHash),
+      policyRevisionValue:
+        typeof body.policyRevision === "number" ? String(body.policyRevision) : null
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    const kind = readNonEmptyString(body.kind);
+    if (kind !== "backfill" && kind !== "recompute") {
+      return badRequest("kind must be either backfill or recompute.");
+    }
+
+    const aggregateAliasesValue = body.aggregateAliases;
+    if (aggregateAliasesValue !== undefined && !Array.isArray(aggregateAliasesValue)) {
+      return badRequest("aggregateAliases must be an array of strings when provided.");
+    }
+    const aggregateAliases = Array.isArray(aggregateAliasesValue)
+      ? Array.from(
+          new Set(
+            aggregateAliasesValue.filter(
+              (entry): entry is string => typeof entry === "string" && entry.length > 0
+            )
+          )
+        )
+      : undefined;
+    if (Array.isArray(aggregateAliasesValue) && aggregateAliases?.length !== aggregateAliasesValue.length) {
+      return badRequest("aggregateAliases entries must all be non-empty strings.");
+    }
+
+    const changedFieldIdsValue = body.changedFieldIds;
+    if (changedFieldIdsValue !== undefined && !Array.isArray(changedFieldIdsValue)) {
+      return badRequest("changedFieldIds must be an array of strings when provided.");
+    }
+    const changedFieldIds = Array.isArray(changedFieldIdsValue)
+      ? Array.from(
+          new Set(
+            changedFieldIdsValue.filter(
+              (entry): entry is string => typeof entry === "string" && entry.length > 0
+            )
+          )
+        )
+      : undefined;
+    if (Array.isArray(changedFieldIdsValue) && changedFieldIds?.length !== changedFieldIdsValue.length) {
+      return badRequest("changedFieldIds entries must all be non-empty strings.");
+    }
+
+    const requestId =
+      readNonEmptyString(body.requestId) ??
+      readNonEmptyString(body.idempotencyKey) ??
+      `workflow-aggregate-maintenance:${workflowAggregateMaintenanceMatch[1]!}:${kind}`;
+    const result = await requestManualAggregateMaintenance(env, {
+      aggregateAliases,
+      changedFieldIds,
+      kind,
+      principalId: auth.principalId,
+      reason: readNonEmptyString(body.reason) ?? undefined,
+      recordId: readNonEmptyString(body.recordId),
+      requestId,
+      workflowId: workflowAggregateMaintenanceMatch[1]!,
+      workspaceId: auth.workspaceId
+    });
+
+    if (!result.ok) {
+      if (result.reason === "workflow_not_found") {
+        return notFound(result.message);
+      }
+      if (result.reason === "already_requested") {
+        return conflict(result.message);
+      }
+      return badRequest(result.message);
+    }
+
+    return json(
+      {
+        aggregateAliases: result.aggregateAliases,
+        kind,
+        requestId,
+        status: result.status,
+        workflowId: workflowAggregateMaintenanceMatch[1]!,
+        workflowVersionId: result.workflowVersionId
+      },
+      { status: 202 }
+    );
+  }
+
   const workflowRunHistoryMatch = url.pathname.match(/^\/v1\/workflow-runs\/([^/]+)$/);
   if (workflowRunHistoryMatch) {
     if (request.method !== "GET") {
       return methodNotAllowed(request.method, ["GET"]);
     }
 
-    const auth = await resolveWorkflowOperationsAccess(env, {
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
       principalId: url.searchParams.get("principalId"),
       workflowRunId: workflowRunHistoryMatch[1] ?? null,
       workspaceId: url.searchParams.get("workspaceId"),
@@ -729,7 +955,7 @@ export async function handleFetch(
       return badRequest("Workflow dead-letter replay body must be valid JSON.");
     }
 
-    const auth = await resolveWorkflowOperationsAccess(env, {
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
       deadLetterId: workflowDeadLetterReplayMatch[1] ?? null,
       principalId: readNonEmptyString(body.principalId),
       workflowId: null,
@@ -1227,6 +1453,666 @@ export async function handleScheduled(
   );
 }
 
+async function handleGoogleAuthCallback(request: Request, env: CloudTableEnv): Promise<Response> {
+  if (
+    !env.GOOGLE_CLIENT_ID ||
+    !env.GOOGLE_CLIENT_SECRET ||
+    !env.GOOGLE_OAUTH_REDIRECT_URI ||
+    !env.AUTH_SESSION_SECRET
+  ) {
+    return badRequest("Google auth ingress is not configured.");
+  }
+
+  const url = new URL(request.url);
+  const code = readNonEmptyString(url.searchParams.get("code"));
+  const state = readNonEmptyString(url.searchParams.get("state"));
+  if (!code || !state) {
+    return badRequest("Google auth callback requires code and state.");
+  }
+
+  const decodedState = await decodeSignedToken<SignedTokenPayload>(state, env.AUTH_SESSION_SECRET);
+  if (!decodedState || !sanitizeRedirectTarget(decodedState.redirectTo)) {
+    return badRequest("Google auth callback state is invalid.");
+  }
+
+  const googleIdentity = await exchangeGoogleCodeForUserInfo(env, code);
+  if (!googleIdentity.ok) {
+    return googleIdentity.response;
+  }
+
+  if (!googleIdentity.user.email) {
+    return forbidden("Google identity did not include an email address.");
+  }
+
+  const repository = createCloudTableD1Repository(env.DB, createRuntime(env).fieldTypeRegistry);
+  const existingLinkedUser = await repository.findUserByExternalIdentity({
+    externalSubject: googleIdentity.user.subject,
+    providerKey: "google"
+  });
+  const emailMatchedUser = await repository.findUserByEmail(googleIdentity.user.email);
+  const invitationToken = readNonEmptyString(decodedState.invitationToken);
+  const invitation =
+    invitationToken == null
+      ? null
+      : await repository.findInvitationByTokenHash(await sha256Hex(invitationToken));
+
+  if (
+    existingLinkedUser &&
+    emailMatchedUser &&
+    existingLinkedUser.userId !== emailMatchedUser.userId
+  ) {
+    return conflict(
+      `Google identity ${googleIdentity.user.subject} is already linked to a different CloudTable user.`,
+      {
+        conflictingUserId: existingLinkedUser.userId,
+        emailMatchedUserId: emailMatchedUser.userId
+      }
+    );
+  }
+
+  if (invitationToken && !invitation) {
+    return forbidden("Invitation token is invalid or has been revoked.");
+  }
+
+  if (invitation) {
+    if (invitation.status !== "pending") {
+      return conflict(`Invitation ${invitation.id} is no longer pending.`);
+    }
+
+    if (Date.parse(invitation.expiresAt) <= Date.now()) {
+      return forbidden(`Invitation ${invitation.id} has expired.`);
+    }
+
+    if (googleIdentity.user.email.toLowerCase() !== invitation.invitedEmail.toLowerCase()) {
+      return forbidden(
+        `Invitation ${invitation.id} is for ${invitation.invitedEmail}, not ${googleIdentity.user.email}.`
+      );
+    }
+  }
+
+  let canonicalUser = existingLinkedUser ?? emailMatchedUser;
+  if (!canonicalUser && !invitation) {
+    return forbidden(
+      `No canonical CloudTable user is linked to ${googleIdentity.user.email}. Invitation acceptance is not available on this ingress yet.`
+    );
+  }
+
+  if (invitation) {
+    const existingMembership = canonicalUser
+      ? await repository.readWorkspaceMembershipIdentityForUser({
+          userId: canonicalUser.userId,
+          workspaceId: invitation.workspaceId
+        })
+      : null;
+    const acceptedUserId = canonicalUser?.userId ?? generateStableIdentifier("user");
+    const acceptedMembership = await repository.acceptInvitation({
+      acceptedByUserId: acceptedUserId,
+      acceptedDisplayName: googleIdentity.user.name,
+      acceptedEmail: googleIdentity.user.email,
+      acceptedExternalIdentity: {
+        email: googleIdentity.user.email,
+        externalSubject: googleIdentity.user.subject,
+        id: `ext_google_${googleIdentity.user.subject}`,
+        providerKey: "google"
+      },
+      acceptedPrincipalId: existingMembership?.principalId ?? generateStableIdentifier("usr"),
+      acceptedUserId,
+      invitationId: invitation.id,
+      organizationMembershipId:
+        existingMembership?.organizationMembershipId ?? generateStableIdentifier("orgmem"),
+      timestamp: new Date().toISOString(),
+      workspaceMembershipId:
+        existingMembership?.workspaceMembershipId ?? generateStableIdentifier("wsmem")
+    });
+    if (!acceptedMembership) {
+      return conflict(`Invitation ${invitation.id} could not be accepted.`);
+    }
+
+    canonicalUser = {
+      displayName: acceptedMembership.userDisplayName,
+      primaryEmail: acceptedMembership.userEmail,
+      userId: acceptedMembership.userId
+    };
+  }
+  if (!canonicalUser) {
+    return conflict("Google callback could not resolve a canonical CloudTable user.");
+  }
+
+  const linkResult = await repository.linkExternalIdentityToUser({
+    email: googleIdentity.user.email,
+    externalIdentityId: `ext_google_${googleIdentity.user.subject}`,
+    externalSubject: googleIdentity.user.subject,
+    providerKey: "google",
+    timestamp: new Date().toISOString(),
+    userId: canonicalUser.userId
+  });
+  if (linkResult === "conflict") {
+    return conflict(
+      `Google identity ${googleIdentity.user.subject} is already linked to a different CloudTable user.`
+    );
+  }
+
+  const sessionTtlSeconds = readSessionTtlSeconds(env);
+  const issuedAt = new Date();
+  const expiresAt = new Date(issuedAt.getTime() + sessionTtlSeconds * 1000);
+  const session = await repository.createAuthSession({
+    activeWorkspaceId: await resolveInitialActiveWorkspaceId({
+      invitationWorkspaceId: invitation?.workspaceId ?? null,
+      repository,
+      requestedWorkspaceId: decodedState.workspaceId ?? null,
+      userId: canonicalUser.userId
+    }),
+    expiresAt: expiresAt.toISOString(),
+    lastAuthenticatedAt: issuedAt.toISOString(),
+    sessionId: crypto.randomUUID(),
+    userId: canonicalUser.userId
+  });
+  const sessionCookie = await encodeSignedToken(
+    { sessionId: session.sessionId },
+    env.AUTH_SESSION_SECRET
+  );
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      "set-cookie": serializeSessionCookie(env, sessionCookie, expiresAt),
+      location: decodedState.redirectTo
+    }
+  });
+}
+
+async function handleInvitationIssuance(
+  request: Request,
+  env: CloudTableEnv,
+  workspaceId: string
+): Promise<Response> {
+  const authSession = await resolveAuthenticatedSession(request, env);
+  if ("response" in authSession) {
+    return authSession.response;
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = ((await request.json()) as Record<string, unknown>) ?? {};
+  } catch {
+    return badRequest("Request body must be valid JSON.");
+  }
+
+  const invitedEmail = readNonEmptyString(body.email)?.toLowerCase();
+  if (!invitedEmail) {
+    return badRequest("email is required for invitation issuance.");
+  }
+
+  const redirectTo = sanitizeRedirectTarget(readNonEmptyString(body.redirectTo));
+  if (!redirectTo) {
+    return badRequest("redirectTo is required for invitation issuance.");
+  }
+
+  const expiresAt = parseInvitationExpiry(body.expiresAt);
+  if (!expiresAt) {
+    return badRequest("expiresAt must be a valid ISO-8601 timestamp when provided.");
+  }
+
+  const repository = createCloudTableD1Repository(env.DB, createRuntime(env).fieldTypeRegistry);
+  const inviterMembership = await repository.readWorkspaceMembershipIdentityForUser({
+    userId: authSession.session.userId,
+    workspaceId
+  });
+  if (!inviterMembership) {
+    return forbidden(
+      `Authenticated user ${authSession.session.userId} is not an active workspace member for ${workspaceId}.`
+    );
+  }
+
+  const rawToken = `${crypto.randomUUID()}.${crypto.randomUUID()}`;
+  const invitation = await repository.createInvitation({
+    expiresAt: expiresAt.toISOString(),
+    id: generateStableIdentifier("inv"),
+    invitedByUserId: authSession.session.userId,
+    invitedEmail,
+    roleKey: readNonEmptyString(body.roleKey) ?? "workspace.member",
+    timestamp: new Date().toISOString(),
+    tokenHash: await sha256Hex(rawToken),
+    workspaceId
+  });
+  if (!invitation) {
+    return notFound(`Workspace ${workspaceId} is missing invitation context.`);
+  }
+
+  const acceptUrl = new URL("/v1/auth/google/login", new URL(request.url).origin);
+  acceptUrl.searchParams.set("invitationToken", rawToken);
+  acceptUrl.searchParams.set("redirectTo", redirectTo);
+  acceptUrl.searchParams.set("workspaceId", invitation.workspaceId);
+
+  return json(
+    {
+      invitation: {
+        ...invitation,
+        acceptUrl: acceptUrl.toString()
+      }
+    },
+    { status: 201 }
+  );
+}
+
+async function handleSessionIngress(request: Request, env: CloudTableEnv): Promise<Response> {
+  const authSession = await resolveAuthenticatedSession(request, env);
+  if ("response" in authSession) {
+    return authSession.response;
+  }
+
+  const repository = createCloudTableD1Repository(env.DB, createRuntime(env).fieldTypeRegistry);
+  const memberships = await repository.listWorkspaceMembershipIdentitiesForUser(authSession.session.userId);
+  const requestedWorkspaceId = readNonEmptyString(new URL(request.url).searchParams.get("workspaceId"));
+  const selectedMembership = selectWorkspaceMembership({
+    memberships,
+    requestedWorkspaceId,
+    sessionActiveWorkspaceId: authSession.session.activeWorkspaceId
+  });
+
+  return json({
+    activeOrganization:
+      selectedMembership == null
+        ? null
+        : {
+            organizationId: selectedMembership.organizationId,
+            organizationName: selectedMembership.organizationName,
+            organizationSlug: selectedMembership.organizationSlug
+          },
+    activeWorkspaceId: selectedMembership?.workspaceId ?? null,
+    activeWorkspaceMembership: selectedMembership,
+    memberships,
+    session: authSession.session,
+    ...(selectedMembership ? { workspaceMembership: selectedMembership } : {})
+  });
+}
+
+async function handleSessionSelectionIngress(
+  request: Request,
+  env: CloudTableEnv
+): Promise<Response> {
+  const authSession = await resolveAuthenticatedSession(request, env);
+  if ("response" in authSession) {
+    return authSession.response;
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = ((await request.json()) as Record<string, unknown>) ?? {};
+  } catch {
+    return badRequest("Request body must be valid JSON.");
+  }
+
+  const workspaceId = readNonEmptyString(
+    typeof body.workspaceId === "string" ? body.workspaceId : null
+  );
+  if (!workspaceId) {
+    return badRequest("workspaceId is required for session context switching.");
+  }
+
+  const repository = createCloudTableD1Repository(env.DB, createRuntime(env).fieldTypeRegistry);
+  const membership = await repository.readWorkspaceMembershipIdentityForUser({
+    userId: authSession.session.userId,
+    workspaceId
+  });
+  if (!membership) {
+    return forbidden(
+      `Authenticated user ${authSession.session.userId} is not an active workspace member for ${workspaceId}.`
+    );
+  }
+
+  const updatedSession = await repository.updateAuthSessionActiveWorkspace({
+    activeWorkspaceId: workspaceId,
+    sessionId: authSession.session.sessionId
+  });
+  if (!updatedSession) {
+    return unauthorized("CloudTable auth session is missing or expired.");
+  }
+
+  const memberships = await repository.listWorkspaceMembershipIdentitiesForUser(updatedSession.userId);
+  return json({
+    activeOrganization: {
+      organizationId: membership.organizationId,
+      organizationName: membership.organizationName,
+      organizationSlug: membership.organizationSlug
+    },
+    activeWorkspaceId: membership.workspaceId,
+    activeWorkspaceMembership: membership,
+    memberships,
+    session: updatedSession,
+    workspaceMembership: membership
+  });
+}
+
+async function exchangeGoogleCodeForUserInfo(
+  env: CloudTableEnv,
+  code: string
+): Promise<{ ok: true; user: GoogleUserInfo } | { ok: false; response: Response }> {
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({
+      client_id: env.GOOGLE_CLIENT_ID!,
+      client_secret: env.GOOGLE_CLIENT_SECRET!,
+      code,
+      grant_type: "authorization_code",
+      redirect_uri: env.GOOGLE_OAUTH_REDIRECT_URI!
+    }).toString()
+  });
+  if (!tokenResponse.ok) {
+    return {
+      ok: false,
+      response: forbidden("Google token exchange failed.", {
+        status: tokenResponse.status
+      })
+    };
+  }
+
+  const tokenBody = (await tokenResponse.json()) as Record<string, unknown>;
+  const accessToken = readNonEmptyString(tokenBody.access_token);
+  if (!accessToken) {
+    return {
+      ok: false,
+      response: forbidden("Google token exchange did not return an access token.")
+    };
+  }
+
+  const userInfoResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+    headers: {
+      authorization: `Bearer ${accessToken}`
+    }
+  });
+  if (!userInfoResponse.ok) {
+    return {
+      ok: false,
+      response: forbidden("Google userinfo lookup failed.", {
+        status: userInfoResponse.status
+      })
+    };
+  }
+
+  const userInfo = (await userInfoResponse.json()) as Record<string, unknown>;
+  const subject = readNonEmptyString(userInfo.sub);
+  if (!subject) {
+    return {
+      ok: false,
+      response: forbidden("Google userinfo payload did not include a subject.")
+    };
+  }
+
+  return {
+    ok: true,
+    user: {
+      email: readNonEmptyString(userInfo.email) ?? null,
+      name: readNonEmptyString(userInfo.name) ?? null,
+      subject
+    }
+  };
+}
+
+async function resolveAuthenticatedSession(
+  request: Request,
+  env: CloudTableEnv
+): Promise<{ session: AuthSessionRecord } | { response: Response }> {
+  if (!env.AUTH_SESSION_SECRET) {
+    return {
+      response: unauthorized("Session auth is not configured.")
+    };
+  }
+
+  const rawCookie = readCookie(request, sessionCookieName(env));
+  if (!rawCookie) {
+    return {
+      response: unauthorized("No CloudTable auth session cookie is present.")
+    };
+  }
+
+  const decoded = await decodeSignedToken<{ sessionId: string }>(rawCookie, env.AUTH_SESSION_SECRET);
+  if (!decoded?.sessionId) {
+    return {
+      response: unauthorized("CloudTable auth session cookie is invalid.")
+    };
+  }
+
+  const repository = createCloudTableD1Repository(env.DB, createRuntime(env).fieldTypeRegistry);
+  const session = await repository.readAuthSession(decoded.sessionId);
+  if (!session) {
+    return {
+      response: unauthorized("CloudTable auth session is missing or expired.")
+    };
+  }
+
+  return { session };
+}
+
+async function resolveSessionPrincipalForWorkspace(
+  request: Request,
+  env: CloudTableEnv,
+  workspaceId: string
+): Promise<{ principalId: string } | { response: Response }> {
+  const authSession = await resolveAuthenticatedSession(request, env);
+  if ("response" in authSession) {
+    return authSession;
+  }
+
+  const repository = createCloudTableD1Repository(env.DB, createRuntime(env).fieldTypeRegistry);
+  const membership = await repository.readWorkspaceMembershipIdentityForUser({
+    userId: authSession.session.userId,
+    workspaceId
+  });
+  if (!membership) {
+    return {
+      response: forbidden(
+        `Authenticated user ${authSession.session.userId} is not an active workspace member for ${workspaceId}.`
+      )
+    };
+  }
+
+  return {
+    principalId: membership.principalId
+  };
+}
+
+async function resolveInitialActiveWorkspaceId(input: {
+  invitationWorkspaceId: string | null;
+  repository: ReturnType<typeof createCloudTableD1Repository>;
+  requestedWorkspaceId: string | null;
+  userId: string;
+}): Promise<string | null> {
+  if (input.invitationWorkspaceId) {
+    return input.invitationWorkspaceId;
+  }
+
+  if (input.requestedWorkspaceId) {
+    const requestedMembership = await input.repository.readWorkspaceMembershipIdentityForUser({
+      userId: input.userId,
+      workspaceId: input.requestedWorkspaceId
+    });
+    if (requestedMembership) {
+      return requestedMembership.workspaceId;
+    }
+  }
+
+  const memberships = await input.repository.listWorkspaceMembershipIdentitiesForUser(input.userId);
+  return memberships.length === 1 ? memberships[0]!.workspaceId : null;
+}
+
+function selectWorkspaceMembership(input: {
+  memberships: Array<{
+    organizationId: string;
+    organizationName: string;
+    organizationSlug: string;
+    workspaceId: string;
+  }>;
+  requestedWorkspaceId: string | null;
+  sessionActiveWorkspaceId: string | null;
+}) {
+  if (input.requestedWorkspaceId) {
+    return input.memberships.find((membership) => membership.workspaceId === input.requestedWorkspaceId) ?? null;
+  }
+
+  if (input.sessionActiveWorkspaceId) {
+    return (
+      input.memberships.find((membership) => membership.workspaceId === input.sessionActiveWorkspaceId) ?? null
+    );
+  }
+
+  return null;
+}
+
+function sanitizeRedirectTarget(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.toString();
+  } catch {
+    if (value.startsWith("/")) {
+      return value;
+    }
+
+    return null;
+  }
+}
+
+function sessionCookieName(env: CloudTableEnv): string {
+  return env.AUTH_COOKIE_NAME?.trim() || "cloudtable_session";
+}
+
+function readSessionTtlSeconds(env: CloudTableEnv): number {
+  const raw = env.AUTH_SESSION_TTL_SECONDS?.trim();
+  if (!raw) {
+    return 60 * 60 * 24 * 7;
+  }
+
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 60 * 60 * 24 * 7;
+}
+
+function serializeSessionCookie(env: CloudTableEnv, value: string, expiresAt: Date): string {
+  return `${sessionCookieName(env)}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Expires=${expiresAt.toUTCString()}`;
+}
+
+function readCookie(request: Request, name: string): string | null {
+  const header = request.headers.get("cookie");
+  if (!header) {
+    return null;
+  }
+
+  for (const part of header.split(";")) {
+    const [rawName, ...rawValue] = part.trim().split("=");
+    if (rawName === name) {
+      return decodeURIComponent(rawValue.join("="));
+    }
+  }
+
+  return null;
+}
+
+async function encodeSignedToken(payload: Record<string, unknown>, secret: string): Promise<string> {
+  const body = toBase64Url(JSON.stringify(payload));
+  const signature = await signValue(body, secret);
+  return `${body}.${signature}`;
+}
+
+async function decodeSignedToken<T>(value: string, secret: string): Promise<T | null> {
+  const separator = value.lastIndexOf(".");
+  if (separator <= 0) {
+    return null;
+  }
+
+  const body = value.slice(0, separator);
+  const signature = value.slice(separator + 1);
+  const expected = await signValue(body, secret);
+  if (!timingSafeEqual(signature, expected)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(fromBase64Url(body)) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function signValue(value: string, secret: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    {
+      hash: "SHA-256",
+      name: "HMAC"
+    },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(value));
+  return toBase64Url(signature);
+}
+
+function timingSafeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  let mismatch = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+
+  return mismatch === 0;
+}
+
+function toBase64Url(value: string | ArrayBuffer): string {
+  const bytes =
+    typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function fromBase64Url(value: string): string {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return new TextDecoder().decode(bytes);
+}
+
+function parseInvitationExpiry(value: unknown): Date | null {
+  if (value == null) {
+    return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  }
+
+  const parsed = readNonEmptyString(value);
+  if (!parsed) {
+    return null;
+  }
+
+  const date = new Date(parsed);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function generateStableIdentifier(prefix: string): string {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function readActivityLimit(url: URL): { value: number } | { response: Response } {
   const rawLimit = url.searchParams.get("limit");
   if (rawLimit === null || rawLimit.length === 0) {
@@ -1458,11 +2344,38 @@ async function normalizeCommandIngress(
     };
   }
 
-  const actorPrincipalId = readNonEmptyString(hydratedCommand.actor?.principalId);
-  const actorMode = hydratedCommand.actor?.mode;
+  const explicitActorPrincipalId = readNonEmptyString(hydratedCommand.actor?.principalId);
+  const actorMode = hydratedCommand.actor?.mode ?? "user";
+  let actorPrincipalId = explicitActorPrincipalId;
+  if (!actorPrincipalId && actorMode === "user") {
+    const sessionPrincipal = await resolveSessionPrincipalForWorkspace(
+      request,
+      env,
+      hydratedCommand.workspaceId
+    );
+    if ("response" in sessionPrincipal) {
+      return {
+        response: sessionPrincipal.response
+      };
+    }
+
+    actorPrincipalId = sessionPrincipal.principalId;
+  }
+
   if (!actorPrincipalId || (actorMode !== "user" && actorMode !== "workflow" && actorMode !== "agent")) {
     return {
       response: badRequest("actor.principalId and actor.mode are required for command ingress.")
+    };
+  }
+
+  const membershipResponse = await enforceActiveUserWorkspaceMembership(env.DB, {
+    principalId: actorPrincipalId,
+    workspaceId: hydratedCommand.workspaceId,
+    mode: actorMode
+  });
+  if (membershipResponse) {
+    return {
+      response: membershipResponse
     };
   }
 
@@ -2792,7 +3705,7 @@ async function handleAgentToolIngress(
     toolId === "prepareWorkflowDeadLetterReplay" ||
     toolId === "requestWorkflowDeadLetterReplay";
   const workflowOperationsAccess = workflowOperationsTool
-    ? await resolveWorkflowOperationsAccess(env, {
+    ? await resolveWorkflowOperationsAccess(request, env, {
         deadLetterId:
           toolId === "prepareWorkflowDeadLetterReplay" ||
           toolId === "requestWorkflowDeadLetterReplay"
@@ -3911,6 +4824,7 @@ async function resolveCommandPermissionScope(
 }
 
 async function resolveWorkflowOperationsAccess(
+  request: Request,
   env: CloudTableEnv,
   input: {
     deadLetterId?: string | null;
@@ -3942,7 +4856,17 @@ async function resolveWorkflowOperationsAccess(
     };
   }
 
-  const principalId = readNonEmptyString(input.principalId);
+  let principalId = readNonEmptyString(input.principalId);
+  if (!principalId) {
+    const sessionPrincipal = await resolveSessionPrincipalForWorkspace(request, env, workspaceId);
+    if ("response" in sessionPrincipal) {
+      return {
+        response: sessionPrincipal.response
+      };
+    }
+
+    principalId = sessionPrincipal.principalId;
+  }
   if (!principalId) {
     return {
       response: badRequest("principalId is required for workflow operations ingress.")
@@ -4020,6 +4944,7 @@ async function resolveWorkflowOperationsAccess(
 }
 
 async function resolveSchemaMetadataAccess(
+  request: Request,
   env: CloudTableEnv,
   input: {
     permissionScopeHash?: string | null;
@@ -4047,7 +4972,17 @@ async function resolveSchemaMetadataAccess(
       response: Response;
     }
 > {
-  const principalId = readNonEmptyString(input.principalId);
+  let principalId = readNonEmptyString(input.principalId);
+  if (!principalId) {
+    const sessionPrincipal = await resolveSessionPrincipalForWorkspace(request, env, input.workspaceId);
+    if ("response" in sessionPrincipal) {
+      return {
+        response: sessionPrincipal.response
+      };
+    }
+
+    principalId = sessionPrincipal.principalId;
+  }
   if (!principalId) {
     return {
       response: badRequest("principalId is required for schema metadata ingress.")
@@ -4092,6 +5027,7 @@ async function resolveSchemaMetadataAccess(
 }
 
 async function resolveWorkspaceCatalogAccess(
+  request: Request,
   env: CloudTableEnv,
   input: {
     permissionScopeHash?: string | null;
@@ -4108,10 +5044,31 @@ async function resolveWorkspaceCatalogAccess(
       response: Response;
     }
 > {
-  const principalId = readNonEmptyString(input.principalId);
+  let principalId = readNonEmptyString(input.principalId);
+  if (!principalId) {
+    const sessionPrincipal = await resolveSessionPrincipalForWorkspace(request, env, input.workspaceId);
+    if ("response" in sessionPrincipal) {
+      return {
+        response: sessionPrincipal.response
+      };
+    }
+
+    principalId = sessionPrincipal.principalId;
+  }
   if (!principalId) {
     return {
       response: badRequest("principalId is required for workspace catalog ingress.")
+    };
+  }
+
+  const membershipResponse = await enforceActiveUserWorkspaceMembership(env.DB, {
+    mode: "user",
+    principalId,
+    workspaceId: input.workspaceId
+  });
+  if (membershipResponse) {
+    return {
+      response: membershipResponse
     };
   }
 
@@ -4159,6 +5116,37 @@ async function resolveWorkspaceCatalogAccess(
     principalId,
     workspaceId: input.workspaceId
   };
+}
+
+async function enforceActiveUserWorkspaceMembership(
+  db: D1Database,
+  input: {
+    mode: "agent" | "user" | "workflow";
+    principalId: string;
+    workspaceId: string;
+  }
+): Promise<Response | null> {
+  if (input.mode !== "user") {
+    return null;
+  }
+
+  const repository = createCloudTableD1Repository(db);
+  const hasFoundation = await repository.workspaceHasMembershipFoundation(input.workspaceId);
+  if (!hasFoundation) {
+    return null;
+  }
+
+  const isMember = await repository.userHasActiveWorkspaceMembership({
+    principalId: input.principalId,
+    workspaceId: input.workspaceId
+  });
+  if (isMember) {
+    return null;
+  }
+
+  return forbidden(
+    `Principal ${input.principalId} is not an active workspace member for ${input.workspaceId}.`
+  );
 }
 
 function readWorkspaceInspectionInclude(searchParams: URLSearchParams):

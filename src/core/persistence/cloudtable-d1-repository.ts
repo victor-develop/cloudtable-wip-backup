@@ -1,4 +1,5 @@
 import { createFieldTypeRegistry } from "../field-types/registry";
+import { readComputedFieldConfig } from "../field-types/computed";
 import type {
   FieldIndexValue,
   FieldTypeRegistry,
@@ -21,16 +22,25 @@ import { validateWorkflowConditionBindings } from "../workflows/authoring";
 import { buildWorkflowAuthoringMetadataForFields as buildSharedWorkflowAuthoringMetadataForFields } from "../workflows/binding-metadata";
 import type {
   WorkflowActionBinding,
+  WorkflowAggregateDefinition,
   WorkflowAuthoringMetadata,
   WorkflowConditionBinding,
+  WorkflowDefinitionMetadata,
   WorkflowDefinition,
+  WorkflowLookupDefinition,
+  WorkflowRelatedTableResolver,
   WorkflowTriggerBinding
 } from "../workflows/types";
 import type {
   ActivityHistoryEntry,
+  AuthSessionRecord,
+  CanonicalUserRecord,
   CloudTableRepository,
+  InvitationRecord,
   OutboxRow,
-  ReceiptRow
+  ProvisionWorkspaceMembershipIdentityInput,
+  ReceiptRow,
+  WorkspaceMembershipIdentityRecord
 } from "./types";
 
 type SequenceRow = {
@@ -122,6 +132,65 @@ type ActivityHistoryRow = {
   workspace_sequence: number;
 };
 
+type WorkspaceMembershipIdentityRow = {
+  organization_id: string;
+  organization_membership_id: string;
+  organization_membership_status: string;
+  organization_name: string;
+  organization_role_key: string;
+  organization_slug: string;
+  principal_id: string;
+  user_display_name: string | null;
+  user_email: string | null;
+  user_id: string;
+  workspace_id: string;
+  workspace_membership_id: string;
+  workspace_membership_status: string;
+  workspace_principal_id: string | null;
+  workspace_principal_role_key: string | null;
+  workspace_role_key: string;
+};
+
+type CountRow = {
+  count: number;
+};
+
+type CanonicalUserRow = {
+  user_display_name: string | null;
+  user_email: string | null;
+  user_id: string;
+};
+
+type AuthSessionRow = {
+  active_workspace_id: string | null;
+  created_at: string;
+  expires_at: string;
+  last_authenticated_at: string;
+  session_id: string;
+  user_display_name: string | null;
+  user_email: string | null;
+  user_id: string;
+};
+
+type InvitationRow = {
+  accepted_at: string | null;
+  created_at: string;
+  expires_at: string;
+  id: string;
+  invited_by_user_id: string | null;
+  invited_email: string;
+  organization_id: string;
+  organization_name: string;
+  organization_slug: string;
+  role_key: string;
+  status: string;
+  token_hash: string;
+  updated_at: string;
+  workspace_id: string;
+  workspace_name: string;
+  workspace_slug: string;
+};
+
 const workflowOperatorRegistry = createWorkflowOperatorRegistry();
 
 function parseReceipt(row: ReceiptRow): IdempotencyReceipt {
@@ -185,14 +254,247 @@ function mapActivityHistoryRow(row: ActivityHistoryRow): ActivityHistoryEntry {
   };
 }
 
+function mapWorkspaceMembershipIdentityRow(
+  row: WorkspaceMembershipIdentityRow
+): WorkspaceMembershipIdentityRecord {
+  return {
+    organizationId: row.organization_id,
+    organizationMembershipId: row.organization_membership_id,
+    organizationMembershipStatus: row.organization_membership_status,
+    organizationName: row.organization_name,
+    organizationRoleKey: row.organization_role_key,
+    organizationSlug: row.organization_slug,
+    principalId: row.principal_id,
+    userDisplayName: row.user_display_name,
+    userEmail: row.user_email,
+    userId: row.user_id,
+    workspaceId: row.workspace_id,
+    workspaceMembershipId: row.workspace_membership_id,
+    workspaceMembershipStatus: row.workspace_membership_status,
+    workspacePrincipalId: row.workspace_principal_id,
+    workspacePrincipalRoleKey: row.workspace_principal_role_key,
+    workspaceRoleKey: row.workspace_role_key
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function asWorkflowDefinition(
+function mapCanonicalUserRow(row: CanonicalUserRow): CanonicalUserRecord {
+  return {
+    displayName: row.user_display_name,
+    primaryEmail: row.user_email,
+    userId: row.user_id
+  };
+}
+
+function mapAuthSessionRow(row: AuthSessionRow): AuthSessionRecord {
+  return {
+    activeWorkspaceId: row.active_workspace_id,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    lastAuthenticatedAt: row.last_authenticated_at,
+    sessionId: row.session_id,
+    userDisplayName: row.user_display_name,
+    userEmail: row.user_email,
+    userId: row.user_id
+  };
+}
+
+function mapInvitationRow(row: InvitationRow): InvitationRecord {
+  return {
+    acceptedAt: row.accepted_at,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    id: row.id,
+    invitedByUserId: row.invited_by_user_id,
+    invitedEmail: row.invited_email,
+    organizationId: row.organization_id,
+    organizationName: row.organization_name,
+    organizationSlug: row.organization_slug,
+    roleKey: row.role_key,
+    status: row.status,
+    tokenHash: row.token_hash,
+    updatedAt: row.updated_at,
+    workspaceId: row.workspace_id,
+    workspaceName: row.workspace_name,
+    workspaceSlug: row.workspace_slug
+  };
+}
+
+function asWorkflowDefinition(value: unknown): WorkflowDefinition | null {
+  return isRecord(value) ? (value as WorkflowDefinition) : null;
+}
+
+function normalizeWorkflowRelatedTableResolvers(
   value: unknown
-): (WorkflowDefinition & { metadata?: Record<string, unknown> }) | null {
-  return isRecord(value) ? (value as WorkflowDefinition & { metadata?: Record<string, unknown> }) : null;
+): WorkflowRelatedTableResolver[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value
+    .filter(isRecord)
+    .map((resolver) => {
+      if (resolver.strategy === "value_match") {
+        return {
+          alias: typeof resolver.alias === "string" ? resolver.alias.trim() : "",
+          sourceFieldId:
+            typeof resolver.sourceFieldId === "string" ? resolver.sourceFieldId.trim() : "",
+          strategy: "value_match" as const,
+          targetFieldId:
+            typeof resolver.targetFieldId === "string" ? resolver.targetFieldId.trim() : "",
+          targetTableId:
+            typeof resolver.targetTableId === "string" ? resolver.targetTableId.trim() : ""
+        };
+      }
+
+      return {
+        alias: typeof resolver.alias === "string" ? resolver.alias.trim() : "",
+        sourceFieldId:
+          typeof resolver.sourceFieldId === "string" ? resolver.sourceFieldId.trim() : "",
+        strategy: "single_relation" as const,
+        targetTableId:
+          typeof resolver.targetTableId === "string" ? resolver.targetTableId.trim() : ""
+      };
+    });
+}
+
+function normalizeWorkflowAggregateDefinitions(
+  value: unknown
+): WorkflowAggregateDefinition[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value.filter(isRecord).map((definition) => {
+    const groupingSource = isRecord(definition.groupingSource)
+      ? definition.groupingSource
+      : {};
+    const dependencyFieldIds = Array.isArray(definition.dependencyFieldIds)
+      ? Array.from(
+          new Set(
+            definition.dependencyFieldIds.filter(
+              (fieldId): fieldId is string =>
+                typeof fieldId === "string" && fieldId.trim().length > 0
+            )
+          )
+        )
+      : undefined;
+    const operand = isRecord(definition.operand) ? definition.operand : null;
+
+    return {
+      alias: typeof definition.alias === "string" ? definition.alias.trim() : "",
+      ...(dependencyFieldIds && dependencyFieldIds.length > 0
+        ? { dependencyFieldIds }
+        : {}),
+      groupingSource: {
+        kind: groupingSource.kind === "related_record" ? "related_record" : "related_record",
+        resolverAlias:
+          typeof groupingSource.resolverAlias === "string"
+            ? groupingSource.resolverAlias.trim()
+            : ""
+      },
+      ...(operand
+        ? {
+            operand: {
+              fieldId: typeof operand.fieldId === "string" ? operand.fieldId.trim() : "",
+              kind: operand.kind === "source_field" ? "source_field" : "source_field",
+              valueType: operand.valueType === "number" ? "number" : "number"
+            }
+          }
+        : {}),
+      operationConfig:
+        isRecord(definition.operationConfig) &&
+        asJsonValue(definition.operationConfig) &&
+        !Array.isArray(asJsonValue(definition.operationConfig))
+          ? (asJsonValue(definition.operationConfig) as Record<string, JsonValue>)
+          : undefined,
+      operationId:
+        typeof definition.operationId === "string" ? definition.operationId.trim() : "",
+      sourceRelationPath:
+        typeof definition.sourceRelationPath === "string"
+          ? definition.sourceRelationPath.trim()
+          : "",
+      targetFieldId:
+        typeof definition.targetFieldId === "string" ? definition.targetFieldId.trim() : ""
+    };
+  });
+}
+
+function normalizeWorkflowLookupDefinitions(
+  value: unknown
+): WorkflowLookupDefinition[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value.filter(isRecord).map((definition) => {
+    const lookupSource = isRecord(definition.lookupSource) ? definition.lookupSource : {};
+    const dependencyFieldIds = Array.isArray(definition.dependencyFieldIds)
+      ? Array.from(
+          new Set(
+            definition.dependencyFieldIds.filter(
+              (fieldId): fieldId is string =>
+                typeof fieldId === "string" && fieldId.trim().length > 0
+            )
+          )
+        )
+      : undefined;
+
+    return {
+      alias: typeof definition.alias === "string" ? definition.alias.trim() : "",
+      ...(dependencyFieldIds && dependencyFieldIds.length > 0
+        ? { dependencyFieldIds }
+        : {}),
+      lookupSource: {
+        kind: lookupSource.kind === "related_record" ? "related_record" : "related_record",
+        resolverAlias:
+          typeof lookupSource.resolverAlias === "string"
+            ? lookupSource.resolverAlias.trim()
+            : ""
+      },
+      sourceRelationPath:
+        typeof definition.sourceRelationPath === "string"
+          ? definition.sourceRelationPath.trim()
+          : "",
+      targetFieldId:
+        typeof definition.targetFieldId === "string" ? definition.targetFieldId.trim() : "",
+      valueFieldId:
+        typeof definition.valueFieldId === "string" ? definition.valueFieldId.trim() : ""
+    };
+  });
+}
+
+function normalizeWorkflowRollupFieldIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const fieldIds = Array.from(
+    new Set(
+      value.filter((fieldId): fieldId is string => typeof fieldId === "string" && fieldId.trim().length > 0)
+    )
+  );
+
+  return fieldIds.length > 0 ? fieldIds : undefined;
+}
+
+function normalizeWorkflowLookupFieldIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const fieldIds = Array.from(
+    new Set(
+      value.filter(
+        (fieldId): fieldId is string => typeof fieldId === "string" && fieldId.trim().length > 0
+      )
+    )
+  );
+
+  return fieldIds.length > 0 ? fieldIds : undefined;
 }
 
 function normalizeWorkflowTriggerMatcher(match: unknown): WorkflowTriggerBinding["match"] {
@@ -224,7 +526,7 @@ function normalizeWorkflowTriggerMatcher(match: unknown): WorkflowTriggerBinding
 function normalizeWorkflowDefinition(
   command: EventLedgerCommit["command"],
   payload: Record<string, unknown>
-): WorkflowDefinition & { metadata: Record<string, unknown> } {
+): WorkflowDefinition & { metadata: WorkflowDefinitionMetadata } {
   const definition = asWorkflowDefinition(payload.definition) ?? {
     actions: [],
     conditions: [],
@@ -233,12 +535,44 @@ function normalizeWorkflowDefinition(
     },
     workflowId: String(payload.workflowId ?? "")
   };
-  const metadata = {
-    ...(isRecord((definition as { metadata?: unknown }).metadata)
-      ? ((definition as { metadata?: Record<string, unknown> }).metadata ?? {})
-      : {}),
+  const metadata: WorkflowDefinitionMetadata = {
+    ...(isRecord(definition.metadata) ? definition.metadata : {}),
     status: "draft"
   };
+  const relatedTableResolvers = normalizeWorkflowRelatedTableResolvers(
+    metadata.relatedTableResolvers
+  );
+  if (relatedTableResolvers && relatedTableResolvers.length > 0) {
+    metadata.relatedTableResolvers = relatedTableResolvers;
+  } else {
+    delete metadata.relatedTableResolvers;
+  }
+  const aggregateDefinitions = normalizeWorkflowAggregateDefinitions(
+    metadata.aggregateDefinitions
+  );
+  if (aggregateDefinitions && aggregateDefinitions.length > 0) {
+    metadata.aggregateDefinitions = aggregateDefinitions;
+  } else {
+    delete metadata.aggregateDefinitions;
+  }
+  const lookupDefinitions = normalizeWorkflowLookupDefinitions(metadata.lookupDefinitions);
+  if (lookupDefinitions && lookupDefinitions.length > 0) {
+    metadata.lookupDefinitions = lookupDefinitions;
+  } else {
+    delete metadata.lookupDefinitions;
+  }
+  const rollupFieldIds = normalizeWorkflowRollupFieldIds(metadata.rollupFieldIds);
+  if (rollupFieldIds && rollupFieldIds.length > 0) {
+    metadata.rollupFieldIds = rollupFieldIds;
+  } else {
+    delete metadata.rollupFieldIds;
+  }
+  const lookupFieldIds = normalizeWorkflowLookupFieldIds(metadata.lookupFieldIds);
+  if (lookupFieldIds && lookupFieldIds.length > 0) {
+    metadata.lookupFieldIds = lookupFieldIds;
+  } else {
+    delete metadata.lookupFieldIds;
+  }
 
   return {
     actions: Array.isArray(definition.actions) ? definition.actions : [],
@@ -263,9 +597,9 @@ function normalizeWorkflowDefinition(
 }
 
 function updateWorkflowStatus(
-  definition: WorkflowDefinition & { metadata?: Record<string, unknown> },
+  definition: WorkflowDefinition,
   status: "draft" | "published" | "paused"
-): WorkflowDefinition & { metadata: Record<string, unknown> } {
+): WorkflowDefinition & { metadata: WorkflowDefinitionMetadata } {
   return {
     ...definition,
     metadata: {
@@ -342,6 +676,173 @@ function assertPublishableWorkflowDefinition(definition: WorkflowDefinition): vo
   }
 }
 
+async function materializeWorkflowComputedFieldMetadata(
+  db: D1Database,
+  workspaceId: string,
+  definition: WorkflowDefinition & { metadata: WorkflowDefinitionMetadata }
+): Promise<WorkflowDefinition & { metadata: WorkflowDefinitionMetadata }> {
+  const rollupFieldIds = definition.metadata.rollupFieldIds;
+  const lookupFieldIds = definition.metadata.lookupFieldIds;
+  const sourceTableId =
+    typeof definition.metadata.tableId === "string" ? definition.metadata.tableId : null;
+  if (
+    ((!Array.isArray(rollupFieldIds) || rollupFieldIds.length === 0) &&
+      (!Array.isArray(lookupFieldIds) || lookupFieldIds.length === 0)) ||
+    !sourceTableId
+  ) {
+    return definition;
+  }
+
+  const relatedTableResolvers: WorkflowRelatedTableResolver[] = [];
+  const aggregateDefinitions: WorkflowAggregateDefinition[] = [];
+  const lookupDefinitions: WorkflowLookupDefinition[] = [];
+
+  for (const fieldId of rollupFieldIds ?? []) {
+    const field = await findFieldAcrossWorkspace(db, workspaceId, fieldId);
+    if (!field || field.archived_at !== null) {
+      throw new CommandCommitError(`workflow_rollup_field_missing:${fieldId}`);
+    }
+    if (field.field_type !== "computed.readonly") {
+      throw new CommandCommitError(
+        `workflow_rollup_field_type_invalid:${fieldId}:${field.field_type}`
+      );
+    }
+
+    const computedConfig = readComputedFieldConfig(parseFieldConfig(field.config_json));
+    const rollup = computedConfig?.rollup;
+    if (!rollup) {
+      throw new CommandCommitError(`workflow_rollup_field_config_missing:${fieldId}`);
+    }
+    if (rollup.sourceTableId !== sourceTableId) {
+      throw new CommandCommitError(
+        `workflow_rollup_field_source_table_mismatch:${fieldId}:${rollup.sourceTableId}:${sourceTableId}`
+      );
+    }
+
+    const resolverAlias = `rollup_${field.id}`;
+    relatedTableResolvers.push(
+      rollup.grouping.strategy === "value_match"
+        ? {
+            alias: resolverAlias,
+            sourceFieldId: rollup.grouping.sourceFieldId,
+            strategy: "value_match",
+            targetFieldId: rollup.grouping.targetFieldId,
+            targetTableId: field.table_id
+          }
+        : {
+            alias: resolverAlias,
+            sourceFieldId: rollup.grouping.sourceFieldId,
+            strategy: "single_relation",
+            targetTableId: field.table_id
+          }
+    );
+    aggregateDefinitions.push({
+      alias: field.id,
+      ...(computedConfig?.dependsOnFieldIds && computedConfig.dependsOnFieldIds.length > 0
+        ? {
+            dependencyFieldIds: [...computedConfig.dependsOnFieldIds]
+          }
+        : {}),
+      groupingSource: {
+        kind: "related_record",
+        resolverAlias
+      },
+      ...(rollup.operandFieldId
+        ? {
+            operand: {
+              fieldId: rollup.operandFieldId,
+              kind: "source_field" as const,
+              valueType: "number" as const
+            }
+          }
+        : {}),
+      ...(rollup.operationConfig ? { operationConfig: rollup.operationConfig } : {}),
+      operationId: rollup.operationId,
+      sourceRelationPath: `relatedTables.${resolverAlias}`,
+      targetFieldId: field.id
+    });
+  }
+
+  for (const fieldId of lookupFieldIds ?? []) {
+    const field = await findFieldAcrossWorkspace(db, workspaceId, fieldId);
+    if (!field || field.archived_at !== null) {
+      throw new CommandCommitError(`workflow_lookup_field_missing:${fieldId}`);
+    }
+    if (field.field_type !== "computed.readonly") {
+      throw new CommandCommitError(
+        `workflow_lookup_field_type_invalid:${fieldId}:${field.field_type}`
+      );
+    }
+    if (field.table_id !== sourceTableId) {
+      throw new CommandCommitError(
+        `workflow_lookup_field_table_mismatch:${fieldId}:${field.table_id}:${sourceTableId}`
+      );
+    }
+
+    const computedConfig = readComputedFieldConfig(parseFieldConfig(field.config_json));
+    const lookup = computedConfig?.lookup;
+    if (!lookup) {
+      throw new CommandCommitError(`workflow_lookup_field_config_missing:${fieldId}`);
+    }
+
+    const sourceField = await findFieldAcrossWorkspace(db, workspaceId, lookup.sourceFieldId);
+    if (!sourceField || sourceField.archived_at !== null) {
+      throw new CommandCommitError(
+        `workflow_lookup_source_field_missing:${fieldId}:${lookup.sourceFieldId}`
+      );
+    }
+    if (sourceField.table_id !== sourceTableId) {
+      throw new CommandCommitError(
+        `workflow_lookup_source_field_table_mismatch:${fieldId}:${lookup.sourceFieldId}:${sourceField.table_id}:${sourceTableId}`
+      );
+    }
+
+    const sourceFieldConfig = parseFieldConfig(sourceField.config_json);
+    const resolverTargetTableId =
+      isRecord(sourceFieldConfig) && typeof sourceFieldConfig.targetTableId === "string"
+        ? sourceFieldConfig.targetTableId
+        : null;
+    if (!resolverTargetTableId) {
+      throw new CommandCommitError(
+        `workflow_lookup_source_field_target_table_missing:${fieldId}:${lookup.sourceFieldId}`
+      );
+    }
+
+    const resolverAlias = `lookup_${field.id}`;
+    relatedTableResolvers.push({
+      alias: resolverAlias,
+      sourceFieldId: lookup.sourceFieldId,
+      strategy: "single_relation",
+      targetTableId: resolverTargetTableId
+    });
+    lookupDefinitions.push({
+      alias: field.id,
+      ...(computedConfig?.dependsOnFieldIds && computedConfig.dependsOnFieldIds.length > 0
+        ? {
+            dependencyFieldIds: [...computedConfig.dependsOnFieldIds]
+          }
+        : {}),
+      lookupSource: {
+        kind: "related_record",
+        resolverAlias
+      },
+      sourceRelationPath: `relatedTables.${resolverAlias}`,
+      targetFieldId: field.id,
+      valueFieldId: lookup.targetFieldId
+    });
+  }
+
+  return {
+    ...definition,
+    metadata: {
+      ...definition.metadata,
+      aggregateDefinitions,
+      lookupDefinitions,
+      relatedTableResolvers
+    }
+  };
+}
+
 function buildWorkflowAuthoringMetadataForFields(
   fieldTypeRegistry: FieldTypeRegistry,
   fields: readonly FieldRow[]
@@ -361,6 +862,604 @@ function assertWorkflowConditionBindings(
   const diagnostics = validateWorkflowConditionBindings(definition, authoringMetadata);
   if (diagnostics.length > 0) {
     throw new CommandCommitError(diagnostics[0] ?? "workflow_condition_binding_invalid");
+  }
+}
+
+function isScalarValueMatchedField(
+  fieldTypeRegistry: FieldTypeRegistry,
+  field: FieldRow
+): boolean {
+  const definition = fieldTypeRegistry.get(field.field_type);
+  if (!definition) {
+    return false;
+  }
+
+  const { capabilities } = definition;
+  return (
+    capabilities.scalar &&
+    !capabilities.multiValue &&
+    !capabilities.reference &&
+    !capabilities.computed
+  );
+}
+
+function isSupportedWorkflowSyncField(
+  fieldTypeRegistry: FieldTypeRegistry,
+  field: FieldRow
+): boolean {
+  const definition = fieldTypeRegistry.get(field.field_type);
+  if (!definition) {
+    return false;
+  }
+
+  const { capabilities } = definition;
+  return (
+    capabilities.scalar &&
+    !capabilities.multiValue &&
+    !capabilities.reference &&
+    !capabilities.computed
+  );
+}
+
+async function assertWorkflowRelatedTableResolvers(
+  db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
+  workspaceId: string,
+  definition: WorkflowDefinition,
+  fields: readonly FieldRow[]
+): Promise<void> {
+  const resolvers = definition.metadata?.relatedTableResolvers;
+  if (!Array.isArray(resolvers) || resolvers.length === 0) {
+    return;
+  }
+
+  const fieldsById = new Map(fields.map((field) => [field.id, field]));
+  const seenAliases = new Set<string>();
+  const targetFieldsByTableId = new Map<string, readonly FieldRow[]>();
+
+  for (const [index, resolver] of resolvers.entries()) {
+    if (typeof resolver.alias !== "string" || resolver.alias.trim().length === 0) {
+      throw new CommandCommitError(`workflow_related_table_resolver_alias_invalid:${index}`);
+    }
+    if (seenAliases.has(resolver.alias)) {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_alias_duplicate:${resolver.alias}`
+      );
+    }
+    seenAliases.add(resolver.alias);
+
+    if (
+      typeof resolver.sourceFieldId !== "string" ||
+      resolver.sourceFieldId.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_source_field_invalid:${resolver.alias}`
+      );
+    }
+    if (
+      typeof resolver.targetTableId !== "string" ||
+      resolver.targetTableId.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_target_table_invalid:${resolver.alias}`
+      );
+    }
+    if (resolver.strategy !== "single_relation" && resolver.strategy !== "value_match") {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_strategy_unsupported:${resolver.alias}:${resolver.strategy}`
+      );
+    }
+
+    const field = fieldsById.get(resolver.sourceFieldId);
+    if (!field) {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_source_field_missing:${resolver.alias}:${resolver.sourceFieldId}`
+      );
+    }
+
+    if (resolver.strategy === "single_relation") {
+      if (field.field_type !== "relation.record") {
+        throw new CommandCommitError(
+          `workflow_related_table_resolver_source_field_type_invalid:${resolver.alias}:${field.field_type}`
+        );
+      }
+
+      const fieldConfig = parseFieldConfig(field.config_json);
+      const configuredTargetTableId =
+        isRecord(fieldConfig) && typeof fieldConfig.targetTableId === "string"
+          ? fieldConfig.targetTableId
+          : null;
+      if (configuredTargetTableId !== resolver.targetTableId) {
+        throw new CommandCommitError(
+          `workflow_related_table_resolver_target_table_mismatch:${resolver.alias}:${resolver.targetTableId}:${configuredTargetTableId ?? "missing"}`
+        );
+      }
+      if (!isRecord(fieldConfig) || fieldConfig.allowMultiple !== false) {
+        throw new CommandCommitError(
+          `workflow_related_table_resolver_requires_single_relation:${resolver.alias}:${resolver.sourceFieldId}`
+        );
+      }
+      continue;
+    }
+
+    if (!isScalarValueMatchedField(fieldTypeRegistry, field)) {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_source_field_type_invalid:${resolver.alias}:${field.field_type}`
+      );
+    }
+    if (
+      typeof resolver.targetFieldId !== "string" ||
+      resolver.targetFieldId.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_target_field_invalid:${resolver.alias}`
+      );
+    }
+
+    let targetFields = targetFieldsByTableId.get(resolver.targetTableId);
+    if (!targetFields) {
+      targetFields = await listFields(db, workspaceId, resolver.targetTableId);
+      targetFieldsByTableId.set(resolver.targetTableId, targetFields);
+    }
+
+    const targetField = targetFields.find((candidate) => candidate.id === resolver.targetFieldId);
+    if (!targetField) {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_target_field_missing:${resolver.alias}:${resolver.targetFieldId}`
+      );
+    }
+    if (!isScalarValueMatchedField(fieldTypeRegistry, targetField)) {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_target_field_type_invalid:${resolver.alias}:${targetField.field_type}`
+      );
+    }
+    if (targetField.field_type !== field.field_type) {
+      throw new CommandCommitError(
+        `workflow_related_table_resolver_field_type_mismatch:${resolver.alias}:${field.field_type}:${targetField.field_type}`
+      );
+    }
+  }
+}
+
+async function assertWorkflowAggregateDefinitions(
+  db: D1Database,
+  workspaceId: string,
+  definition: WorkflowDefinition,
+  sourceFields: readonly FieldRow[]
+): Promise<void> {
+  const aggregateDefinitions = definition.metadata?.aggregateDefinitions;
+  if (!Array.isArray(aggregateDefinitions) || aggregateDefinitions.length === 0) {
+    return;
+  }
+
+  const sourceFieldsById = new Map(sourceFields.map((field) => [field.id, field]));
+  const resolverByAlias = new Map(
+    (definition.metadata?.relatedTableResolvers ?? []).map((resolver) => [resolver.alias, resolver])
+  );
+  const seenAliases = new Set<string>();
+  const targetFieldsByTableId = new Map<string, readonly FieldRow[]>();
+
+  for (const [index, aggregate] of aggregateDefinitions.entries()) {
+    if (typeof aggregate.alias !== "string" || aggregate.alias.trim().length === 0) {
+      throw new CommandCommitError(`workflow_aggregate_definition_alias_invalid:${index}`);
+    }
+    if (seenAliases.has(aggregate.alias)) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_alias_duplicate:${aggregate.alias}`
+      );
+    }
+    seenAliases.add(aggregate.alias);
+
+    if (
+      typeof aggregate.sourceRelationPath !== "string" ||
+      aggregate.sourceRelationPath.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_source_relation_path_invalid:${aggregate.alias}`
+      );
+    }
+    if (
+      !isRecord(aggregate.groupingSource) ||
+      aggregate.groupingSource.kind !== "related_record" ||
+      typeof aggregate.groupingSource.resolverAlias !== "string" ||
+      aggregate.groupingSource.resolverAlias.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_grouping_source_invalid:${aggregate.alias}`
+      );
+    }
+    if (
+      typeof aggregate.targetFieldId !== "string" ||
+      aggregate.targetFieldId.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_target_field_invalid:${aggregate.alias}`
+      );
+    }
+    if (typeof aggregate.operationId !== "string" || aggregate.operationId.trim().length === 0) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_operation_invalid:${aggregate.alias}`
+      );
+    }
+    if (aggregate.operand !== undefined) {
+      if (
+        !isRecord(aggregate.operand) ||
+        aggregate.operand.kind !== "source_field" ||
+        typeof aggregate.operand.fieldId !== "string" ||
+        aggregate.operand.fieldId.trim().length === 0 ||
+        aggregate.operand.valueType !== "number"
+      ) {
+        throw new CommandCommitError(
+          `workflow_aggregate_definition_operand_invalid:${aggregate.alias}`
+        );
+      }
+    }
+
+    const resolver = resolverByAlias.get(aggregate.groupingSource.resolverAlias);
+    if (!resolver) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_resolver_missing:${aggregate.alias}:${aggregate.groupingSource.resolverAlias}`
+      );
+    }
+    if (
+      !aggregate.sourceRelationPath.startsWith(`relatedTables.${aggregate.groupingSource.resolverAlias}`)
+    ) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_source_relation_path_mismatch:${aggregate.alias}:${aggregate.sourceRelationPath}`
+      );
+    }
+
+    const relationField = sourceFieldsById.get(resolver.sourceFieldId);
+    if (!relationField) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_relation_field_missing:${aggregate.alias}:${resolver.sourceFieldId}`
+      );
+    }
+    if (resolver.strategy === "single_relation") {
+      if (relationField.field_type !== "relation.record") {
+        throw new CommandCommitError(
+          `workflow_aggregate_definition_relation_field_type_invalid:${aggregate.alias}:${relationField.field_type}`
+        );
+      }
+
+      const relationFieldConfig = parseFieldConfig(relationField.config_json);
+      const configuredTargetTableId =
+        isRecord(relationFieldConfig) && typeof relationFieldConfig.targetTableId === "string"
+          ? relationFieldConfig.targetTableId
+          : null;
+      if (configuredTargetTableId !== resolver.targetTableId) {
+        throw new CommandCommitError(
+          `workflow_aggregate_definition_target_table_mismatch:${aggregate.alias}:${resolver.targetTableId}:${configuredTargetTableId ?? "missing"}`
+        );
+      }
+      if (!isRecord(relationFieldConfig) || relationFieldConfig.allowMultiple !== false) {
+        throw new CommandCommitError(
+          `workflow_aggregate_definition_requires_single_relation:${aggregate.alias}:${resolver.sourceFieldId}`
+        );
+      }
+    }
+
+    if (aggregate.operationId === "sum_numbers" && aggregate.operand === undefined) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_operand_required:${aggregate.alias}:${aggregate.operationId}`
+      );
+    }
+    if (aggregate.operationId !== "sum_numbers" && aggregate.operand !== undefined) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_operand_unsupported:${aggregate.alias}:${aggregate.operationId}`
+      );
+    }
+    if (aggregate.operand) {
+      const operandField = sourceFieldsById.get(aggregate.operand.fieldId);
+      if (!operandField) {
+        throw new CommandCommitError(
+          `workflow_aggregate_definition_operand_field_missing:${aggregate.alias}:${aggregate.operand.fieldId}`
+        );
+      }
+      if (!isNumericAggregateSourceFieldType(operandField.field_type)) {
+        throw new CommandCommitError(
+          `workflow_aggregate_definition_operand_field_type_invalid:${aggregate.alias}:${operandField.field_type}`
+        );
+      }
+    }
+
+    const declaredDependencyFieldIds = [
+      resolver.sourceFieldId,
+      ...(aggregate.operand ? [aggregate.operand.fieldId] : []),
+      ...(aggregate.dependencyFieldIds ?? [])
+    ];
+    const dependencyFieldIds = Array.from(new Set(declaredDependencyFieldIds));
+    if (dependencyFieldIds.length !== declaredDependencyFieldIds.length) {
+      const duplicateFieldId = declaredDependencyFieldIds.find(
+        (fieldId, fieldIndex, fieldIds) => fieldIds.indexOf(fieldId) !== fieldIndex
+      );
+      if (duplicateFieldId) {
+        throw new CommandCommitError(
+          `workflow_aggregate_definition_dependency_field_duplicate:${aggregate.alias}:${duplicateFieldId}`
+        );
+      }
+    }
+    for (const dependencyFieldId of dependencyFieldIds) {
+      if (!sourceFieldsById.has(dependencyFieldId)) {
+        throw new CommandCommitError(
+          `workflow_aggregate_definition_dependency_field_missing:${aggregate.alias}:${dependencyFieldId}`
+        );
+      }
+    }
+
+    let targetFields = targetFieldsByTableId.get(resolver.targetTableId);
+    if (!targetFields) {
+      targetFields = await listFields(db, workspaceId, resolver.targetTableId);
+      targetFieldsByTableId.set(resolver.targetTableId, targetFields);
+    }
+    const targetField = targetFields.find((field) => field.id === aggregate.targetFieldId);
+    if (!targetField) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_target_field_missing:${aggregate.alias}:${aggregate.targetFieldId}`
+      );
+    }
+    if (targetField.field_type !== "computed.readonly") {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_target_field_type_invalid:${aggregate.alias}:${targetField.field_type}`
+      );
+    }
+  }
+}
+
+async function assertWorkflowLookupDefinitions(
+  db: D1Database,
+  workspaceId: string,
+  definition: WorkflowDefinition,
+  sourceFields: readonly FieldRow[]
+): Promise<void> {
+  const lookupDefinitions = definition.metadata?.lookupDefinitions;
+  if (!Array.isArray(lookupDefinitions) || lookupDefinitions.length === 0) {
+    return;
+  }
+
+  const sourceFieldsById = new Map(sourceFields.map((field) => [field.id, field]));
+  const resolverByAlias = new Map(
+    (definition.metadata?.relatedTableResolvers ?? []).map((resolver) => [resolver.alias, resolver])
+  );
+  const seenAliases = new Set<string>();
+  const targetFieldsByTableId = new Map<string, readonly FieldRow[]>();
+
+  for (const [index, lookup] of lookupDefinitions.entries()) {
+    if (typeof lookup.alias !== "string" || lookup.alias.trim().length === 0) {
+      throw new CommandCommitError(`workflow_lookup_definition_alias_invalid:${index}`);
+    }
+    if (seenAliases.has(lookup.alias)) {
+      throw new CommandCommitError(`workflow_lookup_definition_alias_duplicate:${lookup.alias}`);
+    }
+    seenAliases.add(lookup.alias);
+
+    if (
+      typeof lookup.sourceRelationPath !== "string" ||
+      lookup.sourceRelationPath.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_source_relation_path_invalid:${lookup.alias}`
+      );
+    }
+    if (
+      !isRecord(lookup.lookupSource) ||
+      lookup.lookupSource.kind !== "related_record" ||
+      typeof lookup.lookupSource.resolverAlias !== "string" ||
+      lookup.lookupSource.resolverAlias.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_lookup_source_invalid:${lookup.alias}`
+      );
+    }
+    if (
+      typeof lookup.targetFieldId !== "string" ||
+      lookup.targetFieldId.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_target_field_invalid:${lookup.alias}`
+      );
+    }
+    if (
+      typeof lookup.valueFieldId !== "string" ||
+      lookup.valueFieldId.trim().length === 0
+    ) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_value_field_invalid:${lookup.alias}`
+      );
+    }
+
+    const resolver = resolverByAlias.get(lookup.lookupSource.resolverAlias);
+    if (!resolver) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_resolver_missing:${lookup.alias}:${lookup.lookupSource.resolverAlias}`
+      );
+    }
+    if (resolver.strategy !== "single_relation") {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_requires_single_relation:${lookup.alias}:${resolver.sourceFieldId}`
+      );
+    }
+    if (!lookup.sourceRelationPath.startsWith(`relatedTables.${lookup.lookupSource.resolverAlias}`)) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_source_relation_path_mismatch:${lookup.alias}:${lookup.sourceRelationPath}`
+      );
+    }
+
+    const relationField = sourceFieldsById.get(resolver.sourceFieldId);
+    if (!relationField) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_relation_field_missing:${lookup.alias}:${resolver.sourceFieldId}`
+      );
+    }
+    if (relationField.field_type !== "relation.record") {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_relation_field_type_invalid:${lookup.alias}:${relationField.field_type}`
+      );
+    }
+
+    const relationFieldConfig = parseFieldConfig(relationField.config_json);
+    const configuredTargetTableId =
+      isRecord(relationFieldConfig) && typeof relationFieldConfig.targetTableId === "string"
+        ? relationFieldConfig.targetTableId
+        : null;
+    if (configuredTargetTableId !== resolver.targetTableId) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_target_table_mismatch:${lookup.alias}:${resolver.targetTableId}:${configuredTargetTableId ?? "missing"}`
+      );
+    }
+    if (!isRecord(relationFieldConfig) || relationFieldConfig.allowMultiple !== false) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_requires_single_relation:${lookup.alias}:${resolver.sourceFieldId}`
+      );
+    }
+
+    const declaredDependencyFieldIds = [
+      resolver.sourceFieldId,
+      ...(lookup.dependencyFieldIds ?? [])
+    ];
+    const dependencyFieldIds = Array.from(new Set(declaredDependencyFieldIds));
+    if (dependencyFieldIds.length !== declaredDependencyFieldIds.length) {
+      const duplicateFieldId = declaredDependencyFieldIds.find(
+        (fieldId, fieldIndex, fieldIds) => fieldIds.indexOf(fieldId) !== fieldIndex
+      );
+      if (duplicateFieldId) {
+        throw new CommandCommitError(
+          `workflow_lookup_definition_dependency_field_duplicate:${lookup.alias}:${duplicateFieldId}`
+        );
+      }
+    }
+    for (const dependencyFieldId of dependencyFieldIds) {
+      if (!sourceFieldsById.has(dependencyFieldId)) {
+        throw new CommandCommitError(
+          `workflow_lookup_definition_dependency_field_missing:${lookup.alias}:${dependencyFieldId}`
+        );
+      }
+    }
+
+    const lookupTargetField = sourceFieldsById.get(lookup.targetFieldId);
+    if (!lookupTargetField) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_target_field_missing:${lookup.alias}:${lookup.targetFieldId}`
+      );
+    }
+    if (lookupTargetField.field_type !== "computed.readonly") {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_target_field_type_invalid:${lookup.alias}:${lookupTargetField.field_type}`
+      );
+    }
+
+    let targetFields = targetFieldsByTableId.get(resolver.targetTableId);
+    if (!targetFields) {
+      targetFields = await listFields(db, workspaceId, resolver.targetTableId);
+      targetFieldsByTableId.set(resolver.targetTableId, targetFields);
+    }
+    const valueField = targetFields.find((field) => field.id === lookup.valueFieldId);
+    if (!valueField) {
+      throw new CommandCommitError(
+        `workflow_lookup_definition_value_field_missing:${lookup.alias}:${lookup.valueFieldId}`
+      );
+    }
+  }
+}
+
+async function assertWorkflowSyncActions(
+  db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
+  workspaceId: string,
+  definition: WorkflowDefinition,
+  sourceFields: readonly FieldRow[]
+): Promise<void> {
+  const sourceTableId =
+    typeof definition.metadata?.tableId === "string" ? definition.metadata.tableId : null;
+  if (!sourceTableId) {
+    return;
+  }
+
+  const resolverByAlias = new Map(
+    (definition.metadata?.relatedTableResolvers ?? []).map((resolver) => [resolver.alias, resolver])
+  );
+  const sourceFieldsById = new Map(sourceFields.map((field) => [field.id, field]));
+  const targetFieldsByTableId = new Map<string, readonly FieldRow[]>();
+
+  for (const [index, action] of definition.actions.entries()) {
+    if (action.operatorId !== "sync_related_field") {
+      continue;
+    }
+
+    if (!isRecord(action.input)) {
+      throw new CommandCommitError(`workflow_sync_action_input_invalid:${index}`);
+    }
+
+    const resolverAlias =
+      typeof action.input.resolverAlias === "string" && action.input.resolverAlias.trim().length > 0
+        ? action.input.resolverAlias
+        : null;
+    const sourceFieldId =
+      typeof action.input.sourceFieldId === "string" && action.input.sourceFieldId.trim().length > 0
+        ? action.input.sourceFieldId
+        : null;
+    const targetFieldId =
+      typeof action.input.targetFieldId === "string" && action.input.targetFieldId.trim().length > 0
+        ? action.input.targetFieldId
+        : null;
+
+    if (!resolverAlias || !sourceFieldId || !targetFieldId) {
+      throw new CommandCommitError(`workflow_sync_action_input_invalid:${index}`);
+    }
+
+    const resolver = resolverByAlias.get(resolverAlias);
+    if (!resolver) {
+      throw new CommandCommitError(
+        `workflow_sync_action_resolver_missing:${index}:${resolverAlias}`
+      );
+    }
+    if (resolver.targetTableId === sourceTableId) {
+      throw new CommandCommitError(
+        `workflow_sync_action_requires_cross_table_target:${index}:${resolverAlias}`
+      );
+    }
+
+    const sourceField = sourceFieldsById.get(sourceFieldId);
+    if (!sourceField) {
+      throw new CommandCommitError(
+        `workflow_sync_action_source_field_missing:${index}:${sourceFieldId}`
+      );
+    }
+    if (!isSupportedWorkflowSyncField(fieldTypeRegistry, sourceField)) {
+      throw new CommandCommitError(
+        `workflow_sync_action_source_field_type_invalid:${index}:${sourceField.field_type}`
+      );
+    }
+
+    let targetFields = targetFieldsByTableId.get(resolver.targetTableId);
+    if (!targetFields) {
+      targetFields = await listFields(db, workspaceId, resolver.targetTableId);
+      targetFieldsByTableId.set(resolver.targetTableId, targetFields);
+    }
+
+    const targetField = targetFields.find((field) => field.id === targetFieldId);
+    if (!targetField) {
+      throw new CommandCommitError(
+        `workflow_sync_action_target_field_missing:${index}:${targetFieldId}`
+      );
+    }
+    if (!isSupportedWorkflowSyncField(fieldTypeRegistry, targetField)) {
+      throw new CommandCommitError(
+        `workflow_sync_action_target_field_type_invalid:${index}:${targetField.field_type}`
+      );
+    }
+
+    const targetDefinition = fieldTypeRegistry.require(targetField.field_type);
+    if (!targetDefinition.capabilities.userEditable) {
+      throw new CommandCommitError(
+        `workflow_sync_action_target_field_not_writable:${index}:${targetField.id}`
+      );
+    }
+    if (targetField.field_type !== sourceField.field_type) {
+      throw new CommandCommitError(
+        `workflow_sync_action_field_type_mismatch:${index}:${sourceField.field_type}:${targetField.field_type}`
+      );
+    }
   }
 }
 
@@ -387,6 +1486,10 @@ function asJsonValue(value: unknown): JsonValue | null {
   }
 
   return null;
+}
+
+function isNumericAggregateSourceFieldType(fieldType: string): boolean {
+  return fieldType === "number.decimal";
 }
 
 function isSelectableOptionFieldType(fieldType: string): boolean {
@@ -2293,14 +3396,44 @@ async function appendDomainStatements(
         throw new CommandCommitError(`table_not_found:${tableId}`);
       }
 
-      const definition = normalizeWorkflowDefinition(command, {
-        ...payload,
-        tableId
-      });
+      const definition = await materializeWorkflowComputedFieldMetadata(
+        db,
+        command.workspaceId,
+        normalizeWorkflowDefinition(command, {
+          ...payload,
+          tableId
+        })
+      );
       const activeFields = await listFields(db, command.workspaceId, table.id);
       assertWorkflowConditionBindings(
         definition,
         buildWorkflowAuthoringMetadataForFields(fieldTypeRegistry, activeFields)
+      );
+      await assertWorkflowRelatedTableResolvers(
+        db,
+        fieldTypeRegistry,
+        command.workspaceId,
+        definition,
+        activeFields
+      );
+      await assertWorkflowAggregateDefinitions(
+        db,
+        command.workspaceId,
+        definition,
+        activeFields
+      );
+      await assertWorkflowLookupDefinitions(
+        db,
+        command.workspaceId,
+        definition,
+        activeFields
+      );
+      await assertWorkflowSyncActions(
+        db,
+        fieldTypeRegistry,
+        command.workspaceId,
+        definition,
+        activeFields
       );
       const workflowVersionId = `${workflowId}:v1`;
       const refs = workflowDefinitionRefs(definition);
@@ -2423,14 +3556,44 @@ async function appendDomainStatements(
         throw new CommandCommitError(`table_not_found:${tableId}`);
       }
 
-      const nextDefinition = normalizeWorkflowDefinition(command, {
-        ...payload,
-        tableId
-      });
+      const nextDefinition = await materializeWorkflowComputedFieldMetadata(
+        db,
+        command.workspaceId,
+        normalizeWorkflowDefinition(command, {
+          ...payload,
+          tableId
+        })
+      );
       const activeFields = await listFields(db, command.workspaceId, table.id);
       assertWorkflowConditionBindings(
         nextDefinition,
         buildWorkflowAuthoringMetadataForFields(fieldTypeRegistry, activeFields)
+      );
+      await assertWorkflowRelatedTableResolvers(
+        db,
+        fieldTypeRegistry,
+        command.workspaceId,
+        nextDefinition,
+        activeFields
+      );
+      await assertWorkflowAggregateDefinitions(
+        db,
+        command.workspaceId,
+        nextDefinition,
+        activeFields
+      );
+      await assertWorkflowLookupDefinitions(
+        db,
+        command.workspaceId,
+        nextDefinition,
+        activeFields
+      );
+      await assertWorkflowSyncActions(
+        db,
+        fieldTypeRegistry,
+        command.workspaceId,
+        nextDefinition,
+        activeFields
       );
       const refs = workflowDefinitionRefs(nextDefinition);
 
@@ -2592,6 +3755,32 @@ async function appendDomainStatements(
         assertWorkflowConditionBindings(
           parsedDefinition,
           buildWorkflowAuthoringMetadataForFields(fieldTypeRegistry, activeFields)
+        );
+        await assertWorkflowRelatedTableResolvers(
+          db,
+          fieldTypeRegistry,
+          command.workspaceId,
+          parsedDefinition,
+          activeFields
+        );
+        await assertWorkflowAggregateDefinitions(
+          db,
+          command.workspaceId,
+          parsedDefinition,
+          activeFields
+        );
+        await assertWorkflowLookupDefinitions(
+          db,
+          command.workspaceId,
+          parsedDefinition,
+          activeFields
+        );
+        await assertWorkflowSyncActions(
+          db,
+          fieldTypeRegistry,
+          command.workspaceId,
+          parsedDefinition,
+          activeFields
         );
         assertPublishableWorkflowDefinition(parsedDefinition);
       } else if (version.published_at == null) {
@@ -3290,6 +4479,199 @@ export function createCloudTableD1Repository(
   fieldTypeRegistry: FieldTypeRegistry = createFieldTypeRegistry()
 ): CloudTableRepository {
   return {
+    async acceptInvitation(input) {
+      const invitationRow = await db
+        .prepare(
+          `SELECT
+             invitations.id,
+             invitations.organization_id,
+             invitations.workspace_id,
+             invitations.invited_email,
+             invitations.role_key,
+             invitations.token_hash,
+             invitations.status,
+             invitations.invited_by_user_id,
+             invitations.expires_at,
+             invitations.accepted_at,
+             invitations.created_at,
+             invitations.updated_at,
+             o.slug AS organization_slug,
+             o.name AS organization_name,
+             w.slug AS workspace_slug,
+             w.name AS workspace_name
+           FROM invitations
+           INNER JOIN organizations o
+             ON o.id = invitations.organization_id
+           INNER JOIN workspaces w
+             ON w.id = invitations.workspace_id
+           WHERE invitations.id = ?
+           LIMIT 1`
+        )
+        .bind(input.invitationId)
+        .first<InvitationRow>();
+      if (!invitationRow) {
+        return null;
+      }
+
+      await this.provisionWorkspaceMembershipIdentity({
+        externalIdentity: input.acceptedExternalIdentity ?? null,
+        membership: {
+          organizationMembershipId: input.organizationMembershipId,
+          principalId: input.acceptedPrincipalId,
+          roleKey: invitationRow.role_key,
+          workspaceMembershipId: input.workspaceMembershipId
+        },
+        organization: {
+          id: invitationRow.organization_id,
+          name: invitationRow.organization_name,
+          slug: invitationRow.organization_slug
+        },
+        timestamp: input.timestamp,
+        user: {
+          displayName: input.acceptedDisplayName ?? null,
+          email: input.acceptedEmail,
+          id: input.acceptedUserId
+        },
+        workspace: {
+          id: invitationRow.workspace_id,
+          name: invitationRow.workspace_name,
+          slug: invitationRow.workspace_slug
+        }
+      });
+
+      await db.batch([
+        db
+          .prepare(
+            `UPDATE invitations
+             SET status = 'accepted',
+                 accepted_by_user_id = ?,
+                 accepted_at = ?,
+                 updated_at = ?
+             WHERE id = ?`
+          )
+          .bind(input.acceptedByUserId, input.timestamp, input.timestamp, input.invitationId)
+      ]);
+
+      return this.readWorkspaceMembershipIdentityForUser({
+        userId: input.acceptedUserId,
+        workspaceId: invitationRow.workspace_id
+      });
+    },
+
+    async createAuthSession(input) {
+      await db.batch([
+        db
+          .prepare(
+            `INSERT INTO auth_sessions (
+               id,
+               user_id,
+               active_workspace_id,
+               created_at,
+               updated_at,
+               last_authenticated_at,
+               expires_at,
+               archived_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               user_id = excluded.user_id,
+               active_workspace_id = excluded.active_workspace_id,
+               updated_at = excluded.updated_at,
+               last_authenticated_at = excluded.last_authenticated_at,
+               expires_at = excluded.expires_at,
+               archived_at = excluded.archived_at`
+          )
+          .bind(
+            input.sessionId,
+            input.userId,
+            input.activeWorkspaceId ?? null,
+            input.lastAuthenticatedAt,
+            input.lastAuthenticatedAt,
+            input.lastAuthenticatedAt,
+            input.expiresAt,
+            null
+          )
+      ]);
+
+      const record = await this.readAuthSession(input.sessionId);
+      if (!record) {
+        throw new Error(`Auth session ${input.sessionId} could not be read back after creation.`);
+      }
+
+      return record;
+    },
+
+    async createInvitation(input) {
+      const workspaceRow = await db
+        .prepare(
+          `SELECT
+             w.id AS workspace_id,
+             w.slug AS workspace_slug,
+             w.name AS workspace_name,
+             o.id AS organization_id,
+             o.slug AS organization_slug,
+             o.name AS organization_name
+           FROM workspaces w
+           INNER JOIN organizations o
+             ON o.id = w.organization_id
+           WHERE w.id = ?
+             AND w.archived_at IS NULL
+             AND o.archived_at IS NULL
+           LIMIT 1`
+        )
+        .bind(input.workspaceId)
+        .first<{
+          organization_id: string;
+          organization_name: string;
+          organization_slug: string;
+          workspace_id: string;
+          workspace_name: string;
+          workspace_slug: string;
+        }>();
+      if (!workspaceRow) {
+        return null;
+      }
+
+      await db.batch([
+        db
+          .prepare(
+            `INSERT INTO invitations (
+               id,
+               organization_id,
+               workspace_id,
+               invited_email,
+               role_key,
+               token_hash,
+               status,
+               invited_by_user_id,
+               accepted_by_user_id,
+               expires_at,
+               accepted_at,
+               created_at,
+               updated_at,
+               archived_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            input.id,
+            workspaceRow.organization_id,
+            workspaceRow.workspace_id,
+            input.invitedEmail,
+            input.roleKey,
+            input.tokenHash,
+            "pending",
+            input.invitedByUserId ?? null,
+            null,
+            input.expiresAt,
+            null,
+            input.timestamp,
+            input.timestamp,
+            null
+          )
+      ]);
+
+      return this.findInvitationByTokenHash(input.tokenHash);
+    },
+
     async findReceipt(scopeKey, idempotencyKey) {
       const row = await db
         .prepare(
@@ -3301,6 +4683,134 @@ export function createCloudTableD1Repository(
         .first<ReceiptRow>();
 
       return row ? parseReceipt(row) : null;
+    },
+
+    async findInvitationByTokenHash(tokenHash) {
+      const row = await db
+        .prepare(
+          `SELECT
+             invitations.id,
+             invitations.organization_id,
+             invitations.workspace_id,
+             invitations.invited_email,
+             invitations.role_key,
+             invitations.token_hash,
+             invitations.status,
+             invitations.invited_by_user_id,
+             invitations.expires_at,
+             invitations.accepted_at,
+             invitations.created_at,
+             invitations.updated_at,
+             o.slug AS organization_slug,
+             o.name AS organization_name,
+             w.slug AS workspace_slug,
+             w.name AS workspace_name
+           FROM invitations
+           INNER JOIN organizations o
+             ON o.id = invitations.organization_id
+           INNER JOIN workspaces w
+             ON w.id = invitations.workspace_id
+           WHERE invitations.token_hash = ?
+             AND invitations.archived_at IS NULL
+             AND o.archived_at IS NULL
+             AND w.archived_at IS NULL
+           LIMIT 1`
+        )
+        .bind(tokenHash)
+        .first<InvitationRow>();
+
+      return row ? mapInvitationRow(row) : null;
+    },
+
+    async findUserByEmail(email) {
+      const row = await db
+        .prepare(
+          `SELECT
+             id AS user_id,
+             primary_email AS user_email,
+             display_name AS user_display_name
+           FROM users
+           WHERE lower(primary_email) = lower(?)
+             AND archived_at IS NULL
+           LIMIT 1`
+        )
+        .bind(email)
+        .first<CanonicalUserRow>();
+
+      return row ? mapCanonicalUserRow(row) : null;
+    },
+
+    async findUserByExternalIdentity(input) {
+      const row = await db
+        .prepare(
+          `SELECT
+             u.id AS user_id,
+             u.primary_email AS user_email,
+             u.display_name AS user_display_name
+           FROM external_identities ei
+           INNER JOIN users u
+             ON u.id = ei.user_id
+           WHERE ei.provider_key = ?
+             AND ei.external_subject = ?
+             AND ei.archived_at IS NULL
+             AND u.archived_at IS NULL
+           LIMIT 1`
+        )
+        .bind(input.providerKey, input.externalSubject)
+        .first<CanonicalUserRow>();
+
+      return row ? mapCanonicalUserRow(row) : null;
+    },
+
+    async linkExternalIdentityToUser(input) {
+      const existing = await db
+        .prepare(
+          `SELECT user_id
+           FROM external_identities
+           WHERE provider_key = ?
+             AND external_subject = ?
+             AND archived_at IS NULL
+           LIMIT 1`
+        )
+        .bind(input.providerKey, input.externalSubject)
+        .first<{ user_id: string }>();
+
+      if (existing?.user_id && existing.user_id !== input.userId) {
+        return "conflict";
+      }
+
+      await db.batch([
+        db
+          .prepare(
+            `INSERT INTO external_identities (
+               id,
+               user_id,
+               provider_key,
+               external_subject,
+               email,
+               created_at,
+               updated_at,
+               archived_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(provider_key, external_subject) DO UPDATE SET
+               user_id = excluded.user_id,
+               email = excluded.email,
+               updated_at = excluded.updated_at,
+               archived_at = excluded.archived_at`
+          )
+          .bind(
+            input.externalIdentityId,
+            input.userId,
+            input.providerKey,
+            input.externalSubject,
+            input.email ?? null,
+            input.timestamp,
+            input.timestamp,
+            null
+          )
+      ]);
+
+      return existing?.user_id === input.userId ? "noop" : "linked";
     },
 
     async listOutboxEntriesForEvent(eventId) {
@@ -3326,6 +4836,48 @@ export function createCloudTableD1Repository(
       return rows.results ?? [];
     },
 
+    async listWorkspaceMembershipIdentitiesForUser(userId) {
+      const rows = await db
+        .prepare(
+          `SELECT
+             wm.workspace_id,
+             wm.principal_id,
+             wm.id AS workspace_membership_id,
+             wm.role_key AS workspace_role_key,
+             wm.status AS workspace_membership_status,
+             u.id AS user_id,
+             u.primary_email AS user_email,
+             u.display_name AS user_display_name,
+             om.id AS organization_membership_id,
+             om.role_key AS organization_role_key,
+             om.status AS organization_membership_status,
+             o.id AS organization_id,
+             o.slug AS organization_slug,
+             o.name AS organization_name,
+             wp.id AS workspace_principal_id,
+             wp.role_key AS workspace_principal_role_key
+           FROM workspace_memberships wm
+           INNER JOIN users u
+             ON u.id = wm.user_id
+           INNER JOIN organization_memberships om
+             ON om.id = wm.organization_membership_id
+           INNER JOIN organizations o
+             ON o.id = om.organization_id
+           LEFT JOIN workspace_principals wp
+             ON wp.workspace_id = wm.workspace_id
+            AND wp.workspace_membership_id = wm.id
+            AND wp.archived_at IS NULL
+           WHERE wm.user_id = ?
+             AND wm.status = 'active'
+             AND wm.archived_at IS NULL
+           ORDER BY wm.workspace_id ASC`
+        )
+        .bind(userId)
+        .all<WorkspaceMembershipIdentityRow>();
+
+      return (rows.results ?? []).map(mapWorkspaceMembershipIdentityRow);
+    },
+
     async listPendingOutboxEntries(input) {
       const rows = await db
         .prepare(
@@ -3349,6 +4901,393 @@ export function createCloudTableD1Repository(
         .all<OutboxRow>();
 
       return rows.results ?? [];
+    },
+
+    async provisionWorkspaceMembershipIdentity(input: ProvisionWorkspaceMembershipIdentityInput) {
+      const membershipStatus = input.membership.status?.trim() || "active";
+      const archivedAt = membershipStatus === "active" ? null : input.timestamp;
+
+      await db.batch([
+        db
+          .prepare(
+            `INSERT INTO organizations (
+               id,
+               slug,
+               name,
+               created_at,
+               updated_at,
+               archived_at
+             ) VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               slug = excluded.slug,
+               name = excluded.name,
+               updated_at = excluded.updated_at,
+               archived_at = excluded.archived_at`
+          )
+          .bind(
+            input.organization.id,
+            input.organization.slug,
+            input.organization.name,
+            input.timestamp,
+            input.timestamp,
+            null
+          ),
+        db
+          .prepare(
+            `INSERT INTO workspaces (
+               id,
+               organization_id,
+               slug,
+               name,
+               created_at,
+               updated_at,
+               archived_at,
+               last_event_id
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               organization_id = excluded.organization_id,
+               slug = excluded.slug,
+               name = excluded.name,
+               updated_at = excluded.updated_at,
+               archived_at = excluded.archived_at`
+          )
+          .bind(
+            input.workspace.id,
+            input.organization.id,
+            input.workspace.slug,
+            input.workspace.name,
+            input.timestamp,
+            input.timestamp,
+            null,
+            null
+          ),
+        db
+          .prepare(
+            `INSERT INTO users (
+               id,
+               primary_email,
+               display_name,
+               created_at,
+               updated_at,
+               archived_at
+             ) VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               primary_email = excluded.primary_email,
+               display_name = excluded.display_name,
+               updated_at = excluded.updated_at,
+               archived_at = excluded.archived_at`
+          )
+          .bind(
+            input.user.id,
+            input.user.email ?? null,
+            input.user.displayName ?? null,
+            input.timestamp,
+            input.timestamp,
+            null
+          ),
+        db
+          .prepare(
+            `INSERT INTO organization_memberships (
+               id,
+               organization_id,
+               user_id,
+               role_key,
+               status,
+               created_at,
+               updated_at,
+               archived_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(organization_id, user_id) DO UPDATE SET
+               id = excluded.id,
+               role_key = excluded.role_key,
+               status = excluded.status,
+               updated_at = excluded.updated_at,
+               archived_at = excluded.archived_at`
+          )
+          .bind(
+            input.membership.organizationMembershipId,
+            input.organization.id,
+            input.user.id,
+            input.membership.roleKey,
+            membershipStatus,
+            input.timestamp,
+            input.timestamp,
+            archivedAt
+          ),
+        db
+          .prepare(
+            `INSERT INTO workspace_memberships (
+               id,
+               workspace_id,
+               organization_membership_id,
+               user_id,
+               principal_id,
+               role_key,
+               status,
+               created_at,
+               updated_at,
+               archived_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(workspace_id, principal_id) DO UPDATE SET
+               id = excluded.id,
+               organization_membership_id = excluded.organization_membership_id,
+               user_id = excluded.user_id,
+               role_key = excluded.role_key,
+               status = excluded.status,
+               updated_at = excluded.updated_at,
+               archived_at = excluded.archived_at`
+          )
+          .bind(
+            input.membership.workspaceMembershipId,
+            input.workspace.id,
+            input.membership.organizationMembershipId,
+            input.user.id,
+            input.membership.principalId,
+            input.membership.roleKey,
+            membershipStatus,
+            input.timestamp,
+            input.timestamp,
+            archivedAt
+          ),
+        db
+          .prepare(
+            `INSERT INTO workspace_principals (
+               id,
+               workspace_id,
+               user_id,
+               workspace_membership_id,
+               principal_type,
+               external_principal_id,
+               role_key,
+               created_at,
+               updated_at,
+               archived_at,
+               last_event_id
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(workspace_id, principal_type, external_principal_id) DO UPDATE SET
+               user_id = excluded.user_id,
+               workspace_membership_id = excluded.workspace_membership_id,
+               role_key = excluded.role_key,
+               updated_at = excluded.updated_at,
+               archived_at = excluded.archived_at`
+          )
+          .bind(
+            `principal:${input.workspace.id}:${input.membership.principalId}`,
+            input.workspace.id,
+            input.user.id,
+            input.membership.workspaceMembershipId,
+            "user",
+            input.membership.principalId,
+            input.membership.roleKey,
+            input.timestamp,
+            input.timestamp,
+            archivedAt,
+            null
+          ),
+        ...(input.externalIdentity
+          ? [
+              db
+                .prepare(
+                  `INSERT INTO external_identities (
+                     id,
+                     user_id,
+                     provider_key,
+                     external_subject,
+                     email,
+                     created_at,
+                     updated_at,
+                     archived_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(provider_key, external_subject) DO UPDATE SET
+                     id = excluded.id,
+                     user_id = excluded.user_id,
+                     email = excluded.email,
+                     updated_at = excluded.updated_at,
+                     archived_at = excluded.archived_at`
+                )
+                .bind(
+                  input.externalIdentity.id,
+                  input.user.id,
+                  input.externalIdentity.providerKey,
+                  input.externalIdentity.externalSubject,
+                  input.externalIdentity.email ?? null,
+                  input.timestamp,
+                  input.timestamp,
+                  null
+                )
+            ]
+          : [])
+      ]);
+
+      const record = await this.readWorkspaceMembershipIdentity({
+        principalId: input.membership.principalId,
+        workspaceId: input.workspace.id
+      });
+      if (!record) {
+        throw new Error(
+          `Workspace membership projection could not be read back for ${input.workspace.id}/${input.membership.principalId}.`
+        );
+      }
+
+      return record;
+    },
+
+    async readWorkspaceMembershipIdentity(input) {
+      const row = await db
+        .prepare(
+          `SELECT
+             wm.workspace_id,
+             wm.principal_id,
+             wm.id AS workspace_membership_id,
+             wm.role_key AS workspace_role_key,
+             wm.status AS workspace_membership_status,
+             u.id AS user_id,
+             u.primary_email AS user_email,
+             u.display_name AS user_display_name,
+             om.id AS organization_membership_id,
+             om.role_key AS organization_role_key,
+             om.status AS organization_membership_status,
+             o.id AS organization_id,
+             o.slug AS organization_slug,
+             o.name AS organization_name,
+             wp.id AS workspace_principal_id,
+             wp.role_key AS workspace_principal_role_key
+           FROM workspace_memberships wm
+           INNER JOIN users u
+             ON u.id = wm.user_id
+           INNER JOIN organization_memberships om
+             ON om.id = wm.organization_membership_id
+           INNER JOIN organizations o
+             ON o.id = om.organization_id
+           LEFT JOIN workspace_principals wp
+             ON wp.workspace_id = wm.workspace_id
+            AND wp.workspace_membership_id = wm.id
+            AND wp.archived_at IS NULL
+           WHERE wm.workspace_id = ?
+             AND wm.principal_id = ?
+             AND wm.archived_at IS NULL
+           LIMIT 1`
+        )
+        .bind(input.workspaceId, input.principalId)
+        .first<WorkspaceMembershipIdentityRow>();
+
+      return row ? mapWorkspaceMembershipIdentityRow(row) : null;
+    },
+
+    async readWorkspaceMembershipIdentityForUser(input) {
+      const row = await db
+        .prepare(
+          `SELECT
+             wm.workspace_id,
+             wm.principal_id,
+             wm.id AS workspace_membership_id,
+             wm.role_key AS workspace_role_key,
+             wm.status AS workspace_membership_status,
+             u.id AS user_id,
+             u.primary_email AS user_email,
+             u.display_name AS user_display_name,
+             om.id AS organization_membership_id,
+             om.role_key AS organization_role_key,
+             om.status AS organization_membership_status,
+             o.id AS organization_id,
+             o.slug AS organization_slug,
+             o.name AS organization_name,
+             wp.id AS workspace_principal_id,
+             wp.role_key AS workspace_principal_role_key
+           FROM workspace_memberships wm
+           INNER JOIN users u
+             ON u.id = wm.user_id
+           INNER JOIN organization_memberships om
+             ON om.id = wm.organization_membership_id
+           INNER JOIN organizations o
+             ON o.id = om.organization_id
+           LEFT JOIN workspace_principals wp
+             ON wp.workspace_id = wm.workspace_id
+            AND wp.workspace_membership_id = wm.id
+            AND wp.archived_at IS NULL
+           WHERE wm.workspace_id = ?
+             AND wm.user_id = ?
+             AND wm.status = 'active'
+             AND wm.archived_at IS NULL
+           LIMIT 1`
+        )
+        .bind(input.workspaceId, input.userId)
+        .first<WorkspaceMembershipIdentityRow>();
+
+      return row ? mapWorkspaceMembershipIdentityRow(row) : null;
+    },
+
+    async readAuthSession(sessionId) {
+      const row = await db
+        .prepare(
+          `SELECT
+             auth_sessions.id AS session_id,
+             auth_sessions.active_workspace_id,
+             auth_sessions.created_at,
+             auth_sessions.last_authenticated_at,
+             auth_sessions.expires_at,
+             u.id AS user_id,
+             u.primary_email AS user_email,
+             u.display_name AS user_display_name
+           FROM auth_sessions
+           INNER JOIN users u
+             ON u.id = auth_sessions.user_id
+           WHERE auth_sessions.id = ?
+             AND auth_sessions.archived_at IS NULL
+             AND datetime(replace(substr(auth_sessions.expires_at, 1, 19), 'T', ' ')) > CURRENT_TIMESTAMP
+             AND u.archived_at IS NULL
+           LIMIT 1`
+        )
+        .bind(sessionId)
+        .first<AuthSessionRow>();
+
+      return row ? mapAuthSessionRow(row) : null;
+    },
+
+    async updateAuthSessionActiveWorkspace(input) {
+      await db.batch([
+        db
+          .prepare(
+            `UPDATE auth_sessions
+             SET active_workspace_id = ?,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?
+               AND archived_at IS NULL`
+          )
+          .bind(input.activeWorkspaceId, input.sessionId)
+      ]);
+
+      return this.readAuthSession(input.sessionId);
+    },
+
+    async workspaceHasMembershipFoundation(workspaceId) {
+      const row = await db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM workspace_memberships
+           WHERE workspace_id = ?
+             AND archived_at IS NULL`
+        )
+        .bind(workspaceId)
+        .first<CountRow>();
+
+      return (row?.count ?? 0) > 0;
+    },
+
+    async userHasActiveWorkspaceMembership(input) {
+      const row = await db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM workspace_memberships
+           WHERE workspace_id = ?
+             AND principal_id = ?
+             AND status = 'active'
+             AND archived_at IS NULL`
+        )
+        .bind(input.workspaceId, input.principalId)
+        .first<CountRow>();
+
+      return (row?.count ?? 0) > 0;
     },
 
     async listTableActivity(input) {

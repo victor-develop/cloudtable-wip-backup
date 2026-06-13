@@ -27,6 +27,8 @@ function resolveQueue(
       return env.WORKFLOW_DISPATCH_QUEUE;
     case "projection-maintenance":
       return env.PROJECTION_MAINTENANCE_QUEUE;
+    case "aggregate-maintenance":
+      return env.AGGREGATE_MAINTENANCE_QUEUE;
     case "dead-letter-reprocessor":
       return env.DEAD_LETTER_REPROCESSOR_QUEUE;
     default:

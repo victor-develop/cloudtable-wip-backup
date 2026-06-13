@@ -103,6 +103,61 @@ describe("cloudtable field-type validation", () => {
     });
 
     expect(
+      registry.require("computed.readonly").validateConfig(
+        {
+          resultValueType: "number",
+          rollup: {
+            grouping: {
+              sourceFieldId: "fld_account",
+              strategy: "single_relation"
+            },
+            operationId: "count_records",
+            sourceTableId: "tbl_tickets"
+          }
+        },
+        { fieldType: "computed.readonly" }
+      )
+    ).toEqual({
+      valid: true,
+      errors: []
+    });
+
+    expect(
+      registry.require("computed.readonly").validateConfig(
+        {
+          lookup: {
+            sourceFieldId: "fld_account",
+            targetFieldId: "fld_name"
+          }
+        },
+        { fieldType: "computed.readonly" }
+      )
+    ).toEqual({
+      valid: true,
+      errors: []
+    });
+
+    expect(
+      registry.require("computed.readonly").validateConfig(
+        {
+          expression: "source.value",
+          rollup: {
+            grouping: {
+              sourceFieldId: "fld_account",
+              strategy: "single_relation"
+            },
+            operationId: "count_records",
+            sourceTableId: "tbl_tickets"
+          }
+        },
+        { fieldType: "computed.readonly" }
+      )
+    ).toEqual({
+      valid: false,
+      errors: ["Field configuration must not mix expression, lookup, and rollup on computed.readonly."]
+    });
+
+    expect(
       registry.require("text.single_line").validateConfig(
         { maxLength: 120 },
         { fieldType: "text.single_line" }

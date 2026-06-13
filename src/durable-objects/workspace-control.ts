@@ -1,8 +1,9 @@
 import type { CommandEnvelope } from "../core/commands/types";
 import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
+import type { ProvisionWorkspaceMembershipIdentityInput } from "../core/persistence/types";
 import { createRuntime } from "../runtime/bootstrap";
 import type { CloudTableEnv } from "../runtime/env";
-import { badRequest, json } from "../runtime/http";
+import { badRequest, json, notFound } from "../runtime/http";
 import { publishOutboxEntries } from "../runtime/queue-publisher";
 import { readWorkflowExecutionCandidate } from "../runtime/workflow-definition";
 
@@ -108,6 +109,138 @@ export class WorkspaceControlDurableObject {
           published
         },
         result
+      });
+    }
+
+    if (request.method === "POST" && url.pathname === "/memberships") {
+      const body = (await request.json()) as Partial<ProvisionWorkspaceMembershipIdentityInput>;
+      const workspaceId =
+        typeof body.workspace?.id === "string" && body.workspace.id.length > 0
+          ? body.workspace.id
+          : null;
+      const organizationId =
+        typeof body.organization?.id === "string" && body.organization.id.length > 0
+          ? body.organization.id
+          : null;
+      const organizationSlug =
+        typeof body.organization?.slug === "string" && body.organization.slug.length > 0
+          ? body.organization.slug
+          : null;
+      const organizationName =
+        typeof body.organization?.name === "string" && body.organization.name.length > 0
+          ? body.organization.name
+          : null;
+      const workspaceSlug =
+        typeof body.workspace?.slug === "string" && body.workspace.slug.length > 0
+          ? body.workspace.slug
+          : null;
+      const workspaceName =
+        typeof body.workspace?.name === "string" && body.workspace.name.length > 0
+          ? body.workspace.name
+          : null;
+      const userId = typeof body.user?.id === "string" && body.user.id.length > 0 ? body.user.id : null;
+      const organizationMembershipId =
+        typeof body.membership?.organizationMembershipId === "string" &&
+        body.membership.organizationMembershipId.length > 0
+          ? body.membership.organizationMembershipId
+          : null;
+      const workspaceMembershipId =
+        typeof body.membership?.workspaceMembershipId === "string" &&
+        body.membership.workspaceMembershipId.length > 0
+          ? body.membership.workspaceMembershipId
+          : null;
+      const principalId =
+        typeof body.membership?.principalId === "string" && body.membership.principalId.length > 0
+          ? body.membership.principalId
+          : null;
+      const roleKey =
+        typeof body.membership?.roleKey === "string" && body.membership.roleKey.length > 0
+          ? body.membership.roleKey
+          : null;
+
+      if (
+        !workspaceId ||
+        !organizationId ||
+        !organizationSlug ||
+        !organizationName ||
+        !workspaceSlug ||
+        !workspaceName ||
+        !userId ||
+        !organizationMembershipId ||
+        !workspaceMembershipId ||
+        !principalId ||
+        !roleKey
+      ) {
+        return badRequest(
+          "workspace, organization, user, and membership identity metadata are required for membership provisioning."
+        );
+      }
+
+      const repository = createCloudTableD1Repository(this.env.DB, createRuntime(this.env).fieldTypeRegistry);
+      const membership = await repository.provisionWorkspaceMembershipIdentity({
+        externalIdentity: body.externalIdentity ?? null,
+        membership: {
+          organizationMembershipId,
+          principalId,
+          roleKey,
+          status: body.membership?.status,
+          workspaceMembershipId
+        },
+        organization: {
+          id: organizationId,
+          name: organizationName,
+          slug: organizationSlug
+        },
+        timestamp:
+          typeof body.timestamp === "string" && body.timestamp.length > 0
+            ? body.timestamp
+            : new Date().toISOString(),
+        user: {
+          displayName: body.user?.displayName ?? null,
+          email: body.user?.email ?? null,
+          id: userId
+        },
+        workspace: {
+          id: workspaceId,
+          name: workspaceName,
+          slug: workspaceSlug
+        }
+      });
+
+      return json({
+        coordinator: {
+          durableObject: "workspace-control",
+          objectId: this.state.id.toString()
+        },
+        membership
+      });
+    }
+
+    const membershipDetailMatch = url.pathname.match(/^\/memberships\/([^/]+)$/);
+    if (request.method === "GET" && membershipDetailMatch) {
+      const principalId = decodeURIComponent(membershipDetailMatch[1]!);
+      const workspaceId = url.searchParams.get("workspaceId");
+      if (!workspaceId) {
+        return badRequest("workspaceId is required for membership lookup.");
+      }
+
+      const repository = createCloudTableD1Repository(this.env.DB, createRuntime(this.env).fieldTypeRegistry);
+      const membership = await repository.readWorkspaceMembershipIdentity({
+        principalId,
+        workspaceId
+      });
+      if (!membership) {
+        return notFound(
+          `Workspace membership ${principalId} was not found in workspace ${workspaceId}.`
+        );
+      }
+
+      return json({
+        coordinator: {
+          durableObject: "workspace-control",
+          objectId: this.state.id.toString()
+        },
+        membership
       });
     }
 

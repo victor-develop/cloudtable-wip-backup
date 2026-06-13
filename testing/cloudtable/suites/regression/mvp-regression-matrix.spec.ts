@@ -7,6 +7,7 @@ import type { CommandEnvelope, CommandResult } from "../../../../src/core/comman
 import { scopeKeyForCommand } from "../../../../src/core/commands/transcript";
 import { createEventLedger } from "../../../../src/core/events/event-ledger";
 import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
+import { createCloudTableD1Repository } from "../../../../src/core/persistence/cloudtable-d1-repository";
 import { createPermissionEngine } from "../../../../src/core/permissions/engine";
 import type { EffectivePermissionSnapshot } from "../../../../src/core/permissions/types";
 import { createViewPlanner } from "../../../../src/core/views/planner";
@@ -427,6 +428,7 @@ function createRuntimeCommand(overrides: Partial<CommandEnvelope> = {}): Command
 }
 
 function createRuntimeEnv(): {
+  aggregateQueue: RuntimeFakeQueue;
   db: SqliteD1Database;
   deadLetterQueue: RuntimeFakeQueue;
   env: CloudTableEnv;
@@ -446,6 +448,7 @@ function createRuntimeEnv(): {
   const workflowDispatchQueue = new RuntimeFakeQueue();
   const workflowStepQueue = new RuntimeFakeQueue();
   const projectionQueue = new RuntimeFakeQueue();
+  const aggregateQueue = new RuntimeFakeQueue();
   const deadLetterQueue = new RuntimeFakeQueue();
 
   let env!: CloudTableEnv;
@@ -465,10 +468,16 @@ function createRuntimeEnv(): {
   );
 
   env = {
+    AGGREGATE_MAINTENANCE_QUEUE: aggregateQueue as unknown as Queue<CloudTableQueueMessage>,
     ARTIFACTS_BUCKET: {} as R2Bucket,
+    AUTH_SESSION_SECRET: "test-session-secret",
+    AUTH_SESSION_TTL_SECONDS: "3600",
     DB: db as unknown as D1Database,
     DEAD_LETTER_REPROCESSOR_QUEUE: deadLetterQueue as unknown as Queue<CloudTableQueueMessage>,
     EVENT_FANOUT_QUEUE: eventFanoutQueue as unknown as Queue<CloudTableQueueMessage>,
+    GOOGLE_CLIENT_ID: "google-client-id",
+    GOOGLE_CLIENT_SECRET: "google-client-secret",
+    GOOGLE_OAUTH_REDIRECT_URI: "https://example.test/v1/auth/google/callback",
     PROJECTION_MAINTENANCE_QUEUE: projectionQueue as unknown as Queue<CloudTableQueueMessage>,
     TABLE_COORDINATOR_DO: tableNamespace as unknown as DurableObjectNamespace,
     WORKFLOW_DISPATCH_QUEUE:
@@ -478,6 +487,7 @@ function createRuntimeEnv(): {
   };
 
   return {
+    aggregateQueue,
     db,
     deadLetterQueue,
     env,
@@ -512,12 +522,130 @@ function createRuntimeBatch(
   };
 }
 
+function createRuntimeBatchWithRetryTracking(
+  messages: CloudTableQueueMessage[]
+): {
+  batch: {
+    messages: Array<{
+      ack(): void;
+      body: CloudTableQueueMessage;
+      retry(): void;
+    }>;
+  };
+  retried: number;
+} {
+  let retried = 0;
+
+  return {
+    batch: {
+      messages: messages.map((body) => ({
+        ack() {},
+        body,
+        retry() {
+          retried += 1;
+        }
+      }))
+    },
+    get retried() {
+      return retried;
+    }
+  };
+}
+
 function createRuntimeScheduledController(scheduledTime: number): ScheduledController {
   return {
     cron: "* * * * *",
     noRetry() {},
     scheduledTime
   } as ScheduledController;
+}
+
+async function provisionRuntimeWorkspaceMembershipIdentity(
+  env: CloudTableEnv,
+  input: {
+    principalId: string;
+    roleKey?: string;
+    userId: string;
+  }
+): Promise<Response> {
+  return handleFetch(
+    new Request("https://example.test/v1/workspaces/ws_1/memberships", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        membership: {
+          organizationMembershipId: `orgmem:${input.userId}`,
+          principalId: input.principalId,
+          roleKey: input.roleKey ?? "workspace.member",
+          workspaceMembershipId: `wsmem:${input.userId}`
+        },
+        organization: {
+          id: "org_1",
+          name: "Org 1",
+          slug: "org-1"
+        },
+        timestamp: "2026-06-10T00:00:00.000Z",
+        user: {
+          displayName: input.userId,
+          email: `${input.userId}@example.com`,
+          id: input.userId
+        },
+        workspace: {
+          name: "Workspace 1",
+          slug: "workspace-1"
+        }
+      })
+    }),
+    env,
+    {} as ExecutionContext
+  );
+}
+
+function readCookieHeaderFromSetCookie(setCookie: string): string {
+  return setCookie.split(";", 1)[0]!;
+}
+
+function toBase64Url(value: string | ArrayBuffer): string {
+  const bytes =
+    typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function createAuthenticatedRuntimeCookie(
+  env: CloudTableEnv,
+  userId: string,
+  options: { activeWorkspaceId?: string | null } = {}
+): Promise<string> {
+  const repository = createCloudTableD1Repository(env.DB);
+  const issuedAt = "2026-06-10T01:00:00.000Z";
+  const session = await repository.createAuthSession({
+    activeWorkspaceId: options.activeWorkspaceId ?? null,
+    expiresAt: "2099-06-10T02:00:00.000Z",
+    lastAuthenticatedAt: issuedAt,
+    sessionId: `session_${userId}`,
+    userId
+  });
+  const payload = toBase64Url(JSON.stringify({ sessionId: session.sessionId }));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.AUTH_SESSION_SECRET ?? ""),
+    {
+      hash: "SHA-256",
+      name: "HMAC"
+    },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
+
+  return `cloudtable_session=${encodeURIComponent(`${payload}.${toBase64Url(signature)}`)}`;
 }
 
 function insertRuntimeRecordProjection(db: SqliteD1Database): void {
@@ -617,6 +745,31 @@ function insertRuntimeCellCurrent(
       1,
       `evt_seed_${input.recordId}_${input.fieldId}`
     );
+}
+
+function readRuntimeCellRawValue(
+  db: SqliteD1Database,
+  input: {
+    fieldId: string;
+    recordId: string;
+    tableId: string;
+  }
+): unknown {
+  const row = db.inner
+    .prepare(
+      `SELECT value_json
+       FROM cell_current
+       WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+    )
+    .get("ws_1", input.tableId, input.recordId, input.fieldId) as
+    | { value_json: string }
+    | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  return (JSON.parse(row.value_json) as { raw?: unknown } | null)?.raw ?? null;
 }
 
 function insertRuntimePermissionSnapshot(
@@ -5991,6 +6144,1647 @@ describe("cloudtable MVP regression matrix", () => {
       permissionScope: toolBody.permissionScope,
       preview: toolBody.output.preview
     });
+  });
+
+  it("scenario: invitation_backed_reactive_sync_contract lets an invited member trigger downstream sync through the normal queue path", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createRuntimeEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_dest",
+        "ws_1",
+        "app_1",
+        "table-dest",
+        "Destination Table",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_dest"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_owner_status",
+      fieldKey: "owner_status",
+      fieldType: "text.single_line",
+      label: "Owner Status",
+      tableId: "tbl_dest"
+    });
+
+    insertRecord(db, {
+      recordId: "rec_source_1",
+      recordKey: "source-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_1",
+      recordKey: "dest-1",
+      tableId: "tbl_dest"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_source_1",
+      tableId: "tbl_1",
+      value: ["rec_dest_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_source",
+      fieldType: "text.single_line",
+      recordId: "rec_source_1",
+      tableId: "tbl_1",
+      value: "pending"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "pending"
+    });
+
+    insertRuntimeWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "sync_related_field",
+          input: {
+            resolverAlias: "destination",
+            sourceFieldId: "fld_source",
+            targetFieldId: "fld_owner_status"
+          }
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destination",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_dest"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_source",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      },
+      workflowId: "wf_invitation_sync"
+    });
+    insertRuntimePermissionSnapshot(db, {
+      snapshotId: "snap_invitation_sync_workflow",
+      principalId: "wf_service",
+      policyRevision: 7,
+      scopeHash: "scope:wf:status-sync",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_owner_status: {
+          agent: false,
+          fieldId: "fld_owner_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    await provisionRuntimeWorkspaceMembershipIdentity(env, {
+      principalId: "usr_inviter",
+      userId: "user_inviter"
+    });
+    const inviterCookie = await createAuthenticatedRuntimeCookie(env, "user_inviter");
+
+    const invitationResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: inviterCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invitationResponse.status).toBe(201);
+    const invitationBody = (await invitationResponse.json()) as {
+      invitation: { acceptUrl: string; id: string };
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "invitee@example.com",
+            name: "Invitee",
+            sub: "google-oauth2|invitee"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const loginResponse = await handleFetch(
+      new Request(invitationBody.invitation.acceptUrl),
+      env,
+      {} as ExecutionContext
+    );
+    expect(loginResponse.status).toBe(302);
+    const state = new URL(loginResponse.headers.get("location") ?? "").searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(302);
+    const inviteeCookie = readCookieHeaderFromSetCookie(callbackResponse.headers.get("set-cookie") ?? "");
+
+    const sessionResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session?workspaceId=ws_1", {
+        headers: {
+          cookie: inviteeCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = (await sessionResponse.json()) as {
+      session: { userEmail: string | null; userId: string };
+      workspaceMembership: { principalId: string; userId: string };
+    };
+    expect(sessionBody.session.userEmail).toBe("invitee@example.com");
+    expect(sessionBody.workspaceMembership.userId).toBe(sessionBody.session.userId);
+    expect(sessionBody.workspaceMembership.principalId).toMatch(/^usr_/);
+
+    insertRuntimePermissionSnapshot(db, {
+      snapshotId: "snap_invited_member_command",
+      principalId: sessionBody.workspaceMembership.principalId,
+      policyRevision: 62,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_source: {
+          agent: true,
+          fieldId: "fld_source",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const commandResponse = await handleFetch(
+      new Request("https://example.test/v1/commands/execute", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          actor: {
+            mode: "user"
+          },
+          commandId: "cmd_invited_member_sync",
+          commandType: "cell.set",
+          idempotencyKey: "idem_invited_member_sync",
+          payload: {
+            fieldId: "fld_source",
+            fieldType: "text.single_line",
+            recordId: "rec_source_1",
+            value: "approved"
+          },
+          scope: "table",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(commandResponse.status).toBe(200);
+    const commandBody = (await commandResponse.json()) as {
+      command: { actor: { principalId: string } };
+      result: { accepted: boolean };
+    };
+    expect(commandBody.command.actor.principalId).toBe(sessionBody.workspaceMembership.principalId);
+    expect(commandBody.result.accepted).toBe(true);
+    expect(eventFanoutQueue.sent).toHaveLength(1);
+
+    await handleQueueBatch(createRuntimeBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    expect(workflowDispatchQueue.sent).toHaveLength(1);
+
+    await handleQueueBatch(
+      createRuntimeBatch([workflowDispatchQueue.sent[0]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+    expect(workflowStepQueue.sent).toHaveLength(1);
+
+    await handleQueueBatch(createRuntimeBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_source",
+        recordId: "rec_source_1",
+        tableId: "tbl_1"
+      })
+    ).toBe("approved");
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_owner_status",
+        recordId: "rec_dest_1",
+        tableId: "tbl_dest"
+      })
+    ).toBe("approved");
+
+    const invitationRow = db.inner
+      .prepare(
+        `SELECT accepted_by_user_id, status
+         FROM invitations
+         WHERE id = ?`
+      )
+      .get(invitationBody.invitation.id) as {
+      accepted_by_user_id: string | null;
+      status: string;
+    };
+    expect(invitationRow).toEqual({
+      accepted_by_user_id: sessionBody.session.userId,
+      status: "accepted"
+    });
+  });
+
+  it("scenario: cross_org_invited_member_workspace_selection_reactive_contract keeps invited-workspace hydration aligned with downstream sync", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createRuntimeEnv();
+    seedWorkspace(db, "ws_2");
+
+    const existingMembershipResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_2/memberships", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          membership: {
+            organizationMembershipId: "orgmem:user_cross_org:ws_2",
+            principalId: "usr_cross_org_existing",
+            roleKey: "workspace.member",
+            workspaceMembershipId: "wsmem:user_cross_org:ws_2"
+          },
+          organization: {
+            id: "org_2",
+            name: "Org 2",
+            slug: "org-2"
+          },
+          timestamp: "2026-06-10T00:00:00.000Z",
+          user: {
+            displayName: "user_cross_org",
+            email: "invitee@example.com",
+            id: "user_cross_org"
+          },
+          workspace: {
+            name: "Workspace 2",
+            slug: "workspace-2"
+          }
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(existingMembershipResponse.status).toBe(200);
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_dest",
+        "ws_1",
+        "app_1",
+        "table-dest",
+        "Destination Table",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_dest"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_owner_status",
+      fieldKey: "owner_status",
+      fieldType: "text.single_line",
+      label: "Owner Status",
+      tableId: "tbl_dest"
+    });
+
+    insertRecord(db, {
+      recordId: "rec_source_1",
+      recordKey: "source-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_1",
+      recordKey: "dest-1",
+      tableId: "tbl_dest"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_source_1",
+      tableId: "tbl_1",
+      value: ["rec_dest_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_source",
+      fieldType: "text.single_line",
+      recordId: "rec_source_1",
+      tableId: "tbl_1",
+      value: "pending"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "pending"
+    });
+
+    insertRuntimeWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "sync_related_field",
+          input: {
+            resolverAlias: "destination",
+            sourceFieldId: "fld_source",
+            targetFieldId: "fld_owner_status"
+          }
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destination",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_dest"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_source",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      },
+      workflowId: "wf_cross_org_invitation_sync"
+    });
+    insertRuntimePermissionSnapshot(db, {
+      snapshotId: "snap_cross_org_invitation_sync_workflow",
+      principalId: "wf_service",
+      policyRevision: 7,
+      scopeHash: "scope:wf:status-sync",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_owner_status: {
+          agent: false,
+          fieldId: "fld_owner_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    await provisionRuntimeWorkspaceMembershipIdentity(env, {
+      principalId: "usr_inviter",
+      userId: "user_inviter"
+    });
+    const inviterCookie = await createAuthenticatedRuntimeCookie(env, "user_inviter");
+
+    const invitationResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: inviterCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invitationResponse.status).toBe(201);
+    const invitationBody = (await invitationResponse.json()) as {
+      invitation: { acceptUrl: string; id: string };
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "invitee@example.com",
+            name: "Invitee",
+            sub: "google-oauth2|invitee"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const loginResponse = await handleFetch(
+      new Request(invitationBody.invitation.acceptUrl),
+      env,
+      {} as ExecutionContext
+    );
+    expect(loginResponse.status).toBe(302);
+    const state = new URL(loginResponse.headers.get("location") ?? "").searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(302);
+    const inviteeCookie = readCookieHeaderFromSetCookie(callbackResponse.headers.get("set-cookie") ?? "");
+
+    const sessionResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session?workspaceId=ws_1", {
+        headers: {
+          cookie: inviteeCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = (await sessionResponse.json()) as {
+      activeOrganization: { organizationId: string } | null;
+      activeWorkspaceId: string | null;
+      memberships: Array<{ organizationId: string; workspaceId: string }>;
+      session: { activeWorkspaceId: string | null; userEmail: string | null; userId: string };
+      workspaceMembership: { organizationId: string; principalId: string; userId: string; workspaceId: string };
+    };
+    expect(sessionBody.session.userId).toBe("user_cross_org");
+    expect(sessionBody.session.userEmail).toBe("invitee@example.com");
+    expect(sessionBody.activeOrganization).toEqual({
+      organizationId: "org_1",
+      organizationName: "Org 1",
+      organizationSlug: "org-1"
+    });
+    expect(sessionBody.activeWorkspaceId).toBe("ws_1");
+    expect(sessionBody.session.activeWorkspaceId).toBe("ws_1");
+    expect(sessionBody.memberships).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          organizationId: "org_1",
+          workspaceId: "ws_1"
+        }),
+        expect.objectContaining({
+          organizationId: "org_2",
+          workspaceId: "ws_2"
+        })
+      ])
+    );
+    expect(sessionBody.workspaceMembership.userId).toBe("user_cross_org");
+    expect(sessionBody.workspaceMembership.workspaceId).toBe("ws_1");
+    expect(sessionBody.workspaceMembership.principalId).toMatch(/^usr_/);
+
+    insertRuntimePermissionSnapshot(db, {
+      snapshotId: "snap_cross_org_invited_member_command",
+      principalId: sessionBody.workspaceMembership.principalId,
+      policyRevision: 64,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_source: {
+          agent: true,
+          fieldId: "fld_source",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const commandResponse = await handleFetch(
+      new Request("https://example.test/v1/commands/execute", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          actor: {
+            mode: "user"
+          },
+          commandId: "cmd_cross_org_invited_member_sync",
+          commandType: "cell.set",
+          idempotencyKey: "idem_cross_org_invited_member_sync",
+          payload: {
+            fieldId: "fld_source",
+            fieldType: "text.single_line",
+            recordId: "rec_source_1",
+            value: "approved"
+          },
+          scope: "table",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(commandResponse.status).toBe(200);
+    const commandBody = (await commandResponse.json()) as {
+      command: { actor: { principalId: string } };
+      result: { accepted: boolean };
+    };
+    expect(commandBody.command.actor.principalId).toBe(sessionBody.workspaceMembership.principalId);
+    expect(commandBody.result.accepted).toBe(true);
+    expect(eventFanoutQueue.sent).toHaveLength(1);
+
+    await handleQueueBatch(createRuntimeBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    expect(workflowDispatchQueue.sent).toHaveLength(1);
+
+    await handleQueueBatch(
+      createRuntimeBatch([workflowDispatchQueue.sent[0]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+    expect(workflowStepQueue.sent).toHaveLength(1);
+
+    await handleQueueBatch(createRuntimeBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_source",
+        recordId: "rec_source_1",
+        tableId: "tbl_1"
+      })
+    ).toBe("approved");
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_owner_status",
+        recordId: "rec_dest_1",
+        tableId: "tbl_dest"
+      })
+    ).toBe("approved");
+
+    const invitationRow = db.inner
+      .prepare(
+        `SELECT accepted_by_user_id, status
+         FROM invitations
+         WHERE id = ?`
+      )
+      .get(invitationBody.invitation.id) as {
+      accepted_by_user_id: string | null;
+      status: string;
+    };
+    expect(invitationRow).toEqual({
+      accepted_by_user_id: "user_cross_org",
+      status: "accepted"
+    });
+  });
+
+  it("scenario: invitation_backed_grouped_sum_rollup_contract backfills and recomputes grouped rollups through invited-member session ingress", async () => {
+    const {
+      aggregateQueue,
+      db,
+      env,
+      eventFanoutQueue,
+      workflowDispatchQueue
+    } = createRuntimeEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_revenue_rollup",
+      fieldKey: "ticket_revenue_rollup",
+      fieldType: "computed.readonly",
+      label: "Ticket Revenue Rollup",
+      tableId: "tbl_accounts",
+      config: {
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_ticket_amount",
+          operationId: "sum_numbers",
+          sourceTableId: "tbl_1"
+        }
+      }
+    });
+
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+
+    insertRuntimeWorkflowDefinition(db, {
+      actions: [],
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "account_revenue_sum",
+            dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account",
+              sourceFieldId: "fld_ticket_account"
+            },
+            operand: {
+              fieldId: "fld_ticket_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationConfig: {},
+            operationId: "sum_numbers",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_account_revenue_rollup"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_ticket_amount",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      },
+      workflowId: "wf_invitation_grouped_sum"
+    });
+
+    insertActivityEvent(db, {
+      actor: {
+        mode: "workflow",
+        principalId: "wf_invitation_grouped_sum"
+      },
+      aggregateId: "wf_invitation_grouped_sum",
+      aggregateType: "workflow",
+      commandId: "cmd_publish_invitation_grouped_sum",
+      commandType: "workflow.publish",
+      createdAt: "2026-06-10T00:05:00.000Z",
+      eventId: "evt_publish_invitation_grouped_sum",
+      eventType: "workflow.published",
+      payload: {
+        workflowId: "wf_invitation_grouped_sum"
+      },
+      tableId: "tbl_1",
+      tableSequence: 1,
+      workspaceSequence: 1
+    });
+
+    await handleQueueBatch(
+      createRuntimeBatch([
+        {
+          eventId: "evt_publish_invitation_grouped_sum",
+          kind: "event-fanout",
+          payload: {
+            eventId: "evt_publish_invitation_grouped_sum"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(aggregateQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent[0]).toMatchObject({
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "account_revenue_sum",
+          operationId: "sum_numbers",
+          resolver: {
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          targetFieldId: "fld_account_revenue_rollup"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_invitation_grouped_sum",
+        workflowVersionId: "wf_invitation_grouped_sum:v1"
+      },
+      workspaceId: "ws_1"
+    });
+
+    await handleQueueBatch(
+      createRuntimeBatch([aggregateQueue.sent[0]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_revenue_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(10);
+    const baselineEventFanoutCount = eventFanoutQueue.sent.length;
+
+    await provisionRuntimeWorkspaceMembershipIdentity(env, {
+      principalId: "usr_inviter",
+      userId: "user_inviter"
+    });
+    const inviterCookie = await createAuthenticatedRuntimeCookie(env, "user_inviter");
+
+    const invitationResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: inviterCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invitationResponse.status).toBe(201);
+    const invitationBody = (await invitationResponse.json()) as {
+      invitation: { acceptUrl: string; id: string };
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "invitee@example.com",
+            name: "Invitee",
+            sub: "google-oauth2|invitee"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const loginResponse = await handleFetch(
+      new Request(invitationBody.invitation.acceptUrl),
+      env,
+      {} as ExecutionContext
+    );
+    expect(loginResponse.status).toBe(302);
+    const state = new URL(loginResponse.headers.get("location") ?? "").searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(302);
+    const inviteeCookie = readCookieHeaderFromSetCookie(callbackResponse.headers.get("set-cookie") ?? "");
+
+    const sessionResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session?workspaceId=ws_1", {
+        headers: {
+          cookie: inviteeCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = (await sessionResponse.json()) as {
+      session: { userEmail: string | null; userId: string };
+      workspaceMembership: { principalId: string; userId: string };
+    };
+    expect(sessionBody.session.userEmail).toBe("invitee@example.com");
+    expect(sessionBody.workspaceMembership.userId).toBe(sessionBody.session.userId);
+    expect(sessionBody.workspaceMembership.principalId).toMatch(/^usr_/);
+
+    insertRuntimePermissionSnapshot(db, {
+      snapshotId: "snap_invited_member_grouped_sum_command",
+      principalId: sessionBody.workspaceMembership.principalId,
+      policyRevision: 63,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_ticket_amount: {
+          agent: true,
+          fieldId: "fld_ticket_amount",
+          fieldType: "number.decimal",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const commandResponse = await handleFetch(
+      new Request("https://example.test/v1/commands/execute", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          actor: {
+            mode: "user"
+          },
+          commandId: "cmd_invited_member_grouped_sum",
+          commandType: "cell.set",
+          idempotencyKey: "idem_invited_member_grouped_sum",
+          payload: {
+            fieldId: "fld_ticket_amount",
+            fieldType: "number.decimal",
+            recordId: "rec_ticket_1",
+            value: 35
+          },
+          scope: "table",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(commandResponse.status).toBe(200);
+    const commandBody = (await commandResponse.json()) as {
+      command: { actor: { principalId: string } };
+      result: { accepted: boolean };
+    };
+    expect(commandBody.command.actor.principalId).toBe(sessionBody.workspaceMembership.principalId);
+    expect(commandBody.result.accepted).toBe(true);
+    expect(eventFanoutQueue.sent).toHaveLength(baselineEventFanoutCount + 1);
+
+    await handleQueueBatch(
+      createRuntimeBatch([eventFanoutQueue.sent.at(-1)!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(workflowDispatchQueue.sent).toHaveLength(2);
+    expect(aggregateQueue.sent).toHaveLength(2);
+    expect(aggregateQueue.sent[1]).toMatchObject({
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "account_revenue_sum",
+          operationId: "sum_numbers",
+          targetFieldId: "fld_account_revenue_rollup"
+        },
+        trigger: {
+          changedFieldIds: ["fld_ticket_amount"],
+          eventType: "cell.set",
+          kind: "recompute",
+          recordId: "rec_ticket_1"
+        },
+        workflowId: "wf_invitation_grouped_sum"
+      },
+      workspaceId: "ws_1"
+    });
+
+    await handleQueueBatch(
+      createRuntimeBatch([aggregateQueue.sent[1]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_ticket_amount",
+        recordId: "rec_ticket_1",
+        tableId: "tbl_1"
+      })
+    ).toBe("35");
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_revenue_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(35);
+
+    const invitationRow = db.inner
+      .prepare(
+        `SELECT accepted_by_user_id, status
+         FROM invitations
+         WHERE id = ?`
+      )
+      .get(invitationBody.invitation.id) as {
+      accepted_by_user_id: string | null;
+      status: string;
+    };
+    expect(invitationRow).toEqual({
+      accepted_by_user_id: sessionBody.session.userId,
+      status: "accepted"
+    });
+  });
+
+  it("scenario: workflow_service_identity_reactive_maintenance_writes preserve workflow principal metadata on coordinator-owned rollups", async () => {
+    const { db, env } = createRuntimeEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_revenue_rollup",
+      fieldKey: "ticket_revenue_rollup",
+      fieldType: "computed.readonly",
+      label: "Ticket Revenue Rollup",
+      tableId: "tbl_accounts",
+      config: {
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_ticket_amount",
+          operationId: "sum_numbers",
+          sourceTableId: "tbl_1"
+        }
+      }
+    });
+
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+
+    insertRuntimeWorkflowDefinition(db, {
+      actions: [],
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "account_revenue_sum",
+            dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account",
+              sourceFieldId: "fld_ticket_account"
+            },
+            operand: {
+              fieldId: "fld_ticket_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationConfig: {},
+            operationId: "sum_numbers",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_account_revenue_rollup"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      principal: {
+        policyRevision: 7,
+        principalId: "wf_service",
+        schemaEpoch: 0,
+        scopeHash: "scope:wf:status-sync"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_ticket_amount",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      },
+      workflowId: "wf_service_identity_rollup"
+    });
+
+    await handleQueueBatch(
+      createRuntimeBatch([
+        {
+          kind: "aggregate-maintenance",
+          payload: {
+            aggregate: {
+              alias: "account_revenue_sum",
+              dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account",
+                sourceFieldId: "fld_ticket_account"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "sum_numbers",
+              resolver: {
+                sourceFieldId: "fld_ticket_account",
+                strategy: "single_relation",
+                targetTableId: "tbl_accounts"
+              },
+              sourceRelationPath: "relatedTables.account",
+              sourceTableId: "tbl_1",
+              targetFieldId: "fld_account_revenue_rollup",
+              targetTableId: "tbl_accounts"
+            },
+            trigger: {
+              kind: "backfill",
+              reason: "workflow_published"
+            },
+            workflowId: "wf_service_identity_rollup",
+            workflowVersionId: "wf_service_identity_rollup:v1"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_revenue_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(10);
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, number_value = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: 35,
+          valueType: "number.decimal",
+          version: 1
+        }),
+        35,
+        "35",
+        "35",
+        JSON.stringify(35),
+        "evt_ticket_amount_updated",
+        "ws_1",
+        "tbl_1",
+        "rec_ticket_1",
+        "fld_ticket_amount"
+      );
+
+    await handleQueueBatch(
+      createRuntimeBatch([
+        {
+          kind: "aggregate-maintenance",
+          payload: {
+            aggregate: {
+              alias: "account_revenue_sum",
+              dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account",
+                sourceFieldId: "fld_ticket_account"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "sum_numbers",
+              resolver: {
+                sourceFieldId: "fld_ticket_account",
+                strategy: "single_relation",
+                targetTableId: "tbl_accounts"
+              },
+              sourceRelationPath: "relatedTables.account",
+              sourceTableId: "tbl_1",
+              targetFieldId: "fld_account_revenue_rollup",
+              targetTableId: "tbl_accounts"
+            },
+            trigger: {
+              changedFieldIds: ["fld_ticket_amount"],
+              eventId: "evt_ticket_amount_updated",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_ticket_1"
+            },
+            workflowId: "wf_service_identity_rollup",
+            workflowVersionId: "wf_service_identity_rollup:v1"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_revenue_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(35);
+
+    const maintenanceEvents = db.inner
+      .prepare(
+        `SELECT command_id, metadata_json
+         FROM event_ledger
+         WHERE workspace_id = ? AND table_id = ? AND command_id LIKE ?
+         ORDER BY workspace_sequence ASC`
+      )
+      .all("ws_1", "tbl_accounts", "cmd:aggregate-maintenance:%") as Array<{
+      command_id: string;
+      metadata_json: string;
+    }>;
+
+    expect(
+      maintenanceEvents.map((row) => ({
+        commandId: row.command_id,
+        metadata: JSON.parse(row.metadata_json) as Record<string, unknown>
+      }))
+    ).toEqual([
+      {
+        commandId:
+          "cmd:aggregate-maintenance:wf_service_identity_rollup:v1:account_revenue_sum:rec_account_1:backfill:workflow_published",
+        metadata: {
+          aggregateType: "cell",
+          actor: {
+            mode: "workflow",
+            principalId: "wf_service"
+          },
+          commandType: "cell.set",
+          coordinatorOwnedMutation: true,
+          permissionScopeHash: "scope:wf:status-sync",
+          permissionsVersion: 7,
+          schemaEpoch: 0,
+          scope: "table"
+        }
+      },
+      {
+        commandId:
+          "cmd:aggregate-maintenance:wf_service_identity_rollup:v1:account_revenue_sum:rec_account_1:recompute:evt_ticket_amount_updated",
+        metadata: {
+          aggregateType: "cell",
+          actor: {
+            mode: "workflow",
+            principalId: "wf_service"
+          },
+          commandType: "cell.set",
+          coordinatorOwnedMutation: true,
+          permissionScopeHash: "scope:wf:status-sync",
+          permissionsVersion: 7,
+          schemaEpoch: 0,
+          scope: "table"
+        }
+      }
+    ]);
+  });
+
+  it("scenario: workflow_service_identity_reactive_maintenance_requires_explicit_metadata fails closed when published workflow identity metadata is missing", async () => {
+    const { db, env } = createRuntimeEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_revenue_rollup",
+      fieldKey: "ticket_revenue_rollup",
+      fieldType: "computed.readonly",
+      label: "Ticket Revenue Rollup",
+      tableId: "tbl_accounts",
+      config: {
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_ticket_amount",
+          operationId: "sum_numbers",
+          sourceTableId: "tbl_1"
+        }
+      }
+    });
+
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+
+    insertRuntimeWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [],
+        metadata: {
+          aggregateDefinitions: [
+            {
+              alias: "account_revenue_sum",
+              dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account",
+                sourceFieldId: "fld_ticket_account"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationConfig: {},
+              operationId: "sum_numbers",
+              sourceRelationPath: "relatedTables.account",
+              targetFieldId: "fld_account_revenue_rollup"
+            }
+          ],
+          relatedTableResolvers: [
+            {
+              alias: "account",
+              sourceFieldId: "fld_ticket_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            }
+          ],
+          status: "published",
+          tableId: "tbl_1"
+        },
+        trigger: {
+          operatorId: "field_changed",
+          match: {
+            fieldId: "fld_ticket_amount",
+            fromWorkflow: false,
+            tableId: "tbl_1"
+          }
+        },
+        workflowId: "wf_service_identity_missing"
+      },
+      name: "Service Identity Missing",
+      publishedAt: logicalTime,
+      workflowId: "wf_service_identity_missing",
+      workflowKey: "service-identity-missing"
+    });
+
+    const batch = createRuntimeBatchWithRetryTracking([
+      {
+        kind: "aggregate-maintenance",
+        payload: {
+          aggregate: {
+            alias: "account_revenue_sum",
+            dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account",
+              sourceFieldId: "fld_ticket_account"
+            },
+            operand: {
+              fieldId: "fld_ticket_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationId: "sum_numbers",
+            resolver: {
+              sourceFieldId: "fld_ticket_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            },
+            sourceRelationPath: "relatedTables.account",
+            sourceTableId: "tbl_1",
+            targetFieldId: "fld_account_revenue_rollup",
+            targetTableId: "tbl_accounts"
+          },
+          trigger: {
+            kind: "backfill",
+            reason: "workflow_published"
+          },
+          workflowId: "wf_service_identity_missing",
+          workflowVersionId: "wf_service_identity_missing:v1"
+        },
+        workspaceId: "ws_1"
+      }
+    ]);
+
+    await handleQueueBatch(batch.batch as never, env, {} as ExecutionContext);
+
+    expect(batch.retried).toBe(1);
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_revenue_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(null);
+
+    const maintenanceEvents = db.inner
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM event_ledger
+         WHERE workspace_id = ? AND table_id = ? AND command_id LIKE ?`
+      )
+      .get("ws_1", "tbl_accounts", "cmd:aggregate-maintenance:%") as { count: number };
+    expect(maintenanceEvents.count).toBe(0);
   });
 
   it("scenario: outbox_publish_failure_scheduled_drain preserves accepted writes until the scheduler drains the outbox", async () => {

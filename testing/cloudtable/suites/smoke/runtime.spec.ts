@@ -136,6 +136,7 @@ function createEnv(): {
   const workflowQueue = new FakeQueue();
   const workflowStepQueue = new FakeQueue();
   const projectionQueue = new FakeQueue();
+  const aggregateQueue = new FakeQueue();
   const deadLetterQueue = new FakeQueue();
 
   let env!: CloudTableEnv;
@@ -155,6 +156,7 @@ function createEnv(): {
   );
 
   env = {
+    AGGREGATE_MAINTENANCE_QUEUE: aggregateQueue as unknown as Queue<CloudTableQueueMessage>,
     ARTIFACTS_BUCKET: {} as R2Bucket,
     DB: db as unknown as D1Database,
     DEAD_LETTER_REPROCESSOR_QUEUE: deadLetterQueue as unknown as Queue<CloudTableQueueMessage>,

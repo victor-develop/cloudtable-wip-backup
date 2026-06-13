@@ -5,7 +5,7 @@ import type {
   CommandScope
 } from "../commands/types";
 import type { EventLedgerRecord } from "../events/types";
-import type { FieldWorkflowProposalHint, JsonSchema } from "../field-types/types";
+import type { FieldWorkflowProposalHint, JsonSchema, JsonValue } from "../field-types/types";
 
 export type WorkflowOperatorKind = "trigger" | "condition" | "action";
 
@@ -64,6 +64,7 @@ export type WorkflowRowContext = {
 } & Record<string, unknown>;
 
 export type WorkflowTableContext = {
+  recordIds?: readonly string[];
   tableId: string;
   fields?: Record<string, WorkflowFieldValue>;
   row?: WorkflowRowContext;
@@ -112,9 +113,71 @@ export type WorkflowActionBinding = {
   operatorId: string;
 };
 
+export type WorkflowRelatedTableResolver =
+  | {
+      alias: string;
+      sourceFieldId: string;
+      strategy: "single_relation";
+      targetTableId: string;
+    }
+  | {
+      alias: string;
+      sourceFieldId: string;
+      strategy: "value_match";
+      targetFieldId: string;
+      targetTableId: string;
+    };
+
+export type WorkflowAggregateGroupingSource = {
+  kind: "related_record";
+  resolverAlias: string;
+};
+
+export type WorkflowAggregateOperand = {
+  fieldId: string;
+  kind: "source_field";
+  valueType: "number";
+};
+
+export type WorkflowAggregateDefinition = {
+  alias: string;
+  dependencyFieldIds?: readonly string[];
+  groupingSource: WorkflowAggregateGroupingSource;
+  operand?: WorkflowAggregateOperand;
+  operationConfig?: Record<string, JsonValue>;
+  operationId: string;
+  sourceRelationPath: string;
+  targetFieldId: string;
+};
+
+export type WorkflowLookupSource = {
+  kind: "related_record";
+  resolverAlias: string;
+};
+
+export type WorkflowLookupDefinition = {
+  alias: string;
+  dependencyFieldIds?: readonly string[];
+  lookupSource: WorkflowLookupSource;
+  sourceRelationPath: string;
+  targetFieldId: string;
+  valueFieldId: string;
+};
+
+export type WorkflowDefinitionMetadata = {
+  aggregateDefinitions?: readonly WorkflowAggregateDefinition[];
+  lookupDefinitions?: readonly WorkflowLookupDefinition[];
+  lookupFieldIds?: readonly string[];
+  relatedTableResolvers?: readonly WorkflowRelatedTableResolver[];
+  rollupFieldIds?: readonly string[];
+  status?: "draft" | "published" | "paused";
+  tableId?: string;
+} & Record<string, unknown>;
+
 export type WorkflowDefinition = {
   actions: readonly WorkflowActionBinding[];
   conditions: readonly WorkflowConditionBinding[];
+  metadata?: WorkflowDefinitionMetadata;
   principal?: {
     policyRevision?: number;
     principalId: string;
@@ -218,6 +281,12 @@ export type WorkflowActionDefinition = WorkflowOperatorDefinitionBase & {
     input: WorkflowActionInput,
     context: WorkflowActionExecutionContext
   ): CommandEnvelope;
+  execute?(
+    input: WorkflowActionInput,
+    context: WorkflowActionExecutionContext,
+    scope: WorkflowExecutionScope,
+    executor: WorkflowActionExecutor
+  ): Promise<CommandResult>;
 };
 
 export type WorkflowTriggerManifest = WorkflowOperatorManifestBase & {

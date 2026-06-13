@@ -14,6 +14,7 @@ import type {
   NormalizeResult,
   ValidationResult
 } from "./types";
+import { readComputedFieldConfig } from "./computed";
 import { listPrincipalUserCanonicalBindings } from "../ownership/row-owner";
 
 const baseCapabilities: FieldTypeCapabilities = {
@@ -1481,13 +1482,12 @@ function createSelectFieldType(input: {
     },
     getWorkflowProposalHints(context) {
       const parsedConfig = parseSelectConfig(context.fieldConfig);
-      const configuredOptionHints = (
+      const configuredOptionHints: FieldWorkflowProposalHint[] = (
         input.multiValue
           ? buildConfiguredMultiSelectOptionWorkflowProposalHints(parsedConfig.options)
           : buildConfiguredOptionWorkflowProposalHints(parsedConfig.options)
-      ).map((hint) => ({
-        ...hint,
-        draftInput: input.multiValue
+      ).map((hint): FieldWorkflowProposalHint => {
+        const draftInput: Record<string, JsonValue> = input.multiValue
           ? {
               option: hint.draftInput?.option ?? null
             }
@@ -1496,8 +1496,13 @@ function createSelectFieldType(input: {
                 path: `${context.binding}.value`
               },
               right: hint.draftInput?.right ?? null
-            }
-      }));
+            };
+
+        return {
+          ...hint,
+          draftInput
+        };
+      });
 
       return [...configuredOptionHints, ...defaultWorkflowProposalHints].map(cloneProposalHint);
     },
@@ -2143,8 +2148,9 @@ function validateComputedConfig(config: unknown): ValidationResult {
   const { config: parsedConfig, errors } = validateObjectConfig(config, [
     "dependsOnFieldIds",
     "expression",
-    "lookupFieldId",
-    "resultValueType"
+    "lookup",
+    "resultValueType",
+    "rollup"
   ]);
   if (!parsedConfig) {
     return {
@@ -2153,12 +2159,20 @@ function validateComputedConfig(config: unknown): ValidationResult {
     };
   }
 
-  if (
-    typeof parsedConfig.expression !== "string" &&
-    typeof parsedConfig.lookupFieldId !== "string"
-  ) {
+  const parsedRollupConfig = readComputedFieldConfig(parsedConfig)?.rollup;
+  const parsedLookupConfig = readComputedFieldConfig(parsedConfig)?.lookup;
+  const hasExpression = typeof parsedConfig.expression === "string";
+  const hasLookup = parsedConfig.lookup !== undefined;
+  const hasRollup = parsedConfig.rollup !== undefined;
+
+  if (Number(hasExpression) + Number(hasLookup) + Number(hasRollup) === 0) {
     errors.push(
-      "Field configuration must include expression or lookupFieldId for computed.readonly."
+      "Field configuration must include exactly one of expression, lookup, or rollup for computed.readonly."
+    );
+  }
+  if (Number(hasExpression) + Number(hasLookup) + Number(hasRollup) > 1) {
+    errors.push(
+      "Field configuration must not mix expression, lookup, and rollup on computed.readonly."
     );
   }
 
@@ -2169,12 +2183,17 @@ function validateComputedConfig(config: unknown): ValidationResult {
     errors.push("Field configuration expression must be a non-empty string.");
   }
 
-  if (
-    parsedConfig.lookupFieldId !== undefined &&
-    (typeof parsedConfig.lookupFieldId !== "string" ||
-      parsedConfig.lookupFieldId.trim() === "")
-  ) {
-    errors.push("Field configuration lookupFieldId must be a non-empty string.");
+  if (parsedConfig.lookup !== undefined) {
+    if (!parsedLookupConfig) {
+      errors.push("Field configuration lookup must be an object.");
+    } else {
+      if (parsedLookupConfig.sourceFieldId.length === 0) {
+        errors.push("Field configuration lookup.sourceFieldId must be a non-empty string.");
+      }
+      if (parsedLookupConfig.targetFieldId.length === 0) {
+        errors.push("Field configuration lookup.targetFieldId must be a non-empty string.");
+      }
+    }
   }
 
   if (parsedConfig.dependsOnFieldIds !== undefined) {
@@ -2189,6 +2208,68 @@ function validateComputedConfig(config: unknown): ValidationResult {
       parsedConfig.resultValueType.trim() === "")
   ) {
     errors.push("Field configuration resultValueType must be a non-empty string.");
+  }
+  if (
+    parsedRollupConfig &&
+    parsedConfig.resultValueType !== undefined &&
+    parsedConfig.resultValueType !== "number"
+  ) {
+    errors.push("Field configuration resultValueType must be number for rollup fields.");
+  }
+
+  if (parsedConfig.rollup !== undefined) {
+    if (!parsedRollupConfig) {
+      errors.push("Field configuration rollup must be an object.");
+    } else {
+      if (parsedRollupConfig.sourceTableId.length === 0) {
+        errors.push("Field configuration rollup.sourceTableId must be a non-empty string.");
+      }
+      if (parsedRollupConfig.grouping.sourceFieldId.length === 0) {
+        errors.push(
+          "Field configuration rollup.grouping.sourceFieldId must be a non-empty string."
+        );
+      }
+      if (
+        parsedRollupConfig.grouping.strategy !== "single_relation" &&
+        parsedRollupConfig.grouping.strategy !== "value_match"
+      ) {
+        errors.push(
+          "Field configuration rollup.grouping.strategy must be single_relation or value_match."
+        );
+      }
+      if (
+        parsedRollupConfig.grouping.strategy === "value_match" &&
+        parsedRollupConfig.grouping.targetFieldId.length === 0
+      ) {
+        errors.push(
+          "Field configuration rollup.grouping.targetFieldId must be a non-empty string for value_match rollups."
+        );
+      }
+      if (
+        parsedRollupConfig.operationId !== "count_records" &&
+        parsedRollupConfig.operationId !== "sum_numbers"
+      ) {
+        errors.push(
+          "Field configuration rollup.operationId must be count_records or sum_numbers."
+        );
+      }
+      if (
+        parsedRollupConfig.operationId === "sum_numbers" &&
+        (!parsedRollupConfig.operandFieldId || parsedRollupConfig.operandFieldId.length === 0)
+      ) {
+        errors.push(
+          "Field configuration rollup.operandFieldId is required for sum_numbers rollups."
+        );
+      }
+      if (
+        parsedRollupConfig.operationId === "count_records" &&
+        parsedRollupConfig.operandFieldId !== undefined
+      ) {
+        errors.push(
+          "Field configuration rollup.operandFieldId is not supported for count_records rollups."
+        );
+      }
+    }
   }
 
   return {
@@ -2798,13 +2879,52 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
           type: "string",
           description: "Deterministic computed expression identifier."
         },
-        lookupFieldId: {
-          type: "string",
-          description: "Optional lookup field id."
+        lookup: {
+          type: "object",
+          description: "Optional single-hop lookup contract over a single relation field.",
+          additionalProperties: false,
+          properties: {
+            sourceFieldId: {
+              type: "string",
+              description: "Single-relation source field on the current table."
+            },
+            targetFieldId: {
+              type: "string",
+              description: "Field id on the related record whose value is copied."
+            }
+          }
         },
         resultValueType: {
           type: "string",
           description: "Optional downstream logical result type."
+        },
+        rollup: {
+          type: "object",
+          description: "Optional first-class rollup contract for grouped count/sum aggregates.",
+          additionalProperties: false,
+          properties: {
+            sourceTableId: {
+              type: "string",
+              description: "Source table id whose rows feed the rollup."
+            },
+            operationId: {
+              type: "string",
+              description: "Supported aggregate operation id.",
+              enum: ["count_records", "sum_numbers"]
+            },
+            operandFieldId: {
+              type: "string",
+              description: "Required numeric source field for sum_numbers."
+            },
+            operationConfig: {
+              type: "object",
+              description: "Optional aggregate-operation config."
+            },
+            grouping: {
+              type: "object",
+              description: "Current rollup grouping strategies."
+            }
+          }
         }
       }
     },
@@ -2828,6 +2948,41 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
         expectedErrors: [
           "Field configuration expression must be a non-empty string.",
           "dependsOnFieldIds entries must be unique: fld_1."
+        ]
+      },
+      {
+        idSuffix: "lookup_invalid_contract",
+        config: {
+          lookup: {
+            sourceFieldId: "",
+            targetFieldId: ""
+          }
+        },
+        expectedErrors: [
+          "Field configuration lookup.sourceFieldId must be a non-empty string.",
+          "Field configuration lookup.targetFieldId must be a non-empty string."
+        ]
+      },
+      {
+        idSuffix: "rollup_invalid_operand_contract",
+        config: {
+          resultValueType: "text",
+          rollup: {
+            grouping: {
+              sourceFieldId: "",
+              strategy: "value_match"
+            },
+            operandFieldId: "fld_amount",
+            operationId: "count_records",
+            sourceTableId: ""
+          }
+        },
+        expectedErrors: [
+          "Field configuration resultValueType must be number for rollup fields.",
+          "Field configuration rollup.sourceTableId must be a non-empty string.",
+          "Field configuration rollup.grouping.sourceFieldId must be a non-empty string.",
+          "Field configuration rollup.grouping.targetFieldId must be a non-empty string for value_match rollups.",
+          "Field configuration rollup.operandFieldId is not supported for count_records rollups."
         ]
       }
     ],

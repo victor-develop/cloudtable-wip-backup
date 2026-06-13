@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TableCoordinatorDurableObject } from "../../../../src/durable-objects/table-coordinator";
 import { WorkspaceControlDurableObject } from "../../../../src/durable-objects/workspace-control";
@@ -7,6 +7,7 @@ import type { CommandEnvelope } from "../../../../src/core/commands/types";
 import type { EffectivePermissionSnapshot } from "../../../../src/core/permissions/types";
 import { serializeFieldTypeManifest } from "../../../../src/core/field-types/manifest";
 import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
+import { createCloudTableD1Repository } from "../../../../src/core/persistence/cloudtable-d1-repository";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
 import { serializeWorkflowOperatorManifest } from "../../../../src/core/workflows/manifest";
 import { handleFetch, handleScheduled } from "../../../../src/runtime/worker";
@@ -146,6 +147,7 @@ function createRouteBody(overrides: Partial<CommandEnvelope> = {}): Partial<Comm
 }
 
 function createEnv(): {
+  aggregateQueue: FakeQueue;
   db: SqliteD1Database;
   deadLetterQueue: FakeQueue;
   env: CloudTableEnv;
@@ -165,6 +167,7 @@ function createEnv(): {
   const workflowQueue = new FakeQueue();
   const workflowStepQueue = new FakeQueue();
   const projectionQueue = new FakeQueue();
+  const aggregateQueue = new FakeQueue();
   const deadLetterQueue = new FakeQueue();
 
   let env!: CloudTableEnv;
@@ -184,10 +187,16 @@ function createEnv(): {
   );
 
   env = {
+    AGGREGATE_MAINTENANCE_QUEUE: aggregateQueue as unknown as Queue<CloudTableQueueMessage>,
     ARTIFACTS_BUCKET: {} as R2Bucket,
+    AUTH_SESSION_SECRET: "test-session-secret",
+    AUTH_SESSION_TTL_SECONDS: "3600",
     DB: db as unknown as D1Database,
     DEAD_LETTER_REPROCESSOR_QUEUE: deadLetterQueue as unknown as Queue<CloudTableQueueMessage>,
     EVENT_FANOUT_QUEUE: eventFanoutQueue as unknown as Queue<CloudTableQueueMessage>,
+    GOOGLE_CLIENT_ID: "google-client-id",
+    GOOGLE_CLIENT_SECRET: "google-client-secret",
+    GOOGLE_OAUTH_REDIRECT_URI: "https://example.test/v1/auth/google/callback",
     PROJECTION_MAINTENANCE_QUEUE: projectionQueue as unknown as Queue<CloudTableQueueMessage>,
     TABLE_COORDINATOR_DO: tableNamespace as unknown as DurableObjectNamespace,
     WORKFLOW_DISPATCH_QUEUE: workflowQueue as unknown as Queue<CloudTableQueueMessage>,
@@ -196,6 +205,7 @@ function createEnv(): {
   };
 
   return {
+    aggregateQueue,
     db,
     deadLetterQueue,
     env,
@@ -213,6 +223,113 @@ function createScheduledController(scheduledTime: number): ScheduledController {
     scheduledTime
   } as ScheduledController;
 }
+
+async function provisionWorkspaceMembershipIdentity(
+  env: CloudTableEnv,
+  input: {
+    externalIdentity?: {
+      externalSubject: string;
+      id: string;
+      providerKey: string;
+    };
+    principalId: string;
+    roleKey?: string;
+    userId: string;
+  }
+): Promise<Response> {
+  return handleFetch(
+    new Request("https://example.test/v1/workspaces/ws_1/memberships", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        membership: {
+          organizationMembershipId: `orgmem:${input.userId}`,
+          principalId: input.principalId,
+          roleKey: input.roleKey ?? "workspace.member",
+          workspaceMembershipId: `wsmem:${input.userId}`
+        },
+        ...(input.externalIdentity
+          ? {
+              externalIdentity: {
+                email: `${input.userId}@example.com`,
+                externalSubject: input.externalIdentity.externalSubject,
+                id: input.externalIdentity.id,
+                providerKey: input.externalIdentity.providerKey
+              }
+            }
+          : {}),
+        organization: {
+          id: "org_1",
+          name: "Org 1",
+          slug: "org-1"
+        },
+        timestamp: "2026-06-10T00:00:00.000Z",
+        user: {
+          displayName: input.userId,
+          email: `${input.userId}@example.com`,
+          id: input.userId
+        },
+        workspace: {
+          name: "Workspace 1",
+          slug: "workspace-1"
+        }
+      })
+    }),
+    env,
+    {} as ExecutionContext
+  );
+}
+
+function readCookieHeaderFromSetCookie(setCookie: string): string {
+  return setCookie.split(";", 1)[0]!;
+}
+
+async function createAuthenticatedCookie(
+  env: CloudTableEnv,
+  userId: string,
+  options: { activeWorkspaceId?: string | null } = {}
+): Promise<string> {
+  const repository = createCloudTableD1Repository(env.DB);
+  const issuedAt = "2026-06-10T01:00:00.000Z";
+  const session = await repository.createAuthSession({
+    activeWorkspaceId: options.activeWorkspaceId ?? null,
+    expiresAt: "2099-06-10T02:00:00.000Z",
+    lastAuthenticatedAt: issuedAt,
+    sessionId: `session_${userId}`,
+    userId
+  });
+  const payload = toBase64Url(JSON.stringify({ sessionId: session.sessionId }));
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.AUTH_SESSION_SECRET ?? ""),
+    {
+      hash: "SHA-256",
+      name: "HMAC"
+    },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
+
+  return `cloudtable_session=${encodeURIComponent(`${payload}.${toBase64Url(signature)}`)}`;
+}
+
+function toBase64Url(value: string | ArrayBuffer): string {
+  const bytes =
+    typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const fieldTypeRegistry = createFieldTypeRegistry();
 const workflowOperatorRegistry = createWorkflowOperatorRegistry();
@@ -2409,6 +2526,465 @@ describe("cloudtable runtime ingress", () => {
     });
     expect(toolRunBody.output.kind).toBe("workflow-run-detail");
     expect(toolRunBody.output.run).toEqual(directRunBody);
+  });
+
+  it("enqueues manual aggregate backfill requests through workflow operator ingress and rejects duplicate request ids", async () => {
+    const { aggregateQueue, db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_open_ticket_count",
+      fieldKey: "open_ticket_count",
+      fieldType: "computed.readonly",
+      label: "Open Ticket Count",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account", "fld_status"],
+        expression: "aggregate.account_open_ticket_count",
+        resultValueType: "number"
+      }
+    });
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [],
+        metadata: {
+          aggregateDefinitions: [
+            {
+              alias: "open_ticket_count",
+              dependencyFieldIds: ["fld_status"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account"
+              },
+              operationId: "count_records",
+              sourceRelationPath: "relatedTables.account",
+              targetFieldId: "fld_open_ticket_count"
+            }
+          ],
+          relatedTableResolvers: [
+            {
+              alias: "account",
+              sourceFieldId: "fld_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            }
+          ],
+          status: "published",
+          tableId: "tbl_1"
+        },
+        principal: {
+          policyRevision: 26,
+          principalId: "wf_aggregate_manual_service",
+          schemaEpoch: 0,
+          scopeHash: "scope:wf:aggregate-manual"
+        },
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "field_changed"
+        },
+        workflowId: "wf_aggregate_manual"
+      },
+      name: "Aggregate Manual",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_aggregate_manual",
+      workflowKey: "aggregate-manual"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_aggregate_ops",
+      workspaceId: "ws_1",
+      principalId: "ops_aggregate",
+      policyRevision: 26,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+
+    const request = async () =>
+      handleFetch(
+        new Request("https://example.test/v1/workflows/wf_aggregate_manual/aggregate-maintenance", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            aggregateAliases: ["open_ticket_count"],
+            kind: "backfill",
+            permissionScopeHash: "scope:table:tbl_1",
+            policyRevision: 26,
+            principalId: "ops_aggregate",
+            requestId: "manual-backfill-1",
+            workspaceId: "ws_1"
+          })
+        }),
+        env,
+        {} as ExecutionContext
+      );
+
+    const first = await request();
+    expect(first.status).toBe(202);
+    expect((await first.json()) as {
+      aggregateAliases: string[];
+      kind: string;
+      requestId: string;
+      status: string;
+      workflowId: string;
+      workflowVersionId: string;
+    }).toMatchObject({
+      aggregateAliases: ["open_ticket_count"],
+      kind: "backfill",
+      requestId: "manual-backfill-1",
+      status: "enqueued",
+      workflowId: "wf_aggregate_manual",
+      workflowVersionId: "wf_aggregate_manual:v1"
+    });
+
+    expect(aggregateQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent[0]).toMatchObject({
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "open_ticket_count",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_open_ticket_count",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "manual"
+        },
+        workflowId: "wf_aggregate_manual",
+        workflowVersionId: "wf_aggregate_manual:v1"
+      },
+      workspaceId: "ws_1"
+    });
+
+    const duplicate = await request();
+    expect(duplicate.status).toBe(409);
+    expect((await duplicate.json()) as { message: string }).toMatchObject({
+      message:
+        "Aggregate maintenance request manual-backfill-1 was already accepted for workflow wf_aggregate_manual."
+    });
+  });
+
+  it("rejects manual aggregate-maintenance ingress when requested aggregate aliases are undefined", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_open_ticket_count",
+      fieldKey: "open_ticket_count",
+      fieldType: "computed.readonly",
+      label: "Open Ticket Count",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account", "fld_status"],
+        expression: "aggregate.account_open_ticket_count",
+        resultValueType: "number"
+      }
+    });
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [],
+        metadata: {
+          aggregateDefinitions: [
+            {
+              alias: "open_ticket_count",
+              dependencyFieldIds: ["fld_status"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account"
+              },
+              operationId: "count_records",
+              sourceRelationPath: "relatedTables.account",
+              targetFieldId: "fld_open_ticket_count"
+            }
+          ],
+          relatedTableResolvers: [
+            {
+              alias: "account",
+              sourceFieldId: "fld_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            }
+          ],
+          status: "published",
+          tableId: "tbl_1"
+        },
+        principal: {
+          policyRevision: 27,
+          principalId: "wf_aggregate_invalid_service",
+          schemaEpoch: 0,
+          scopeHash: "scope:wf:aggregate-invalid"
+        },
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "field_changed"
+        },
+        workflowId: "wf_aggregate_invalid"
+      },
+      name: "Aggregate Invalid",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_aggregate_invalid",
+      workflowKey: "aggregate-invalid"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_aggregate_invalid",
+      workspaceId: "ws_1",
+      principalId: "ops_aggregate",
+      policyRevision: 27,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/workflows/wf_aggregate_invalid/aggregate-maintenance", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          aggregateAliases: ["missing_alias"],
+          kind: "recompute",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 27,
+          principalId: "ops_aggregate",
+          requestId: "manual-recompute-1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { message: string }).toMatchObject({
+      message: "Workflow wf_aggregate_invalid does not define aggregate alias missing_alias."
+    });
+  });
+
+  it("rejects manual aggregate-maintenance ingress when the published workflow omits explicit service identity metadata", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_open_ticket_count",
+      fieldKey: "open_ticket_count",
+      fieldType: "computed.readonly",
+      label: "Open Ticket Count",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account", "fld_status"],
+        expression: "aggregate.account_open_ticket_count",
+        resultValueType: "number"
+      }
+    });
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [],
+        metadata: {
+          aggregateDefinitions: [
+            {
+              alias: "open_ticket_count",
+              dependencyFieldIds: ["fld_status"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account"
+              },
+              operationId: "count_records",
+              sourceRelationPath: "relatedTables.account",
+              targetFieldId: "fld_open_ticket_count"
+            }
+          ],
+          relatedTableResolvers: [
+            {
+              alias: "account",
+              sourceFieldId: "fld_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            }
+          ],
+          status: "published",
+          tableId: "tbl_1"
+        },
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "field_changed"
+        },
+        workflowId: "wf_aggregate_missing_principal"
+      },
+      name: "Aggregate Missing Principal",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_aggregate_missing_principal",
+      workflowKey: "aggregate-missing-principal"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_aggregate_missing_principal",
+      workspaceId: "ws_1",
+      principalId: "ops_aggregate",
+      policyRevision: 28,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+
+    const response = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_aggregate_missing_principal/aggregate-maintenance",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            aggregateAliases: ["open_ticket_count"],
+            kind: "backfill",
+            permissionScopeHash: "scope:table:tbl_1",
+            policyRevision: 28,
+            principalId: "ops_aggregate",
+            requestId: "manual-backfill-missing-principal",
+            workspaceId: "ws_1"
+          })
+        }
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { message: string }).toMatchObject({
+      message:
+        "Workflow wf_aggregate_missing_principal version wf_aggregate_missing_principal:v1 is missing explicit workflow service identity metadata."
+    });
   });
 
   it("returns persisted workflow definition metadata through the worker read ingress", async () => {
@@ -8969,6 +9545,748 @@ describe("cloudtable runtime ingress", () => {
     });
   });
 
+  it("provisions and reads workspace membership identity through the worker ingress", async () => {
+    const { env } = createEnv();
+
+    const provisionResponse = await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_member_identity",
+      roleKey: "workspace.admin",
+      userId: "user_identity"
+    });
+
+    expect(provisionResponse.status).toBe(200);
+    const provisionBody = (await provisionResponse.json()) as {
+      membership: {
+        organizationId: string;
+        principalId: string;
+        userId: string;
+        workspacePrincipalId: string | null;
+      };
+    };
+    expect(provisionBody.membership).toMatchObject({
+      organizationId: "org_1",
+      principalId: "usr_member_identity",
+      userId: "user_identity",
+      workspacePrincipalId: "principal:ws_1:usr_member_identity"
+    });
+
+    const readResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/memberships/usr_member_identity"),
+      env,
+      {} as ExecutionContext
+    );
+    expect(readResponse.status).toBe(200);
+    const readBody = (await readResponse.json()) as {
+      membership: {
+        principalId: string;
+        workspaceRoleKey: string;
+      };
+    };
+    expect(readBody.membership).toMatchObject({
+      principalId: "usr_member_identity",
+      workspaceRoleKey: "workspace.admin"
+    });
+  });
+
+  it("issues invitations for an authenticated member and accepts them through Google callback", async () => {
+    const { db, env } = createEnv();
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_inviter",
+      userId: "user_inviter"
+    });
+    const inviterCookie = await createAuthenticatedCookie(env, "user_inviter");
+
+    const issueResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: inviterCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(issueResponse.status).toBe(201);
+    const issueBody = (await issueResponse.json()) as {
+      invitation: {
+        acceptUrl: string;
+        id: string;
+        invitedEmail: string;
+        roleKey: string;
+        status: string;
+      };
+    };
+    expect(issueBody.invitation).toMatchObject({
+      invitedEmail: "invitee@example.com",
+      roleKey: "workspace.member",
+      status: "pending"
+    });
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "invitee@example.com",
+            name: "Invitee",
+            sub: "google-oauth2|invitee"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const loginResponse = await handleFetch(
+      new Request(issueBody.invitation.acceptUrl),
+      env,
+      {} as ExecutionContext
+    );
+    expect(loginResponse.status).toBe(302);
+    const googleRedirect = new URL(loginResponse.headers.get("location") ?? "");
+    const state = googleRedirect.searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(302);
+    const inviteeCookie = readCookieHeaderFromSetCookie(callbackResponse.headers.get("set-cookie") ?? "");
+
+    const sessionResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session?workspaceId=ws_1", {
+        headers: {
+          cookie: inviteeCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = (await sessionResponse.json()) as {
+      activeWorkspaceId: string | null;
+      activeWorkspaceMembership: { workspaceId: string } | null;
+      session: { userEmail: string | null; userId: string };
+      workspaceMembership: { organizationId: string; principalId: string; userId: string };
+    };
+    expect(sessionBody.session.userId).not.toBe("user_inviter");
+    expect(sessionBody.session.userEmail).toBe("invitee@example.com");
+    expect(sessionBody.activeWorkspaceId).toBe("ws_1");
+    expect(sessionBody.activeWorkspaceMembership?.workspaceId).toBe("ws_1");
+    expect(sessionBody.workspaceMembership.organizationId).toBe("org_1");
+    expect(sessionBody.workspaceMembership.userId).toBe(sessionBody.session.userId);
+    expect(sessionBody.workspaceMembership.principalId).toMatch(/^usr_/);
+
+    const invitationRow = await db
+      .prepare(
+        `SELECT status, accepted_by_user_id
+         FROM invitations
+         WHERE id = ?`
+      )
+      .bind(issueBody.invitation.id)
+      .first<{ accepted_by_user_id: string | null; status: string }>();
+    expect(invitationRow).toEqual({
+      accepted_by_user_id: sessionBody.session.userId,
+      status: "accepted"
+    });
+  });
+
+  it("prioritizes the invited workspace for cross-organization invitees and still allows session switching", async () => {
+    const { db, env } = createEnv();
+    seedWorkspace(db, "ws_2");
+
+    const existingMembershipResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_2/memberships", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          membership: {
+            organizationMembershipId: "orgmem:user_cross_org:ws_2",
+            principalId: "usr_cross_org_existing",
+            roleKey: "workspace.member",
+            workspaceMembershipId: "wsmem:user_cross_org:ws_2"
+          },
+          organization: {
+            id: "org_2",
+            name: "Org 2",
+            slug: "org-2"
+          },
+          timestamp: "2026-06-10T00:00:00.000Z",
+          user: {
+            displayName: "user_cross_org",
+            email: "invitee@example.com",
+            id: "user_cross_org"
+          },
+          workspace: {
+            name: "Workspace 2",
+            slug: "workspace-2"
+          }
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(existingMembershipResponse.status).toBe(200);
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_inviter",
+      userId: "user_inviter"
+    });
+    const inviterCookie = await createAuthenticatedCookie(env, "user_inviter");
+
+    const issueResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: inviterCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(issueResponse.status).toBe(201);
+    const issueBody = (await issueResponse.json()) as {
+      invitation: {
+        acceptUrl: string;
+        id: string;
+      };
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "invitee@example.com",
+            name: "Invitee",
+            sub: "google-oauth2|invitee"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const loginResponse = await handleFetch(
+      new Request(issueBody.invitation.acceptUrl),
+      env,
+      {} as ExecutionContext
+    );
+    expect(loginResponse.status).toBe(302);
+    const googleRedirect = new URL(loginResponse.headers.get("location") ?? "");
+    const state = googleRedirect.searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(302);
+    const inviteeCookie = readCookieHeaderFromSetCookie(callbackResponse.headers.get("set-cookie") ?? "");
+
+    const invitedWorkspaceSessionResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session", {
+        headers: {
+          cookie: inviteeCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invitedWorkspaceSessionResponse.status).toBe(200);
+    const invitedWorkspaceSessionBody = (await invitedWorkspaceSessionResponse.json()) as {
+      activeOrganization: { organizationId: string } | null;
+      activeWorkspaceId: string | null;
+      memberships: Array<{ organizationId: string; workspaceId: string }>;
+      session: { activeWorkspaceId: string | null; userId: string };
+      workspaceMembership: { organizationId: string; workspaceId: string };
+    };
+    expect(invitedWorkspaceSessionBody).toMatchObject({
+      activeOrganization: { organizationId: "org_1" },
+      activeWorkspaceId: "ws_1",
+      session: {
+        activeWorkspaceId: "ws_1",
+        userId: "user_cross_org"
+      },
+      workspaceMembership: {
+        organizationId: "org_1",
+        workspaceId: "ws_1"
+      }
+    });
+    expect(invitedWorkspaceSessionBody.memberships).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ organizationId: "org_1", workspaceId: "ws_1" }),
+        expect.objectContaining({ organizationId: "org_2", workspaceId: "ws_2" })
+      ])
+    );
+
+    const switchResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session/selection", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          workspaceId: "ws_2"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(switchResponse.status).toBe(200);
+    expect(
+      (await switchResponse.json()) as {
+        activeOrganization: { organizationId: string };
+        activeWorkspaceId: string | null;
+        session: { activeWorkspaceId: string | null };
+        workspaceMembership: { principalId: string; workspaceId: string };
+      }
+    ).toMatchObject({
+      activeOrganization: { organizationId: "org_2" },
+      activeWorkspaceId: "ws_2",
+      session: { activeWorkspaceId: "ws_2" },
+      workspaceMembership: {
+        principalId: "usr_cross_org_existing",
+        workspaceId: "ws_2"
+      }
+    });
+
+    const invitationRow = await db
+      .prepare(
+        `SELECT status, accepted_by_user_id
+         FROM invitations
+         WHERE id = ?`
+      )
+      .bind(issueBody.invitation.id)
+      .first<{ accepted_by_user_id: string | null; status: string }>();
+    expect(invitationRow).toEqual({
+      accepted_by_user_id: "user_cross_org",
+      status: "accepted"
+    });
+  });
+
+  it("persists active workspace selection for multi-membership users through session switching", async () => {
+    const { db, env } = createEnv();
+    seedWorkspace(db, "ws_2");
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_multi_primary",
+      userId: "user_multi"
+    });
+
+    const secondaryMembershipResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_2/memberships", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          membership: {
+            organizationMembershipId: "orgmem:user_multi:ws_2",
+            principalId: "usr_multi_secondary",
+            roleKey: "workspace.member",
+            workspaceMembershipId: "wsmem:user_multi:ws_2"
+          },
+          organization: {
+            id: "org_2",
+            name: "Org 2",
+            slug: "org-2"
+          },
+          timestamp: "2026-06-10T00:00:00.000Z",
+          user: {
+            displayName: "user_multi",
+            email: "user_multi@example.com",
+            id: "user_multi"
+          },
+          workspace: {
+            name: "Workspace 2",
+            slug: "workspace-2"
+          }
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(secondaryMembershipResponse.status).toBe(200);
+
+    const sessionCookie = await createAuthenticatedCookie(env, "user_multi");
+
+    const preSwitchResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session", {
+        headers: {
+          cookie: sessionCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(preSwitchResponse.status).toBe(200);
+    expect((await preSwitchResponse.json()) as { activeWorkspaceId: string | null }).toMatchObject({
+      activeWorkspaceId: null
+    });
+
+    const switchResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session/selection", {
+        method: "POST",
+        headers: {
+          cookie: sessionCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          workspaceId: "ws_2"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(switchResponse.status).toBe(200);
+    expect(
+      (await switchResponse.json()) as {
+        activeOrganization: { organizationId: string };
+        activeWorkspaceId: string | null;
+        activeWorkspaceMembership: { workspaceId: string } | null;
+        session: { activeWorkspaceId: string | null };
+      }
+    ).toMatchObject({
+      activeOrganization: { organizationId: "org_2" },
+      activeWorkspaceId: "ws_2",
+      activeWorkspaceMembership: { workspaceId: "ws_2" },
+      session: { activeWorkspaceId: "ws_2" }
+    });
+
+    const hydratedResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session", {
+        headers: {
+          cookie: sessionCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(hydratedResponse.status).toBe(200);
+    expect(
+      (await hydratedResponse.json()) as {
+        activeOrganization: { organizationId: string } | null;
+        activeWorkspaceId: string | null;
+        activeWorkspaceMembership: { workspaceId: string } | null;
+      }
+    ).toMatchObject({
+      activeOrganization: { organizationId: "org_2" },
+      activeWorkspaceId: "ws_2",
+      activeWorkspaceMembership: { workspaceId: "ws_2" }
+    });
+  });
+
+  it("links a Google identity by email, establishes a session, and hydrates workspace ingress without principalId", async () => {
+    const { db, env } = createEnv();
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_google_member",
+      userId: "user_google_member"
+    });
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "user_google_member@example.com",
+            name: "Google Member",
+            sub: "google-oauth2|member"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const loginResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/auth/google/login?redirectTo=https%3A%2F%2Fapp.example.test%2Fcloudtable&workspaceId=ws_1"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(loginResponse.status).toBe(302);
+    const googleRedirect = new URL(loginResponse.headers.get("location") ?? "");
+    expect(googleRedirect.origin).toBe("https://accounts.google.com");
+    const state = googleRedirect.searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(302);
+    expect(callbackResponse.headers.get("location")).toBe("https://app.example.test/cloudtable");
+    const sessionCookie = callbackResponse.headers.get("set-cookie");
+    expect(sessionCookie).toContain("cloudtable_session=");
+
+    const cookieHeader = readCookieHeaderFromSetCookie(sessionCookie ?? "");
+    const sessionResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session?workspaceId=ws_1", {
+        headers: {
+          cookie: cookieHeader
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = (await sessionResponse.json()) as {
+      session: { userId: string };
+      workspaceMembership: { principalId: string };
+    };
+    expect(sessionBody.session.userId).toBe("user_google_member");
+    expect(sessionBody.workspaceMembership.principalId).toBe("usr_google_member");
+
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_google_catalog",
+      workspaceId: "ws_1",
+      principalId: "usr_google_member",
+      policyRevision: 61,
+      schemaEpoch: 0,
+      scopeHash: "scope:workspace",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+
+    const catalogResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workspaces/ws_1/catalog?permissionScopeHash=scope:workspace&policyRevision=61",
+        {
+          headers: {
+            cookie: cookieHeader
+          }
+        }
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(catalogResponse.status).toBe(200);
+
+    insertField(db, {
+      fieldId: "fld_title",
+      fieldKey: "title",
+      fieldType: "text.single_line",
+      label: "Title",
+      tableId: "tbl_1"
+    });
+    setFieldPrincipalPermission(db, {
+      fieldId: "fld_title",
+      permission: {
+        agent: true,
+        read: "visible",
+        workflow: true,
+        write: true
+      },
+      principalId: "usr_google_member"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_google_command",
+      workspaceId: "ws_1",
+      principalId: "usr_google_member",
+      policyRevision: 62,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["record.create"],
+      fields: {
+        fld_title: {
+          agent: true,
+          fieldId: "fld_title",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const commandResponse = await handleFetch(
+      new Request("https://example.test/v1/commands/execute", {
+        method: "POST",
+        headers: {
+          cookie: cookieHeader,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          actor: {
+            mode: "user"
+          },
+          commandId: "cmd_google_session_hydration",
+          commandType: "record.create",
+          idempotencyKey: "idem_google_session_hydration",
+          payload: {
+            recordId: "rec_google_session_hydration"
+          },
+          scope: "table",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(commandResponse.status).toBe(200);
+    const commandBody = (await commandResponse.json()) as {
+      command: { actor: { principalId: string } };
+    };
+    expect(commandBody.command.actor.principalId).toBe("usr_google_member");
+  });
+
+  it("rejects Google callback linkage when the external identity belongs to a different canonical user", async () => {
+    const { env } = createEnv();
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_alice",
+      userId: "user_alice"
+    });
+    await provisionWorkspaceMembershipIdentity(env, {
+      externalIdentity: {
+        externalSubject: "google-oauth2|collision",
+        id: "ext_google_collision",
+        providerKey: "google"
+      },
+      principalId: "usr_bob",
+      userId: "user_bob"
+    });
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "user_alice@example.com",
+            name: "Alice",
+            sub: "google-oauth2|collision"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const loginResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/auth/google/login?redirectTo=https%3A%2F%2Fapp.example.test%2Fcloudtable"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const googleRedirect = new URL(loginResponse.headers.get("location") ?? "");
+    const state = googleRedirect.searchParams.get("state");
+
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(409);
+    await expect(callbackResponse.text()).resolves.toContain("already linked to a different CloudTable user");
+  });
+
+  it("denies workspace catalog reads for non-members once membership foundation exists", async () => {
+    const { db, env } = createEnv();
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_real_member",
+      userId: "user_real_member"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workspace_catalog_non_member",
+      workspaceId: "ws_1",
+      principalId: "usr_non_member",
+      policyRevision: 52,
+      schemaEpoch: 0,
+      scopeHash: "scope:workspace",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+
+    const response = await handleFetch(
+      new Request(
+        "https://example.test/v1/workspaces/ws_1/catalog?principalId=usr_non_member&permissionScopeHash=scope:workspace&policyRevision=52"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.text()).resolves.toContain(
+      "Principal usr_non_member is not an active workspace member for ws_1."
+    );
+  });
+
   it("returns workflow operator manifests through the worker read ingress", async () => {
     const { db, env } = createEnv();
 
@@ -9478,6 +10796,150 @@ describe("cloudtable runtime ingress", () => {
         label: "Estimate"
       }
     ]);
+  });
+
+  it("returns first-class computed rollup field contracts through schema metadata ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_amount",
+          operationId: "sum_numbers",
+          sourceTableId: "tbl_tickets"
+        }
+      },
+      fieldId: "fld_rollup_revenue",
+      fieldKey: "revenue_rollup",
+      fieldType: "computed.readonly",
+      label: "Revenue Rollup",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_table_schema_rollup_contract",
+      workspaceId: "ws_1",
+      principalId: "usr_table_schema_rollup_contract",
+      policyRevision: 35,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      fields: {
+        fld_rollup_revenue: {
+          agent: true,
+          fieldId: "fld_rollup_revenue",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: false
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/schema?workspaceId=ws_1&principalId=usr_table_schema_rollup_contract&permissionScopeHash=scope:table:tbl_1&policyRevision=35"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      fields: Array<{
+        config: Record<string, unknown>;
+        fieldId: string;
+      }>;
+    };
+
+    expect(body.fields).toContainEqual({
+      config: {
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_amount",
+          operationId: "sum_numbers",
+          sourceTableId: "tbl_tickets"
+        }
+      },
+      fieldId: "fld_rollup_revenue",
+      fieldKey: "revenue_rollup",
+      fieldType: "computed.readonly",
+      fieldTypeVersion: 1,
+      label: "Revenue Rollup"
+    });
+  });
+
+  it("returns first-class computed lookup field contracts through schema metadata ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        lookup: {
+          sourceFieldId: "fld_account",
+          targetFieldId: "fld_account_name"
+        }
+      },
+      fieldId: "fld_ticket_account_name",
+      fieldKey: "ticket_account_name",
+      fieldType: "computed.readonly",
+      label: "Ticket Account Name",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_table_schema_lookup_contract",
+      workspaceId: "ws_1",
+      principalId: "usr_table_schema_lookup_contract",
+      policyRevision: 36,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      fields: {
+        fld_ticket_account_name: {
+          agent: true,
+          fieldId: "fld_ticket_account_name",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: false
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/schema?workspaceId=ws_1&principalId=usr_table_schema_lookup_contract&permissionScopeHash=scope:table:tbl_1&policyRevision=36"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      fields: Array<{
+        config: Record<string, unknown>;
+        fieldId: string;
+      }>;
+    };
+
+    expect(body.fields).toContainEqual({
+      config: {
+        lookup: {
+          sourceFieldId: "fld_account",
+          targetFieldId: "fld_account_name"
+        }
+      },
+      fieldId: "fld_ticket_account_name",
+      fieldKey: "ticket_account_name",
+      fieldType: "computed.readonly",
+      fieldTypeVersion: 1,
+      label: "Ticket Account Name"
+    });
   });
 
   it("surfaces field-declared canonical workflow aliases through schema and workspace inspection reads", async () => {
@@ -12651,6 +14113,63 @@ describe("cloudtable runtime ingress", () => {
     expect(projectionQueue.sent).toEqual([]);
     expect(workflowDispatchQueue.sent).toEqual([]);
     expect(workflowStepQueue.sent).toEqual([]);
+  });
+
+  it("denies explicit command execution for non-members once workspace membership foundation exists", async () => {
+    const { db, env } = createEnv();
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_member",
+      userId: "user_member"
+    });
+    insertField(db, {
+      fieldId: "fld_title",
+      fieldKey: "title",
+      fieldType: "text.single_line",
+      label: "Title",
+      tableId: "tbl_1"
+    });
+    setFieldPrincipalPermission(db, {
+      fieldId: "fld_title",
+      permission: {
+        agent: true,
+        read: "visible",
+        workflow: true,
+        write: true
+      },
+      principalId: "usr_outsider"
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/commands/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          actor: {
+            mode: "user",
+            principalId: "usr_outsider"
+          },
+          commandId: "cmd_execute_non_member",
+          commandType: "record.create",
+          idempotencyKey: "idem_execute_non_member",
+          payload: {
+            recordId: "rec_execute_non_member"
+          },
+          scope: "table",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.text()).resolves.toContain(
+      "Principal usr_outsider is not an active workspace member for ws_1."
+    );
   });
 
   it("returns rejected execution results for invalid command payloads on the explicit command execution ingress", async () => {

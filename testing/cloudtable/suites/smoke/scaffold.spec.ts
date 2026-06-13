@@ -298,7 +298,7 @@ describe("cloudtable scaffold", () => {
     );
     expect(workflowOperators.filter((operator) => operator.kind === "trigger")).toHaveLength(5);
     expect(workflowOperators.filter((operator) => operator.kind === "condition")).toHaveLength(13);
-    expect(workflowOperators.filter((operator) => operator.kind === "action")).toHaveLength(7);
+    expect(workflowOperators.filter((operator) => operator.kind === "action")).toHaveLength(8);
     expect(createWorkflowOperatorRegistry().has("equals")).toBe(true);
     expect(() => createWorkflowOperatorRegistry().require("missing.workflow_operator")).toThrow(
       "Unknown workflow operator: missing.workflow_operator"

@@ -7,14 +7,18 @@ import {
   matchWorkflowTrigger,
   resolveWorkflowInput
 } from "../core/workflows/execution";
+import { requireWorkflowServiceIdentityMetadata } from "../core/workflows/service-identity";
 import type {
   WorkflowActionBinding,
   WorkflowActionDefinition,
   WorkflowActionExecution,
+  WorkflowAggregateDefinition,
   WorkflowDefinition,
   WorkflowExecutionResult,
   WorkflowExecutionScope,
-  WorkflowFieldValue
+  WorkflowFieldValue,
+  WorkflowLookupDefinition,
+  WorkflowRelatedTableResolver
 } from "../core/workflows/types";
 import { createRuntime, createRuntimeWithSnapshot } from "./bootstrap";
 import type { CloudTableRuntime } from "./bootstrap";
@@ -104,9 +108,6 @@ type RecordRow = {
 };
 
 type PersistedWorkflowDefinition = WorkflowDefinition & {
-  metadata?: {
-    status?: "draft" | "published" | "paused";
-  };
   principal?: {
     policyRevision?: number;
     principalId: string;
@@ -117,6 +118,179 @@ type PersistedWorkflowDefinition = WorkflowDefinition & {
 
 function parseWorkflowDefinition(input: string): PersistedWorkflowDefinition {
   return JSON.parse(input) as PersistedWorkflowDefinition;
+}
+
+function assertReactiveMaintenanceWorkflowServiceIdentity(
+  definition: PersistedWorkflowDefinition,
+  version: Pick<WorkflowVersionRow, "workflow_id" | "workflow_version_id">
+): void {
+  requireWorkflowServiceIdentityMetadata(definition, {
+    workflowId: version.workflow_id,
+    workflowVersionId: version.workflow_version_id
+  });
+}
+
+function readWorkflowRelatedTableResolvers(
+  definition: PersistedWorkflowDefinition
+): WorkflowRelatedTableResolver[] {
+  const resolvers = definition.metadata?.relatedTableResolvers;
+  return Array.isArray(resolvers) ? [...resolvers] : [];
+}
+
+function readWorkflowAggregateDefinitions(
+  definition: PersistedWorkflowDefinition
+): WorkflowAggregateDefinition[] {
+  const aggregateDefinitions = definition.metadata?.aggregateDefinitions;
+  return Array.isArray(aggregateDefinitions) ? [...aggregateDefinitions] : [];
+}
+
+function readWorkflowLookupDefinitions(
+  definition: PersistedWorkflowDefinition
+): WorkflowLookupDefinition[] {
+  const lookupDefinitions = definition.metadata?.lookupDefinitions;
+  return Array.isArray(lookupDefinitions) ? [...lookupDefinitions] : [];
+}
+
+type AggregateTriggerKind = "backfill" | "recompute";
+
+type AggregateTriggerPayload =
+  | {
+      kind: "backfill";
+      reason: string;
+    }
+  | {
+      changedFieldIds: string[];
+      eventId: string | null;
+      eventType: string | null;
+      kind: "recompute";
+      recordId: string | null;
+    };
+
+type RoutedAggregateDefinition = {
+  alias: string;
+  dependencyFieldIds: string[];
+  groupingSource: {
+    kind: "related_record";
+    resolverAlias: string;
+    sourceFieldId: string;
+  };
+  operand?: {
+    fieldId: string;
+    kind: "source_field";
+    valueType: "number";
+  };
+  operationConfig: Record<string, JsonValue>;
+  operationId: string;
+  resolver: WorkflowRelatedTableResolver;
+  sourceRelationPath: string;
+  sourceTableId: string;
+  targetFieldId: string;
+  targetTableId: string;
+};
+
+type RoutedLookupDefinition = {
+  alias: string;
+  dependencyFieldIds: string[];
+  lookupSource: {
+    kind: "related_record";
+    resolverAlias: string;
+    sourceFieldId: string;
+  };
+  resolver: Extract<WorkflowRelatedTableResolver, { strategy: "single_relation" }>;
+  sourceRelationPath: string;
+  sourceTableId: string;
+  targetFieldId: string;
+  valueFieldId: string;
+};
+
+function deriveAggregateDefinitions(
+  definition: PersistedWorkflowDefinition
+): RoutedAggregateDefinition[] {
+  const sourceTableId =
+    typeof definition.metadata?.tableId === "string" ? definition.metadata.tableId : null;
+  if (!sourceTableId) {
+    return [];
+  }
+
+  const resolvers = new Map(
+    readWorkflowRelatedTableResolvers(definition).map((resolver) => [resolver.alias, resolver])
+  );
+
+  return readWorkflowAggregateDefinitions(definition)
+    .map((aggregate) => {
+      const resolver = resolvers.get(aggregate.groupingSource.resolverAlias);
+      if (!resolver) {
+        return null;
+      }
+
+      return {
+        alias: aggregate.alias,
+        dependencyFieldIds: Array.from(
+          new Set([
+            resolver.sourceFieldId,
+            ...(aggregate.operand ? [aggregate.operand.fieldId] : []),
+            ...(aggregate.dependencyFieldIds ?? [])
+          ])
+        ),
+        groupingSource: {
+          kind: "related_record" as const,
+          resolverAlias: aggregate.groupingSource.resolverAlias,
+          sourceFieldId: resolver.sourceFieldId
+        },
+        ...(aggregate.operand ? { operand: aggregate.operand } : {}),
+        operationConfig:
+          aggregate.operationConfig && isRecord(aggregate.operationConfig)
+            ? aggregate.operationConfig
+            : {},
+        operationId: aggregate.operationId,
+        resolver,
+        sourceRelationPath: aggregate.sourceRelationPath,
+        sourceTableId,
+        targetFieldId: aggregate.targetFieldId,
+        targetTableId: resolver.targetTableId
+      };
+    })
+    .filter((aggregate): aggregate is RoutedAggregateDefinition => aggregate !== null);
+}
+
+function deriveLookupDefinitions(
+  definition: PersistedWorkflowDefinition
+): RoutedLookupDefinition[] {
+  const sourceTableId =
+    typeof definition.metadata?.tableId === "string" ? definition.metadata.tableId : null;
+  if (!sourceTableId) {
+    return [];
+  }
+
+  const resolvers = new Map(
+    readWorkflowRelatedTableResolvers(definition).map((resolver) => [resolver.alias, resolver])
+  );
+
+  return readWorkflowLookupDefinitions(definition)
+    .map((lookup) => {
+      const resolver = resolvers.get(lookup.lookupSource.resolverAlias);
+      if (!resolver || resolver.strategy !== "single_relation") {
+        return null;
+      }
+
+      return {
+        alias: lookup.alias,
+        dependencyFieldIds: Array.from(
+          new Set([resolver.sourceFieldId, ...(lookup.dependencyFieldIds ?? [])])
+        ),
+        lookupSource: {
+          kind: "related_record" as const,
+          resolverAlias: lookup.lookupSource.resolverAlias,
+          sourceFieldId: resolver.sourceFieldId
+        },
+        resolver,
+        sourceRelationPath: lookup.sourceRelationPath,
+        sourceTableId,
+        targetFieldId: lookup.targetFieldId,
+        valueFieldId: lookup.valueFieldId
+      };
+    })
+    .filter((lookup): lookup is RoutedLookupDefinition => lookup !== null);
 }
 
 function parseJsonRecord(input: string | null): Record<string, unknown> {
@@ -134,6 +308,20 @@ function parseJsonRecord(input: string | null): Record<string, unknown> {
   }
 
   return {};
+}
+
+function workflowScalarMatchKey(value: unknown): string | null {
+  if (typeof value === "string") {
+    return `string:${value}`;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `number:${String(value)}`;
+  }
+  if (typeof value === "boolean") {
+    return `boolean:${value ? "true" : "false"}`;
+  }
+
+  return null;
 }
 
 type ScheduledTriggerConfig =
@@ -196,6 +384,285 @@ function scheduledCommandIdForWorkflowVersion(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readChangedFieldIds(payload: Record<string, unknown>): string[] {
+  const changedFieldIds = new Set<string>();
+
+  if (typeof payload.fieldId === "string" && payload.fieldId.length > 0) {
+    changedFieldIds.add(payload.fieldId);
+  }
+
+  const addObjectKeys = (value: unknown) => {
+    if (!isRecord(value)) {
+      return;
+    }
+
+    for (const key of Object.keys(value)) {
+      if (key.length > 0) {
+        changedFieldIds.add(key);
+      }
+    }
+  };
+
+  addObjectKeys(payload.cells);
+  addObjectKeys(payload.patch);
+
+  if (Array.isArray(payload.fieldIds)) {
+    for (const fieldId of payload.fieldIds) {
+      if (typeof fieldId === "string" && fieldId.length > 0) {
+        changedFieldIds.add(fieldId);
+      }
+    }
+  }
+
+  return [...changedFieldIds];
+}
+
+function shouldRouteAggregateForEvent(
+  aggregate: RoutedAggregateDefinition,
+  event: EventLedgerRecord
+): boolean {
+  if (event.tableId !== aggregate.sourceTableId) {
+    return false;
+  }
+
+  const changedFieldIds = readChangedFieldIds(event.payload);
+  if (changedFieldIds.length === 0) {
+    return true;
+  }
+
+  return aggregate.dependencyFieldIds.some((fieldId) => changedFieldIds.includes(fieldId));
+}
+
+function shouldRouteLookupForEvent(
+  lookup: RoutedLookupDefinition,
+  event: EventLedgerRecord
+): boolean {
+  if (event.tableId !== lookup.sourceTableId) {
+    return false;
+  }
+
+  const changedFieldIds = readChangedFieldIds(event.payload);
+  if (changedFieldIds.length === 0) {
+    return true;
+  }
+
+  return lookup.dependencyFieldIds.some((fieldId) => changedFieldIds.includes(fieldId));
+}
+
+async function enqueueAggregateMaintenanceMessage(
+  env: CloudTableEnv,
+  input: {
+    aggregate: RoutedAggregateDefinition;
+    eventId?: string;
+    trigger: AggregateTriggerPayload;
+    workspaceId: string;
+    workflowId: string;
+    workflowVersionId: string;
+  }
+): Promise<void> {
+  const { aggregate, eventId, trigger, workflowId, workflowVersionId, workspaceId } = input;
+
+  await env.AGGREGATE_MAINTENANCE_QUEUE.send({
+    kind: "aggregate-maintenance",
+    ...(eventId ? { eventId } : {}),
+    payload: {
+      aggregate,
+      trigger,
+      workflowId,
+      workflowVersionId
+    },
+    workspaceId
+  });
+}
+
+async function enqueueLookupMaintenanceMessage(
+  env: CloudTableEnv,
+  input: {
+    eventId?: string;
+    lookup: RoutedLookupDefinition;
+    trigger: AggregateTriggerPayload;
+    workspaceId: string;
+    workflowId: string;
+    workflowVersionId: string;
+  }
+): Promise<void> {
+  const { eventId, lookup, trigger, workflowId, workflowVersionId, workspaceId } = input;
+
+  await env.AGGREGATE_MAINTENANCE_QUEUE.send({
+    kind: "aggregate-maintenance",
+    ...(eventId ? { eventId } : {}),
+    payload: {
+      lookup,
+      trigger,
+      workflowId,
+      workflowVersionId
+    },
+    workspaceId
+  });
+}
+
+export async function requestManualAggregateMaintenance(
+  env: CloudTableEnv,
+  input: {
+    aggregateAliases?: string[];
+    changedFieldIds?: string[];
+    kind: AggregateTriggerKind;
+    principalId: string;
+    reason?: string;
+    recordId?: string | null;
+    requestId: string;
+    workflowId: string;
+    workspaceId: string;
+  }
+): Promise<
+  | {
+      aggregateAliases: string[];
+      ok: true;
+      status: "enqueued";
+      workflowVersionId: string;
+    }
+  | {
+      message: string;
+      ok: false;
+      reason:
+        | "already_requested"
+        | "aggregate_alias_not_found"
+        | "aggregate_not_configured"
+        | "workflow_service_identity_invalid"
+        | "workflow_not_found"
+        | "workflow_paused";
+    }
+> {
+  const version = await loadPublishedWorkflowVersion(env.DB, input.workspaceId, input.workflowId);
+  if (!version) {
+    return {
+      message: `Workflow ${input.workflowId} was not found.`,
+      ok: false,
+      reason: "workflow_not_found"
+    };
+  }
+
+  const definition = parseWorkflowDefinition(version.definition_json);
+  if (workflowStatus(definition) !== "published") {
+    return {
+      message: `Workflow ${input.workflowId} is paused and cannot accept aggregate maintenance requests.`,
+      ok: false,
+      reason: "workflow_paused"
+    };
+  }
+
+  const aggregates = deriveAggregateDefinitions(definition);
+  if (aggregates.length === 0) {
+    return {
+      message: `Workflow ${input.workflowId} does not define aggregate maintenance metadata.`,
+      ok: false,
+      reason: "aggregate_not_configured"
+    };
+  }
+
+  try {
+    assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
+  } catch (error) {
+    return {
+      message: error instanceof Error ? error.message : "Workflow service identity metadata is invalid.",
+      ok: false,
+      reason: "workflow_service_identity_invalid"
+    };
+  }
+
+  const aggregateByAlias = new Map(aggregates.map((aggregate) => [aggregate.alias, aggregate] as const));
+  const requestedAliases =
+    input.aggregateAliases && input.aggregateAliases.length > 0
+      ? Array.from(new Set(input.aggregateAliases))
+      : aggregates.map((aggregate) => aggregate.alias);
+  const missingAlias = requestedAliases.find((alias) => !aggregateByAlias.has(alias));
+  if (missingAlias) {
+    return {
+      message: `Workflow ${input.workflowId} does not define aggregate alias ${missingAlias}.`,
+      ok: false,
+      reason: "aggregate_alias_not_found"
+    };
+  }
+
+  const scopeKey = `workflow.aggregate-maintenance:${input.workspaceId}:${input.workflowId}`;
+  const existingReceipt = await env.DB
+    .prepare(
+      `SELECT id
+       FROM idempotency_receipts
+       WHERE scope_key = ? AND idempotency_key = ?`
+    )
+    .bind(scopeKey, input.requestId)
+    .first<{ id: string }>();
+  if (existingReceipt) {
+    return {
+      message: `Aggregate maintenance request ${input.requestId} was already accepted for workflow ${input.workflowId}.`,
+      ok: false,
+      reason: "already_requested"
+    };
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO idempotency_receipts (
+         id,
+         scope_key,
+         idempotency_key,
+         command_id,
+         receipt_json,
+         created_at,
+         last_event_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      `idem:workflow.aggregate-maintenance:${input.workflowId}:${input.requestId}`,
+      scopeKey,
+      input.requestId,
+      `workflow.aggregate-maintenance:${input.workflowId}:${input.requestId}`,
+      JSON.stringify({
+        aggregateAliases: requestedAliases,
+        kind: input.kind,
+        requestedAt: now,
+        requestedBy: input.principalId,
+        workflowId: input.workflowId
+      }),
+      now,
+      null
+    )
+  ]);
+
+  const trigger: AggregateTriggerPayload =
+    input.kind === "backfill"
+      ? {
+          kind: "backfill",
+          reason: input.reason ?? "manual"
+        }
+      : {
+          changedFieldIds: input.changedFieldIds ?? [],
+          eventId: `manual-aggregate-recompute:${input.requestId}`,
+          eventType: "workflow.aggregate.manual_recompute",
+          kind: "recompute",
+          recordId: input.recordId ?? null
+        };
+
+  for (const alias of requestedAliases) {
+    await enqueueAggregateMaintenanceMessage(env, {
+      aggregate: aggregateByAlias.get(alias)!,
+      eventId: trigger.kind === "recompute" ? trigger.eventId ?? undefined : undefined,
+      trigger,
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: input.workspaceId
+    });
+  }
+
+  return {
+    aggregateAliases: requestedAliases,
+    ok: true,
+    status: "enqueued",
+    workflowVersionId: version.workflow_version_id
+  };
 }
 
 function readScheduledTriggerConfig(
@@ -356,6 +823,33 @@ async function loadWorkflowVersions(
           .all<WorkflowVersionRow>();
 
   return rows.results ?? [];
+}
+
+async function loadPublishedWorkflowVersion(
+  db: D1Database,
+  workspaceId: string,
+  workflowId: string
+): Promise<WorkflowVersionRow | null> {
+  return db
+    .prepare(
+      `SELECT
+         workflow_versions.workspace_id AS workspace_id,
+         workflow_versions.id AS workflow_version_id,
+         workflow_versions.workflow_id AS workflow_id,
+         workflow_versions.definition_json AS definition_json
+       FROM workflow_versions
+       INNER JOIN workflows
+         ON workflows.workspace_id = workflow_versions.workspace_id
+        AND workflows.id = workflow_versions.workflow_id
+       WHERE workflow_versions.workspace_id = ?
+         AND workflow_versions.workflow_id = ?
+         AND workflow_versions.published_at IS NOT NULL
+         AND workflows.archived_at IS NULL
+       ORDER BY workflow_versions.version DESC
+       LIMIT 1`
+    )
+    .bind(workspaceId, workflowId)
+    .first<WorkflowVersionRow>();
 }
 
 async function nextWorkspaceSequence(
@@ -621,7 +1115,7 @@ async function processScheduledWorkflowDispatchMessage(
   const scope = await buildExecutionScope(
     env.DB,
     runtime.fieldTypeRegistry,
-    definition.workflowId,
+    definition,
     workflowRunId,
     event
   );
@@ -1114,10 +1608,91 @@ async function loadRecordContext(
   };
 }
 
+async function loadRelatedTableContexts(
+  db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
+  workspaceId: string,
+  row: NonNullable<WorkflowExecutionScope["row"]>,
+  resolvers: readonly WorkflowRelatedTableResolver[]
+): Promise<WorkflowExecutionScope["relatedTables"]> {
+  if (resolvers.length === 0) {
+    return undefined;
+  }
+
+  const contexts: NonNullable<WorkflowExecutionScope["relatedTables"]> = {};
+  const rowFields = Object.values(row.fields);
+
+  for (const resolver of resolvers) {
+    const sourceCell = rowFields.find((field) => field.fieldId === resolver.sourceFieldId);
+    const relatedRecordIds =
+      resolver.strategy === "single_relation"
+        ? Array.isArray(sourceCell?.value)
+          ? sourceCell.value.filter(
+              (recordId): recordId is string =>
+                typeof recordId === "string" && recordId.length > 0
+            )
+          : []
+        : [];
+    let matchedRecordIds: string[] = [];
+
+    if (resolver.strategy === "value_match") {
+      const matchKey = workflowScalarMatchKey(sourceCell?.value);
+      if (matchKey) {
+        const targetRows = await db
+          .prepare(
+            `SELECT
+               records.id AS record_id,
+               cell_current.value_json AS value_json
+             FROM records
+             LEFT JOIN cell_current
+               ON cell_current.workspace_id = records.workspace_id
+              AND cell_current.table_id = records.table_id
+              AND cell_current.record_id = records.id
+              AND cell_current.field_id = ?
+             WHERE records.workspace_id = ?
+               AND records.table_id = ?
+               AND records.archived_at IS NULL
+             ORDER BY records.id ASC`
+          )
+          .bind(resolver.targetFieldId, workspaceId, resolver.targetTableId)
+          .all<{ record_id: string; value_json: string | null }>();
+
+        matchedRecordIds = (targetRows.results ?? [])
+          .filter((targetRow) => {
+            const value = parseJsonRecord(targetRow.value_json).raw;
+            return workflowScalarMatchKey(value) === matchKey;
+          })
+          .map((targetRow) => targetRow.record_id);
+      }
+    }
+
+    const candidateRecordIds =
+      resolver.strategy === "single_relation" ? relatedRecordIds : matchedRecordIds;
+    const relatedRow =
+      candidateRecordIds.length === 1
+        ? await loadRecordContext(
+            db,
+            fieldTypeRegistry,
+            workspaceId,
+            resolver.targetTableId,
+            candidateRecordIds[0]!
+          )
+        : undefined;
+
+    contexts[resolver.alias] = {
+      recordIds: candidateRecordIds,
+      ...(relatedRow ? { row: relatedRow } : {}),
+      tableId: resolver.targetTableId
+    };
+  }
+
+  return Object.keys(contexts).length > 0 ? contexts : undefined;
+}
+
 async function buildExecutionScope(
   db: D1Database,
   fieldTypeRegistry: FieldTypeRegistry,
-  workflowId: string,
+  workflow: PersistedWorkflowDefinition,
   workflowRunId: string,
   event: EventLedgerRecord
 ): Promise<WorkflowExecutionScope> {
@@ -1132,6 +1707,15 @@ async function buildExecutionScope(
     tableId && recordId
       ? await loadRecordContext(db, fieldTypeRegistry, event.workspaceId, tableId, recordId)
       : undefined;
+  const relatedTables = row
+    ? await loadRelatedTableContexts(
+        db,
+        fieldTypeRegistry,
+        event.workspaceId,
+        row,
+        readWorkflowRelatedTableResolvers(workflow)
+      )
+    : undefined;
   const cell =
     tableId && recordId && fieldId
       ? {
@@ -1148,11 +1732,12 @@ async function buildExecutionScope(
   return {
     ...(cell ? { cell } : {}),
     event,
+    ...(relatedTables ? { relatedTables } : {}),
     ...(row ? { row } : {}),
     ...(tableId ? { table: { row, tableId } } : {}),
     workflow: {
       triggerEventId: event.eventId,
-      workflowId,
+      workflowId: workflow.workflowId,
       workflowRunId
     }
   };
@@ -1210,7 +1795,7 @@ export async function fanOutWorkflowRunsForEvent(
     const scope = await buildExecutionScope(
       env.DB,
       runtime.fieldTypeRegistry,
-      definition.workflowId,
+      definition,
       workflowRunId,
       event
     );
@@ -1338,7 +1923,7 @@ export async function executeWorkflowDispatchStep(
   const scope = await buildExecutionScope(
     env.DB,
     runtime.fieldTypeRegistry,
-    workflow.workflowId,
+    workflow,
     workflowRunId,
     triggerEvent
   );
@@ -1531,6 +2116,161 @@ export async function processEventFanoutMessage(
         eventId
       },
       workspaceId: message.workspaceId
+    });
+  }
+
+  await routeAggregateMaintenanceFromEvent(env, message.workspaceId, eventId);
+}
+
+async function routeAggregateMaintenanceFromEvent(
+  env: CloudTableEnv,
+  workspaceId: string,
+  eventId: string
+): Promise<void> {
+  const event = await loadEvent(env.DB, workspaceId, eventId);
+  if (!event) {
+    return;
+  }
+
+  if (event.eventType === "workflow.published") {
+    await enqueueAggregateBackfillForPublishedWorkflow(env, event);
+    await enqueueLookupBackfillForPublishedWorkflow(env, event);
+    return;
+  }
+
+  if (
+    event.eventType !== "record.created" &&
+    event.eventType !== "record.updated" &&
+    event.eventType !== "record.archived" &&
+    event.eventType !== "cell.set"
+  ) {
+    return;
+  }
+
+  const versions = await loadWorkflowVersions(env.DB, workspaceId);
+  for (const version of versions) {
+    const definition = parseWorkflowDefinition(version.definition_json);
+    if (workflowStatus(definition) !== "published") {
+      continue;
+    }
+    const aggregates = deriveAggregateDefinitions(definition);
+    const lookups = deriveLookupDefinitions(definition);
+    if (aggregates.length > 0 || lookups.length > 0) {
+      assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
+    }
+
+    for (const aggregate of aggregates) {
+      if (!shouldRouteAggregateForEvent(aggregate, event)) {
+        continue;
+      }
+
+      await enqueueAggregateMaintenanceMessage(env, {
+        aggregate,
+        eventId: event.eventId,
+        trigger: {
+          changedFieldIds: readChangedFieldIds(event.payload),
+          eventId: event.eventId,
+          eventType: event.eventType,
+          kind: "recompute",
+          recordId: typeof event.payload.recordId === "string" ? event.payload.recordId : null
+        },
+        workflowId: version.workflow_id,
+        workflowVersionId: version.workflow_version_id,
+        workspaceId
+      });
+    }
+
+    for (const lookup of lookups) {
+      if (!shouldRouteLookupForEvent(lookup, event)) {
+        continue;
+      }
+
+      await enqueueLookupMaintenanceMessage(env, {
+        eventId: event.eventId,
+        lookup,
+        trigger: {
+          changedFieldIds: readChangedFieldIds(event.payload),
+          eventId: event.eventId,
+          eventType: event.eventType,
+          kind: "recompute",
+          recordId: typeof event.payload.recordId === "string" ? event.payload.recordId : null
+        },
+        workflowId: version.workflow_id,
+        workflowVersionId: version.workflow_version_id,
+        workspaceId
+      });
+    }
+  }
+}
+
+async function enqueueAggregateBackfillForPublishedWorkflow(
+  env: CloudTableEnv,
+  event: EventLedgerRecord
+): Promise<void> {
+  const workflowId =
+    typeof event.payload.workflowId === "string" ? event.payload.workflowId : null;
+  if (!workflowId) {
+    return;
+  }
+
+  const version = await loadPublishedWorkflowVersion(env.DB, event.workspaceId, workflowId);
+  if (!version) {
+    return;
+  }
+
+  const definition = parseWorkflowDefinition(version.definition_json);
+  if (workflowStatus(definition) !== "published") {
+    return;
+  }
+  assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
+
+  for (const aggregate of deriveAggregateDefinitions(definition)) {
+    await enqueueAggregateMaintenanceMessage(env, {
+      aggregate,
+      eventId: event.eventId,
+      trigger: {
+        kind: "backfill",
+        reason: "workflow_published"
+      },
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: event.workspaceId
+    });
+  }
+}
+
+async function enqueueLookupBackfillForPublishedWorkflow(
+  env: CloudTableEnv,
+  event: EventLedgerRecord
+): Promise<void> {
+  const workflowId =
+    typeof event.payload.workflowId === "string" ? event.payload.workflowId : null;
+  if (!workflowId) {
+    return;
+  }
+
+  const version = await loadPublishedWorkflowVersion(env.DB, event.workspaceId, workflowId);
+  if (!version) {
+    return;
+  }
+
+  const definition = parseWorkflowDefinition(version.definition_json);
+  if (workflowStatus(definition) !== "published") {
+    return;
+  }
+  assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
+
+  for (const lookup of deriveLookupDefinitions(definition)) {
+    await enqueueLookupMaintenanceMessage(env, {
+      eventId: event.eventId,
+      lookup,
+      trigger: {
+        kind: "backfill",
+        reason: "workflow_published"
+      },
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: event.workspaceId
     });
   }
 }

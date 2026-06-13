@@ -1,4 +1,12 @@
 import type { CommandEnvelope, CommandResult } from "../core/commands/types";
+import {
+  buildAcceptedEvent,
+  buildAcceptedSideEffects,
+  hashCommand,
+  scopeKeyForCommand,
+  toReplayProjection
+} from "../core/commands/transcript";
+import { createEventLedger } from "../core/events/event-ledger";
 import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
 import { createRuntime } from "../runtime/bootstrap";
 import type { CloudTableEnv } from "../runtime/env";
@@ -108,6 +116,96 @@ export class TableCoordinatorDurableObject {
     };
   }
 
+  private async executeCoordinatorOwnedCellSet(command: CommandEnvelope): Promise<{
+    replayed: boolean;
+    result: CommandResult;
+  }> {
+    if (!command.tableId) {
+      throw new Error("tableId is required for table-scoped commands.");
+    }
+
+    const eventLedger = createEventLedger(this.env.DB);
+    const scopeKey = scopeKeyForCommand(command);
+    const payloadHash = hashCommand(command);
+    const logicalTime = await eventLedger.now();
+    const matchedReceipt = await eventLedger.findReceipt(scopeKey, command.idempotencyKey);
+
+    if (matchedReceipt) {
+      if (matchedReceipt.payloadHash !== payloadHash) {
+        throw new Error(`Idempotency key conflict for ${command.idempotencyKey}.`);
+      }
+
+      return {
+        replayed: true,
+        result: {
+          ...structuredClone(matchedReceipt.result),
+          diagnostics: ["idempotent_replay"],
+          replayProjection: toReplayProjection(logicalTime, [matchedReceipt]),
+          status: matchedReceipt.result.status
+        }
+      };
+    }
+
+    const eventId = crypto.randomUUID();
+    const event = buildAcceptedEvent(command, eventId);
+    const result: CommandResult = {
+      accepted: true,
+      diagnostics: [],
+      events: [event],
+      permission: {
+        allowed: true,
+        reasons: []
+      },
+      replayProjection: toReplayProjection(logicalTime, []),
+      sideEffects: buildAcceptedSideEffects(command, eventId),
+      status: "accepted"
+    };
+
+    await eventLedger.commitAcceptedCommand({
+      command,
+      event: {
+        ...event,
+        createdAt: logicalTime,
+        metadata: {
+          actor: command.actor,
+          coordinatorOwnedMutation: true,
+          permissionScopeHash: command.permissionScopeHash ?? null,
+          permissionsVersion: command.permissionsVersion ?? null,
+          schemaEpoch: command.schemaEpoch ?? null,
+          scope: command.scope
+        },
+        payload: command.payload
+      },
+      receipt: {
+        idempotencyKey: command.idempotencyKey,
+        payloadHash,
+        result
+      },
+      scopeKey
+    });
+
+    const repository = createCloudTableD1Repository(this.env.DB, createRuntime(this.env).fieldTypeRegistry);
+    const published = await publishOutboxEntries(
+      this.env,
+      repository,
+      await repository.listOutboxEntriesForEvent(eventId)
+    );
+
+    return {
+      replayed: false,
+      result: {
+        ...result,
+        replayProjection: toReplayProjection(logicalTime, [
+          {
+            idempotencyKey: command.idempotencyKey,
+            payloadHash,
+            result
+          }
+        ], [command.commandId])
+      }
+    };
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -137,6 +235,25 @@ export class TableCoordinatorDurableObject {
           published
         },
         result
+      });
+    }
+
+    if (request.method === "POST" && url.pathname === "/internal/aggregate-maintenance") {
+      const body = (await request.json()) as {
+        command?: CommandEnvelope;
+      };
+      if (!body.command) {
+        return badRequest("command is required.");
+      }
+
+      const outcome = await this.executeCoordinatorOwnedCellSet(body.command);
+      return json({
+        coordinator: {
+          durableObject: "table-coordinator",
+          objectId: this.state.id.toString()
+        },
+        replayed: outcome.replayed,
+        result: outcome.result
       });
     }
 

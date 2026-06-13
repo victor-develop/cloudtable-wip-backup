@@ -45,6 +45,17 @@ export function forbidden(message: string, details?: unknown): Response {
   );
 }
 
+export function unauthorized(message: string, details?: unknown): Response {
+  return json(
+    {
+      error: "unauthorized",
+      message,
+      details: details ?? null
+    },
+    { status: 401 }
+  );
+}
+
 export function conflict(message: string, details?: unknown): Response {
   return json(
     {

@@ -44,9 +44,17 @@ export function executeWorkflowAction(
   operator: WorkflowActionDefinition,
   input: WorkflowActionInput,
   context: WorkflowActionExecutionContext,
-  executor: WorkflowActionExecutor
+  scopeOrExecutor: WorkflowExecutionScope | WorkflowActionExecutor,
+  executor?: WorkflowActionExecutor
 ) {
-  return executor.execute(operator.createCommand(input, context));
+  const scope = executor ? (scopeOrExecutor as WorkflowExecutionScope) : undefined;
+  const resolvedExecutor = executor ?? (scopeOrExecutor as WorkflowActionExecutor);
+
+  if (operator.execute && scope) {
+    return operator.execute(input, context, scope, resolvedExecutor);
+  }
+
+  return resolvedExecutor.execute(operator.createCommand(input, context));
 }
 
 function isPathTemplate(value: WorkflowValueTemplate): value is { path: string } {
@@ -316,7 +324,13 @@ export async function executeWorkflowDefinition(
     }
 
     const context = buildActionExecutionContext(workflow, actionIndex, resolvedInput, scope);
-    const result = await executeWorkflowAction(definition, resolvedInput, context, executor);
+    const result = await executeWorkflowAction(
+      definition,
+      resolvedInput,
+      context,
+      scope,
+      executor
+    );
     executedActions.push({
       command: definition.createCommand(resolvedInput, context),
       operatorId: action.operatorId,

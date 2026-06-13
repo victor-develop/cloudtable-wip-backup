@@ -1,11 +1,14 @@
 import type {
   WorkflowActionDefinition,
   WorkflowActionExecutionContext,
+  WorkflowActionExecutor,
+  WorkflowExecutionScope,
   WorkflowOperatorCapability,
   WorkflowConditionDefinition,
   WorkflowOperatorDefinition,
   WorkflowTriggerDefinition
 } from "./types";
+import type { CommandResult } from "../commands/types";
 
 function stableEquals(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -169,6 +172,144 @@ function defineAction(
       }
     ]
   };
+}
+
+function mergeWorkflowActionResults(results: readonly CommandResult[]): CommandResult {
+  const lastReplayProjection = results.at(-1)?.replayProjection;
+
+  return {
+    accepted: results.every((result) => result.accepted),
+    diagnostics: results.flatMap((result) => result.diagnostics),
+    events: results.flatMap((result) => result.events),
+    permission: {
+      allowed: results.every((result) => result.permission.allowed),
+      reasons: Array.from(new Set(results.flatMap((result) => result.permission.reasons)))
+    },
+    replayProjection: {
+      acceptedCommandIds: results.flatMap((result) => result.replayProjection.acceptedCommandIds),
+      lastLogicalTime: lastReplayProjection?.lastLogicalTime ?? new Date(0).toISOString(),
+      receiptCount: results.reduce(
+        (count, result) => count + result.replayProjection.receiptCount,
+        0
+      ),
+      receipts: results.flatMap((result) => result.replayProjection.receipts)
+    },
+    sideEffects: results.flatMap((result) => result.sideEffects),
+    status: results.every((result) => result.status === "accepted") ? "accepted" : "rejected"
+  };
+}
+
+function rejectWorkflowAction(diagnostic: string): CommandResult {
+  return {
+    accepted: false,
+    diagnostics: [diagnostic],
+    events: [],
+    permission: {
+      allowed: true,
+      reasons: []
+    },
+    replayProjection: {
+      acceptedCommandIds: [],
+      lastLogicalTime: new Date(0).toISOString(),
+      receiptCount: 0,
+      receipts: []
+    },
+    sideEffects: [],
+    status: "rejected"
+  };
+}
+
+async function executeSyncRelatedFieldAction(
+  input: Record<string, unknown>,
+  context: WorkflowActionExecutionContext,
+  scope: WorkflowExecutionScope,
+  executor: WorkflowActionExecutor
+): Promise<CommandResult> {
+  const resolverAlias =
+    typeof input.resolverAlias === "string" && input.resolverAlias.length > 0
+      ? input.resolverAlias
+      : null;
+  const sourceFieldId =
+    typeof input.sourceFieldId === "string" && input.sourceFieldId.length > 0
+      ? input.sourceFieldId
+      : null;
+  const targetFieldId =
+    typeof input.targetFieldId === "string" && input.targetFieldId.length > 0
+      ? input.targetFieldId
+      : null;
+
+  if (!resolverAlias || !sourceFieldId || !targetFieldId) {
+    return rejectWorkflowAction("workflow_sync_action_input_invalid");
+  }
+
+  const relatedTable = scope.relatedTables?.[resolverAlias];
+  if (!relatedTable) {
+    return rejectWorkflowAction(`workflow_sync_action_resolver_missing:${resolverAlias}`);
+  }
+
+  const sourceField = Object.values(scope.row?.fields ?? {}).find(
+    (field) => field.fieldId === sourceFieldId
+  );
+  if (!sourceField) {
+    return rejectWorkflowAction(
+      `workflow_sync_action_source_field_missing:${resolverAlias}:${sourceFieldId}`
+    );
+  }
+
+  const targetRecordIds = Array.from(
+    new Set(
+      (relatedTable.recordIds ?? []).filter(
+        (recordId): recordId is string => typeof recordId === "string" && recordId.length > 0
+      )
+    )
+  ).sort();
+
+  if (targetRecordIds.length === 0) {
+    return {
+      accepted: true,
+      diagnostics: [],
+      events: [],
+      permission: {
+        allowed: true,
+        reasons: []
+      },
+      replayProjection: {
+        acceptedCommandIds: [],
+        lastLogicalTime: new Date(0).toISOString(),
+        receiptCount: 0,
+        receipts: []
+      },
+      sideEffects: [],
+      status: "accepted"
+    };
+  }
+
+  const results: CommandResult[] = [];
+  for (const recordId of targetRecordIds) {
+    const result = await executor.execute({
+      ...context,
+      commandId: `${context.commandId}:${recordId}`,
+      idempotencyKey: `${context.idempotencyKey}:${recordId}`,
+      payload: {
+        ...context.payload,
+        fieldId: targetFieldId,
+        recordId,
+        tableId: relatedTable.tableId,
+        value: sourceField.value
+      },
+      tableId: relatedTable.tableId,
+      workspaceId: context.workspaceId,
+      scope: "table",
+      commandType: "cell.set",
+      actor: context.actor
+    });
+    results.push(result);
+    if (!result.accepted) {
+      break;
+    }
+  }
+
+  return mergeWorkflowActionResults(results);
 }
 
 const conditionOperators: readonly WorkflowConditionDefinition[] = [
@@ -455,6 +596,54 @@ export const mvpWorkflowOperators: readonly WorkflowOperatorDefinition[] = [
     tableId: "tbl_tasks",
     value: "Bravo"
   }, "table"),
+  {
+    id: "sync_related_field",
+    kind: "action",
+    version: 1,
+    commandType: "cell.set",
+    commandScope: "table",
+    inputSchema: {
+      type: "object",
+      description: "Copy one source field value into the matching related target rows."
+    },
+    outputSchema: {
+      type: "object",
+      description: "Aggregated command result for the emitted target cell updates."
+    },
+    requiredCapabilities: ["records.read", "records.write"],
+    purity: "impure",
+    idempotencyMode: "command_idempotency_key",
+    timeoutClass: "standard",
+    retryClass: "standard",
+    proposalTemplate: {
+      resolverAlias: "account",
+      sourceFieldId: "fld_status",
+      targetFieldId: "fld_account_status"
+    },
+    createCommand(input, context) {
+      return createActionCommand("table", "cell.set", input, context);
+    },
+    execute(input, context, scope, executor) {
+      return executeSyncRelatedFieldAction(input, context, scope, executor);
+    },
+    fixtureContract: [
+      {
+        id: "sync_related_field.action.sample",
+        kind: "action",
+        input: {
+          resolverAlias: "account",
+          sourceFieldId: "fld_status",
+          targetFieldId: "fld_account_status"
+        },
+        expectedCommandType: "cell.set",
+        expectedPayload: {
+          resolverAlias: "account",
+          sourceFieldId: "fld_status",
+          targetFieldId: "fld_account_status"
+        }
+      }
+    ]
+  },
   defineAction("update_record", "record.update", ["records.write"], {
     recordId: "rec_001",
     patch: {

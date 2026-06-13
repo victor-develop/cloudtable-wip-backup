@@ -4053,6 +4053,2039 @@ describe("cloudtable D1 repository", () => {
     ).toBeUndefined();
   });
 
+  it("persists validated related-table resolver metadata on workflow.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_relation_1",
+        idempotencyKey: "idem_field_relation_1",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account",
+          fieldKey: "account",
+          fieldType: "relation.record",
+          label: "Account"
+        }
+      })
+    );
+
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.destination.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.destination.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              relatedTableResolvers: [
+                {
+                  alias: "destination",
+                  sourceFieldId: "fld_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_title",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_escalation"
+          }
+        }
+      })
+    );
+
+    expect(createResult.status).toBe("accepted");
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_escalation")
+      .first<{ definition_json: string }>();
+    expect(JSON.parse(versionRow?.definition_json ?? "{}")).toMatchObject({
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destination",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "draft",
+        tableId: "tbl_tickets"
+      }
+    });
+  });
+
+  it("persists validated value-matched related-table resolver metadata on workflow.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_value_match",
+        idempotencyKey: "idem_table_accounts_value_match",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-value-match",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_region_source",
+        idempotencyKey: "idem_field_region_source",
+        payload: {
+          config: {},
+          fieldId: "fld_region",
+          fieldKey: "region",
+          fieldType: "text.single_line",
+          label: "Region"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_region_target",
+        idempotencyKey: "idem_field_region_target",
+        payload: {
+          config: {},
+          fieldId: "fld_region_key",
+          fieldKey: "region_key",
+          fieldType: "text.single_line",
+          label: "Region Key"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_region",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "apac"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              relatedTableResolvers: [
+                {
+                  alias: "accounts_by_region",
+                  sourceFieldId: "fld_region",
+                  strategy: "value_match",
+                  targetFieldId: "fld_region_key",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_region",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_region_rollup"
+          },
+          name: "Ticket Region Rollup",
+          tableId: "tbl_tickets",
+          workflowId: "wf_ticket_region_rollup",
+          workflowKey: "ticket-region-rollup"
+        }
+      })
+    );
+
+    expect(createResult.status).toBe("accepted");
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_region_rollup")
+      .first<{ definition_json: string }>();
+    expect(JSON.parse(versionRow?.definition_json ?? "{}")).toMatchObject({
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "accounts_by_region",
+            sourceFieldId: "fld_region",
+            strategy: "value_match",
+            targetFieldId: "fld_region_key",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "draft",
+        tableId: "tbl_tickets"
+      }
+    });
+  });
+
+  it("rejects invalid related-table resolver declarations on workflow.create and workflow.update", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_relation_multi",
+        idempotencyKey: "idem_field_relation_multi",
+        payload: {
+          config: {
+            allowMultiple: true,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account_multi",
+          fieldKey: "account_multi",
+          fieldType: "relation.record",
+          label: "Account Multi"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_relation_single",
+        idempotencyKey: "idem_field_relation_single",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account_single",
+          fieldKey: "account_single",
+          fieldType: "relation.record",
+          label: "Account Single"
+        }
+      })
+    );
+
+    const invalidCreate = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        commandId: "cmd_workflow_create_invalid_related",
+        idempotencyKey: "idem_workflow_create_invalid_related",
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.destination.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.destination.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              relatedTableResolvers: [
+                {
+                  alias: "destination",
+                  sourceFieldId: "fld_account_multi",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_title",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_escalation"
+          }
+        }
+      })
+    );
+
+    expect(invalidCreate.status).toBe("rejected");
+    expect(invalidCreate.diagnostics).toEqual([
+      "workflow_related_table_resolver_requires_single_relation:destination:fld_account_multi"
+    ]);
+
+    const validCreate = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.destination.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.destination.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              relatedTableResolvers: [
+                {
+                  alias: "destination",
+                  sourceFieldId: "fld_account_single",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_title",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_escalation"
+          }
+        }
+      })
+    );
+
+    expect(validCreate.status).toBe("accepted");
+
+    const invalidUpdate = await commandBus.execute(
+      createDomainCommand("workflow.update", {
+        commandId: "cmd_workflow_update_invalid_related",
+        idempotencyKey: "idem_workflow_update_invalid_related",
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.destination.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.destination.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              relatedTableResolvers: [
+                {
+                  alias: "destination",
+                  sourceFieldId: "fld_account_single",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_wrong"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_title",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_escalation"
+          },
+          workflowId: "wf_ticket_escalation"
+        }
+      })
+    );
+
+    expect(invalidUpdate.status).toBe("rejected");
+    expect(invalidUpdate.diagnostics).toEqual([
+      "workflow_related_table_resolver_target_table_mismatch:destination:tbl_wrong:tbl_accounts"
+    ]);
+  });
+
+  it("rejects invalid value-matched related-table resolver declarations on workflow.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_invalid_value_match",
+        idempotencyKey: "idem_table_accounts_invalid_value_match",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-invalid-value-match",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_region_invalid_value_match",
+        idempotencyKey: "idem_field_region_invalid_value_match",
+        payload: {
+          config: {},
+          fieldId: "fld_region",
+          fieldKey: "region",
+          fieldType: "text.single_line",
+          label: "Region"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_target_invalid_value_match",
+        idempotencyKey: "idem_field_target_invalid_value_match",
+        payload: {
+          config: {},
+          fieldId: "fld_region_number",
+          fieldKey: "region_number",
+          fieldType: "number.decimal",
+          label: "Region Number"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+
+    const invalidCreate = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        commandId: "cmd_workflow_create_invalid_value_match",
+        idempotencyKey: "idem_workflow_create_invalid_value_match",
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: "fld_region",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "apac"
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              relatedTableResolvers: [
+                {
+                  alias: "accounts_by_region",
+                  sourceFieldId: "fld_region",
+                  strategy: "value_match",
+                  targetFieldId: "fld_region_number",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_region",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_region_rollup"
+          },
+          name: "Ticket Region Rollup",
+          tableId: "tbl_tickets",
+          workflowId: "wf_ticket_region_rollup",
+          workflowKey: "ticket-region-rollup"
+        }
+      })
+    );
+
+    expect(invalidCreate.status).toBe("rejected");
+    expect(invalidCreate.diagnostics).toEqual([
+      "workflow_related_table_resolver_field_type_mismatch:accounts_by_region:text.single_line:number.decimal"
+    ]);
+  });
+
+  it("rejects invalid related-table resolver declarations on workflow.publish", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_relation_publish",
+        idempotencyKey: "idem_field_relation_publish",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account",
+          fieldKey: "account",
+          fieldType: "relation.record",
+          label: "Account"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.destination.row.fields.owner_status.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.destination.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.destination.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              relatedTableResolvers: [
+                {
+                  alias: "destination",
+                  sourceFieldId: "fld_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_title",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_escalation"
+          }
+        }
+      })
+    );
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_escalation")
+      .first<{ definition_json: string }>();
+    const invalidDefinition = JSON.parse(versionRow?.definition_json ?? "{}") as {
+      metadata?: Record<string, unknown>;
+    };
+    if (!invalidDefinition.metadata) {
+      invalidDefinition.metadata = {};
+    }
+    invalidDefinition.metadata.relatedTableResolvers = [
+      {
+        alias: "destination",
+        sourceFieldId: "fld_account",
+        strategy: "single_relation",
+        targetTableId: "tbl_wrong"
+      }
+    ];
+
+    db.inner
+      .prepare(
+        `UPDATE workflow_versions
+         SET definition_json = ?
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .run(JSON.stringify(invalidDefinition), "ws_1", "wf_ticket_escalation");
+
+    const publishResult = await commandBus.execute(
+      createDomainCommand("workflow.publish", {
+        commandId: "cmd_workflow_publish_invalid_related",
+        idempotencyKey: "idem_workflow_publish_invalid_related"
+      })
+    );
+
+    expect(publishResult.status).toBe("rejected");
+    expect(publishResult.diagnostics).toEqual([
+      "workflow_related_table_resolver_target_table_mismatch:destination:tbl_wrong:tbl_accounts"
+    ]);
+  });
+
+  it("rejects non-writable sync targets on workflow.publish", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_sync_publish",
+        idempotencyKey: "idem_table_accounts_sync_publish",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-sync-publish",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_account_sync_publish",
+        idempotencyKey: "idem_field_account_sync_publish",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account",
+          fieldKey: "account",
+          fieldType: "relation.record",
+          label: "Account"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_status_sync_publish",
+        idempotencyKey: "idem_field_status_sync_publish",
+        payload: {
+          config: {},
+          fieldId: "fld_status",
+          fieldKey: "status",
+          fieldType: "text.single_line",
+          label: "Status"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_status_rollup_sync_publish",
+        idempotencyKey: "idem_field_status_rollup_sync_publish",
+        payload: {
+          config: {
+            dependsOnFieldIds: ["fld_account", "fld_status"],
+            expression: "aggregate.account_status_rollup",
+            resultValueType: "number"
+          },
+          fieldId: "fld_status_rollup",
+          fieldKey: "status_rollup",
+          fieldType: "computed.readonly",
+          label: "Status Rollup"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_account_status_sync_publish",
+        idempotencyKey: "idem_field_account_status_sync_publish",
+        payload: {
+          config: {},
+          fieldId: "fld_account_status",
+          fieldKey: "account_status",
+          fieldType: "text.single_line",
+          label: "Account Status"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  resolverAlias: "account",
+                  sourceFieldId: "fld_status",
+                  targetFieldId: "fld_account_status"
+                },
+                operatorId: "sync_related_field"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              relatedTableResolvers: [
+                {
+                  alias: "account",
+                  sourceFieldId: "fld_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_status",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_status_sync"
+          },
+          name: "Ticket Status Sync",
+          tableId: "tbl_tickets",
+          workflowId: "wf_ticket_status_sync",
+          workflowKey: "ticket-status-sync"
+        }
+      })
+    );
+    expect(createResult.status).toBe("accepted");
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_status_sync")
+      .first<{ definition_json: string }>();
+    const invalidDefinition = JSON.parse(versionRow?.definition_json ?? "{}") as {
+      actions?: Array<{ input?: Record<string, unknown> }>;
+    };
+    invalidDefinition.actions = invalidDefinition.actions ?? [];
+    if (!invalidDefinition.actions[0]?.input) {
+      throw new Error("expected workflow.create to persist a sync action");
+    }
+    invalidDefinition.actions[0].input.targetFieldId = "fld_status_rollup";
+
+    db.inner
+      .prepare(
+        `UPDATE workflow_versions
+         SET definition_json = ?
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .run(JSON.stringify(invalidDefinition), "ws_1", "wf_ticket_status_sync");
+
+    const publishResult = await commandBus.execute(
+      createDomainCommand("workflow.publish", {
+        commandId: "cmd_workflow_publish_invalid_sync_target",
+        idempotencyKey: "idem_workflow_publish_invalid_sync_target",
+        payload: {
+          workflowId: "wf_ticket_status_sync"
+        }
+      })
+    );
+
+    expect(publishResult.status).toBe("rejected");
+    expect(publishResult.diagnostics).toEqual([
+      "workflow_sync_action_target_field_type_invalid:0:computed.readonly"
+    ]);
+  });
+
+  it("persists validated aggregate definition metadata on workflow.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts",
+        idempotencyKey: "idem_table_accounts",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_relation_account",
+        idempotencyKey: "idem_field_relation_account",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account",
+          fieldKey: "account",
+          fieldType: "relation.record",
+          label: "Account"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_status",
+        idempotencyKey: "idem_field_status",
+        payload: {
+          config: {},
+          fieldId: "fld_status",
+          fieldKey: "status",
+          fieldType: "text.single_line",
+          label: "Status"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_aggregate_target",
+        idempotencyKey: "idem_field_aggregate_target",
+        payload: {
+          config: {
+            dependsOnFieldIds: ["fld_account", "fld_status"],
+            expression: "aggregate.account_open_ticket_count",
+            resultValueType: "number"
+          },
+          fieldId: "fld_open_ticket_count",
+          fieldKey: "open_ticket_count",
+          fieldType: "computed.readonly",
+          label: "Open Ticket Count"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.account.row.fields.open_ticket_count.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.account.row.fields.open_ticket_count.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.account.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.account.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              aggregateDefinitions: [
+                {
+                  alias: "open_ticket_count",
+                  dependencyFieldIds: ["fld_status"],
+                  groupingSource: {
+                    kind: "related_record",
+                    resolverAlias: "account"
+                  },
+                  operationConfig: {
+                    includeArchived: false
+                  },
+                  operationId: "count_records",
+                  sourceRelationPath: "relatedTables.account",
+                  targetFieldId: "fld_open_ticket_count"
+                }
+              ],
+              relatedTableResolvers: [
+                {
+                  alias: "account",
+                  sourceFieldId: "fld_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_status",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_rollups"
+          },
+          name: "Ticket Rollups",
+          tableId: "tbl_tickets",
+          workflowId: "wf_ticket_rollups",
+          workflowKey: "ticket-rollups"
+        }
+      })
+    );
+
+    expect(createResult.status).toBe("accepted");
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_rollups")
+      .first<{ definition_json: string }>();
+    expect(JSON.parse(versionRow?.definition_json ?? "{}")).toMatchObject({
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "open_ticket_count",
+            dependencyFieldIds: ["fld_status"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account"
+            },
+            operationConfig: {
+              includeArchived: false
+            },
+            operationId: "count_records",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_open_ticket_count"
+          }
+        ]
+      }
+    });
+  });
+
+  it("materializes single-relation rollup field contracts into workflow aggregate metadata on workflow.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_rollup_contract",
+        idempotencyKey: "idem_table_accounts_rollup_contract",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-rollup-contract",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_relation_account_rollup_contract",
+        idempotencyKey: "idem_field_relation_account_rollup_contract",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account",
+          fieldKey: "account",
+          fieldType: "relation.record",
+          label: "Account"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_amount_rollup_contract",
+        idempotencyKey: "idem_field_amount_rollup_contract",
+        payload: {
+          config: {},
+          fieldId: "fld_amount",
+          fieldKey: "amount",
+          fieldType: "number.decimal",
+          label: "Amount"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_revenue_sum_rollup_contract",
+        idempotencyKey: "idem_field_revenue_sum_rollup_contract",
+        payload: {
+          config: {
+            resultValueType: "number",
+            rollup: {
+              grouping: {
+                sourceFieldId: "fld_account",
+                strategy: "single_relation"
+              },
+              operandFieldId: "fld_amount",
+              operationId: "sum_numbers",
+              sourceTableId: "tbl_tickets"
+            }
+          },
+          fieldId: "fld_revenue_sum",
+          fieldKey: "revenue_sum",
+          fieldType: "computed.readonly",
+          label: "Revenue Sum"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.rollup_fld_revenue_sum.row.fields.revenue_sum.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.rollup_fld_revenue_sum.row.fields.revenue_sum.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.rollup_fld_revenue_sum.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.rollup_fld_revenue_sum.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              rollupFieldIds: ["fld_revenue_sum"],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_amount",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_rollup_contract"
+          },
+          name: "Ticket Rollup Contract",
+          tableId: "tbl_tickets",
+          workflowId: "wf_ticket_rollup_contract",
+          workflowKey: "ticket-rollup-contract"
+        }
+      })
+    );
+
+    expect(createResult.status).toBe("accepted");
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_rollup_contract")
+      .first<{ definition_json: string }>();
+    expect(JSON.parse(versionRow?.definition_json ?? "{}")).toMatchObject({
+      metadata: {
+        rollupFieldIds: ["fld_revenue_sum"],
+        aggregateDefinitions: [
+          {
+            alias: "fld_revenue_sum",
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "rollup_fld_revenue_sum"
+            },
+            operand: {
+              fieldId: "fld_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationId: "sum_numbers",
+            sourceRelationPath: "relatedTables.rollup_fld_revenue_sum",
+            targetFieldId: "fld_revenue_sum"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "rollup_fld_revenue_sum",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ]
+      }
+    });
+  });
+
+  it("materializes value-matched rollup field contracts into workflow aggregate metadata on workflow.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_rollup_value_match",
+        idempotencyKey: "idem_table_accounts_rollup_value_match",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-rollup-value-match",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_region_rollup_value_match",
+        idempotencyKey: "idem_field_region_rollup_value_match",
+        payload: {
+          config: {},
+          fieldId: "fld_region",
+          fieldKey: "region",
+          fieldType: "text.single_line",
+          label: "Region"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_region_key_rollup_value_match",
+        idempotencyKey: "idem_field_region_key_rollup_value_match",
+        payload: {
+          config: {},
+          fieldId: "fld_region_key",
+          fieldKey: "region_key",
+          fieldType: "text.single_line",
+          label: "Region Key"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_region_count_rollup_value_match",
+        idempotencyKey: "idem_field_region_count_rollup_value_match",
+        payload: {
+          config: {
+            resultValueType: "number",
+            rollup: {
+              grouping: {
+                sourceFieldId: "fld_region",
+                strategy: "value_match",
+                targetFieldId: "fld_region_key"
+              },
+              operationId: "count_records",
+              sourceTableId: "tbl_tickets"
+            }
+          },
+          fieldId: "fld_region_count",
+          fieldKey: "region_count",
+          fieldType: "computed.readonly",
+          label: "Region Count"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.rollup_fld_region_count.row.fields.region_count.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.rollup_fld_region_count.row.fields.region_count.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.rollup_fld_region_count.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.rollup_fld_region_count.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              rollupFieldIds: ["fld_region_count"],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_region",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_rollup_value_match"
+          },
+          name: "Ticket Rollup Value Match",
+          tableId: "tbl_tickets",
+          workflowId: "wf_ticket_rollup_value_match",
+          workflowKey: "ticket-rollup-value-match"
+        }
+      })
+    );
+
+    expect(createResult.status).toBe("accepted");
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_rollup_value_match")
+      .first<{ definition_json: string }>();
+    expect(JSON.parse(versionRow?.definition_json ?? "{}")).toMatchObject({
+      metadata: {
+        rollupFieldIds: ["fld_region_count"],
+        aggregateDefinitions: [
+          {
+            alias: "fld_region_count",
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "rollup_fld_region_count"
+            },
+            operationId: "count_records",
+            sourceRelationPath: "relatedTables.rollup_fld_region_count",
+            targetFieldId: "fld_region_count"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "rollup_fld_region_count",
+            sourceFieldId: "fld_region",
+            strategy: "value_match",
+            targetFieldId: "fld_region_key",
+            targetTableId: "tbl_accounts"
+          }
+        ]
+      }
+    });
+  });
+
+  it("materializes lookup field contracts into workflow lookup metadata on workflow.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_lookup_contract",
+        idempotencyKey: "idem_table_accounts_lookup_contract",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-lookup-contract",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_account_lookup_contract",
+        idempotencyKey: "idem_field_account_lookup_contract",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account",
+          fieldKey: "account",
+          fieldType: "relation.record",
+          label: "Account"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_account_name_lookup_contract",
+        idempotencyKey: "idem_field_account_name_lookup_contract",
+        payload: {
+          config: {},
+          fieldId: "fld_account_name",
+          fieldKey: "account_name",
+          fieldType: "text.single_line",
+          label: "Account Name"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_ticket_account_name_lookup_contract",
+        idempotencyKey: "idem_field_ticket_account_name_lookup_contract",
+        payload: {
+          config: {
+            lookup: {
+              sourceFieldId: "fld_account",
+              targetFieldId: "fld_account_name"
+            }
+          },
+          fieldId: "fld_ticket_account_name",
+          fieldKey: "ticket_account_name",
+          fieldType: "computed.readonly",
+          label: "Ticket Account Name"
+        }
+      })
+    );
+
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.fields.ticket_account_name.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.fields.ticket_account_name.fieldType"
+                  },
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              lookupFieldIds: ["fld_ticket_account_name"],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_account",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_lookup_contract"
+          },
+          name: "Ticket Lookup Contract",
+          tableId: "tbl_tickets",
+          workflowId: "wf_ticket_lookup_contract",
+          workflowKey: "ticket-lookup-contract"
+        }
+      })
+    );
+
+    expect(createResult.status).toBe("accepted");
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_lookup_contract")
+      .first<{ definition_json: string }>();
+    expect(JSON.parse(versionRow?.definition_json ?? "{}")).toMatchObject({
+      metadata: {
+        lookupFieldIds: ["fld_ticket_account_name"],
+        lookupDefinitions: [
+          {
+            alias: "fld_ticket_account_name",
+            lookupSource: {
+              kind: "related_record",
+              resolverAlias: "lookup_fld_ticket_account_name"
+            },
+            sourceRelationPath: "relatedTables.lookup_fld_ticket_account_name",
+            targetFieldId: "fld_ticket_account_name",
+            valueFieldId: "fld_account_name"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "lookup_fld_ticket_account_name",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ]
+      }
+    });
+  });
+
+  it("rejects invalid aggregate definitions on workflow.create and workflow.publish", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_invalid",
+        idempotencyKey: "idem_table_accounts_invalid",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-invalid",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_relation_account_invalid",
+        idempotencyKey: "idem_field_relation_account_invalid",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account",
+          fieldKey: "account",
+          fieldType: "relation.record",
+          label: "Account"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_status_invalid",
+        idempotencyKey: "idem_field_status_invalid",
+        payload: {
+          config: {},
+          fieldId: "fld_status",
+          fieldKey: "status",
+          fieldType: "text.single_line",
+          label: "Status"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_bad_target",
+        idempotencyKey: "idem_field_bad_target",
+        payload: {
+          config: {},
+          fieldId: "fld_bad_target",
+          fieldKey: "bad_target",
+          fieldType: "text.single_line",
+          label: "Bad Target"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_good_target",
+        idempotencyKey: "idem_field_good_target",
+        payload: {
+          config: {
+            dependsOnFieldIds: ["fld_account", "fld_status"],
+            expression: "aggregate.account_open_ticket_count",
+            resultValueType: "number"
+          },
+          fieldId: "fld_good_target",
+          fieldKey: "good_target",
+          fieldType: "computed.readonly",
+          label: "Good Target"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+
+    const invalidCreate = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        commandId: "cmd_workflow_invalid_aggregate",
+        idempotencyKey: "idem_workflow_invalid_aggregate",
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.account.row.fields.bad_target.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.account.row.fields.bad_target.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.account.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.account.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              aggregateDefinitions: [
+                {
+                  alias: "broken_count",
+                  dependencyFieldIds: ["fld_status"],
+                  groupingSource: {
+                    kind: "related_record",
+                    resolverAlias: "account"
+                  },
+                  operationId: "count_records",
+                  sourceRelationPath: "relatedTables.account",
+                  targetFieldId: "fld_bad_target"
+                }
+              ],
+              relatedTableResolvers: [
+                {
+                  alias: "account",
+                  sourceFieldId: "fld_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_status",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_invalid_aggregate"
+          },
+          name: "Invalid Aggregate",
+          tableId: "tbl_tickets",
+          workflowId: "wf_invalid_aggregate",
+          workflowKey: "invalid-aggregate"
+        }
+      })
+    );
+
+    expect(invalidCreate.status).toBe("rejected");
+    expect(invalidCreate.diagnostics).toEqual([
+      "workflow_aggregate_definition_target_field_type_invalid:broken_count:text.single_line"
+    ]);
+
+    await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.account.row.fields.good_target.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.account.row.fields.good_target.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.account.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.account.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              aggregateDefinitions: [
+                {
+                  alias: "open_ticket_count",
+                  dependencyFieldIds: ["fld_status"],
+                  groupingSource: {
+                    kind: "related_record",
+                    resolverAlias: "account"
+                  },
+                  operationId: "count_records",
+                  sourceRelationPath: "relatedTables.account",
+                  targetFieldId: "fld_good_target"
+                }
+              ],
+              relatedTableResolvers: [
+                {
+                  alias: "account",
+                  sourceFieldId: "fld_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_status",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_publishable_aggregate"
+          },
+          name: "Publishable Aggregate",
+          tableId: "tbl_tickets",
+          workflowId: "wf_publishable_aggregate",
+          workflowKey: "publishable-aggregate"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.archive", {
+        commandId: "cmd_archive_good_target",
+        idempotencyKey: "idem_archive_good_target",
+        payload: {
+          fieldId: "fld_good_target"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+
+    const publishResult = await commandBus.execute(
+      createDomainCommand("workflow.publish", {
+        commandId: "cmd_publish_invalid_aggregate",
+        idempotencyKey: "idem_publish_invalid_aggregate",
+        payload: {
+          workflowId: "wf_publishable_aggregate"
+        }
+      })
+    );
+
+    expect(publishResult.status).toBe("rejected");
+    expect(publishResult.diagnostics).toEqual([
+      "workflow_aggregate_definition_target_field_missing:open_ticket_count:fld_good_target"
+    ]);
+  });
+
+  it("rejects lookup materialization when the source relation is multi-value", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_lookup_invalid",
+        idempotencyKey: "idem_table_accounts_lookup_invalid",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-lookup-invalid",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_account_lookup_invalid",
+        idempotencyKey: "idem_field_account_lookup_invalid",
+        payload: {
+          config: {
+            allowMultiple: true,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account_multi",
+          fieldKey: "account_multi",
+          fieldType: "relation.record",
+          label: "Accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_account_name_lookup_invalid",
+        idempotencyKey: "idem_field_account_name_lookup_invalid",
+        payload: {
+          config: {},
+          fieldId: "fld_account_name",
+          fieldKey: "account_name",
+          fieldType: "text.single_line",
+          label: "Account Name"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_ticket_account_name_lookup_invalid",
+        idempotencyKey: "idem_field_ticket_account_name_lookup_invalid",
+        payload: {
+          config: {
+            lookup: {
+              sourceFieldId: "fld_account_multi",
+              targetFieldId: "fld_account_name"
+            }
+          },
+          fieldId: "fld_ticket_account_name",
+          fieldKey: "ticket_account_name",
+          fieldType: "computed.readonly",
+          label: "Ticket Account Name"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.fields.ticket_account_name.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.fields.ticket_account_name.fieldType"
+                  },
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              lookupFieldIds: ["fld_ticket_account_name"],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_account_multi",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_lookup_invalid"
+          },
+          name: "Invalid Ticket Lookup Contract",
+          tableId: "tbl_tickets",
+          workflowId: "wf_ticket_lookup_invalid",
+          workflowKey: "ticket-lookup-invalid"
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toContain(
+      "workflow_related_table_resolver_requires_single_relation:lookup_fld_ticket_account_name:fld_account_multi"
+    );
+  });
+
   it("rejects workflow trigger definitions that mix fieldId and fieldIds selectors", async () => {
     const db = createDatabase();
     const fieldTypeRegistry = createFieldTypeRegistry();
@@ -4718,6 +6751,674 @@ describe("cloudtable D1 repository", () => {
     expect(wrongTableRelation.status).toBe("rejected");
     expect(wrongTableRelation.diagnostics).toEqual([
       "Expected relation.record reference rec_other_table to belong to table tbl_related, found tbl_tickets."
+    ]);
+  });
+
+  it("provisions canonical user, org, workspace membership, and workspace principal projection rows", async () => {
+    const db = createDatabase();
+    const repository = createCloudTableD1Repository(db as unknown as D1Database);
+
+    const membership = await repository.provisionWorkspaceMembershipIdentity({
+      externalIdentity: {
+        email: "alice@example.com",
+        externalSubject: "google-oauth2|alice",
+        id: "ext_alice_google",
+        providerKey: "google"
+      },
+      membership: {
+        organizationMembershipId: "orgmem_alice",
+        principalId: "usr_alice",
+        roleKey: "workspace.admin",
+        workspaceMembershipId: "wsmem_alice"
+      },
+      organization: {
+        id: "org_acme",
+        name: "Acme",
+        slug: "acme"
+      },
+      timestamp: "2026-06-10T00:00:00.000Z",
+      user: {
+        displayName: "Alice",
+        email: "alice@example.com",
+        id: "user_alice"
+      },
+      workspace: {
+        id: "ws_1",
+        name: "Workspace 1",
+        slug: "workspace-1"
+      }
+    });
+
+    expect(membership).toMatchObject({
+      organizationId: "org_acme",
+      organizationMembershipId: "orgmem_alice",
+      organizationRoleKey: "workspace.admin",
+      principalId: "usr_alice",
+      userId: "user_alice",
+      workspaceId: "ws_1",
+      workspaceMembershipId: "wsmem_alice",
+      workspacePrincipalId: "principal:ws_1:usr_alice",
+      workspacePrincipalRoleKey: "workspace.admin",
+      workspaceRoleKey: "workspace.admin"
+    });
+
+    const workspaceRow = await db
+      .prepare(
+        `SELECT organization_id
+         FROM workspaces
+         WHERE id = ?`
+      )
+      .bind("ws_1")
+      .first<{ organization_id: string | null }>();
+    expect(workspaceRow?.organization_id).toBe("org_acme");
+
+    const principalRow = await db
+      .prepare(
+        `SELECT user_id, workspace_membership_id, principal_type, external_principal_id, role_key
+         FROM workspace_principals
+         WHERE workspace_id = ? AND external_principal_id = ?`
+      )
+      .bind("ws_1", "usr_alice")
+      .first<{
+        external_principal_id: string;
+        principal_type: string;
+        role_key: string;
+        user_id: string | null;
+        workspace_membership_id: string | null;
+      }>();
+    expect(principalRow).toEqual({
+      external_principal_id: "usr_alice",
+      principal_type: "user",
+      role_key: "workspace.admin",
+      user_id: "user_alice",
+      workspace_membership_id: "wsmem_alice"
+    });
+  });
+
+  it("reports membership foundation presence and active membership by workspace principal", async () => {
+    const db = createDatabase();
+    const repository = createCloudTableD1Repository(db as unknown as D1Database);
+
+    expect(await repository.workspaceHasMembershipFoundation("ws_1")).toBe(false);
+    expect(
+      await repository.userHasActiveWorkspaceMembership({
+        principalId: "usr_missing",
+        workspaceId: "ws_1"
+      })
+    ).toBe(false);
+
+    await repository.provisionWorkspaceMembershipIdentity({
+      membership: {
+        organizationMembershipId: "orgmem_bob",
+        principalId: "usr_bob",
+        roleKey: "workspace.member",
+        workspaceMembershipId: "wsmem_bob"
+      },
+      organization: {
+        id: "org_beta",
+        name: "Beta",
+        slug: "beta"
+      },
+      timestamp: "2026-06-10T00:00:00.000Z",
+      user: {
+        displayName: "Bob",
+        email: "bob@example.com",
+        id: "user_bob"
+      },
+      workspace: {
+        id: "ws_1",
+        name: "Workspace 1",
+        slug: "workspace-1"
+      }
+    });
+
+    expect(await repository.workspaceHasMembershipFoundation("ws_1")).toBe(true);
+    expect(
+      await repository.userHasActiveWorkspaceMembership({
+        principalId: "usr_bob",
+        workspaceId: "ws_1"
+      })
+    ).toBe(true);
+
+    const lookup = await repository.readWorkspaceMembershipIdentity({
+      principalId: "usr_bob",
+      workspaceId: "ws_1"
+    });
+    expect(lookup).toMatchObject({
+      organizationId: "org_beta",
+      principalId: "usr_bob",
+      userId: "user_bob",
+      workspacePrincipalId: "principal:ws_1:usr_bob"
+    });
+  });
+
+  it("links Google identities idempotently, exposes canonical lookups, and detects collisions", async () => {
+    const db = createDatabase();
+    const repository = createCloudTableD1Repository(db as unknown as D1Database);
+
+    await repository.provisionWorkspaceMembershipIdentity({
+      membership: {
+        organizationMembershipId: "orgmem_alice",
+        principalId: "usr_alice",
+        roleKey: "workspace.member",
+        workspaceMembershipId: "wsmem_alice"
+      },
+      organization: {
+        id: "org_alpha",
+        name: "Alpha",
+        slug: "alpha"
+      },
+      timestamp: "2026-06-10T00:00:00.000Z",
+      user: {
+        displayName: "Alice",
+        email: "alice@example.com",
+        id: "user_alice"
+      },
+      workspace: {
+        id: "ws_1",
+        name: "Workspace 1",
+        slug: "workspace-1"
+      }
+    });
+    await repository.provisionWorkspaceMembershipIdentity({
+      membership: {
+        organizationMembershipId: "orgmem_bob",
+        principalId: "usr_bob",
+        roleKey: "workspace.member",
+        workspaceMembershipId: "wsmem_bob"
+      },
+      organization: {
+        id: "org_alpha",
+        name: "Alpha",
+        slug: "alpha"
+      },
+      timestamp: "2026-06-10T00:00:00.000Z",
+      user: {
+        displayName: "Bob",
+        email: "bob@example.com",
+        id: "user_bob"
+      },
+      workspace: {
+        id: "ws_1",
+        name: "Workspace 1",
+        slug: "workspace-1"
+      }
+    });
+
+    expect(await repository.findUserByEmail("alice@example.com")).toMatchObject({
+      userId: "user_alice"
+    });
+
+    expect(
+      await repository.linkExternalIdentityToUser({
+        email: "alice@example.com",
+        externalIdentityId: "ext_google_alice",
+        externalSubject: "google-oauth2|alice",
+        providerKey: "google",
+        timestamp: "2026-06-10T00:05:00.000Z",
+        userId: "user_alice"
+      })
+    ).toBe("linked");
+    expect(
+      await repository.linkExternalIdentityToUser({
+        email: "alice@example.com",
+        externalIdentityId: "ext_google_alice",
+        externalSubject: "google-oauth2|alice",
+        providerKey: "google",
+        timestamp: "2026-06-10T00:06:00.000Z",
+        userId: "user_alice"
+      })
+    ).toBe("noop");
+    expect(
+      await repository.findUserByExternalIdentity({
+        externalSubject: "google-oauth2|alice",
+        providerKey: "google"
+      })
+    ).toMatchObject({
+      userId: "user_alice"
+    });
+    expect(
+      await repository.linkExternalIdentityToUser({
+        email: "bob@example.com",
+        externalIdentityId: "ext_google_alice_conflict",
+        externalSubject: "google-oauth2|alice",
+        providerKey: "google",
+        timestamp: "2026-06-10T00:07:00.000Z",
+        userId: "user_bob"
+      })
+    ).toBe("conflict");
+  });
+
+  it("creates invitations and accepts them into memberships for a Google-authenticated user", async () => {
+    const db = createDatabase();
+    const repository = createCloudTableD1Repository(db as unknown as D1Database);
+
+    await repository.provisionWorkspaceMembershipIdentity({
+      membership: {
+        organizationMembershipId: "orgmem_inviter",
+        principalId: "usr_inviter",
+        roleKey: "workspace.admin",
+        workspaceMembershipId: "wsmem_inviter"
+      },
+      organization: {
+        id: "org_alpha",
+        name: "Alpha",
+        slug: "alpha"
+      },
+      timestamp: "2026-06-10T00:00:00.000Z",
+      user: {
+        displayName: "Inviter",
+        email: "inviter@example.com",
+        id: "user_inviter"
+      },
+      workspace: {
+        id: "ws_1",
+        name: "Workspace 1",
+        slug: "workspace-1"
+      }
+    });
+
+    const invitation = await repository.createInvitation({
+      expiresAt: "2026-06-17T00:00:00.000Z",
+      id: "inv_1",
+      invitedByUserId: "user_inviter",
+      invitedEmail: "invitee@example.com",
+      roleKey: "workspace.member",
+      timestamp: "2026-06-10T00:05:00.000Z",
+      tokenHash: "token_hash_1",
+      workspaceId: "ws_1"
+    });
+    expect(invitation).toMatchObject({
+      id: "inv_1",
+      invitedEmail: "invitee@example.com",
+      organizationId: "org_alpha",
+      status: "pending",
+      workspaceId: "ws_1"
+    });
+
+    const acceptedMembership = await repository.acceptInvitation({
+      acceptedByUserId: "user_invitee",
+      acceptedDisplayName: "Invitee",
+      acceptedEmail: "invitee@example.com",
+      acceptedExternalIdentity: {
+        email: "invitee@example.com",
+        externalSubject: "google-oauth2|invitee",
+        id: "ext_google_invitee",
+        providerKey: "google"
+      },
+      acceptedPrincipalId: "usr_invitee",
+      acceptedUserId: "user_invitee",
+      invitationId: "inv_1",
+      organizationMembershipId: "orgmem_invitee",
+      timestamp: "2026-06-10T00:06:00.000Z",
+      workspaceMembershipId: "wsmem_invitee"
+    });
+    expect(acceptedMembership).toMatchObject({
+      organizationId: "org_alpha",
+      principalId: "usr_invitee",
+      userEmail: "invitee@example.com",
+      userId: "user_invitee",
+      workspaceId: "ws_1"
+    });
+
+    expect(await repository.findInvitationByTokenHash("token_hash_1")).toMatchObject({
+      acceptedAt: "2026-06-10T00:06:00.000Z",
+      status: "accepted"
+    });
+    expect(
+      await repository.findUserByExternalIdentity({
+        externalSubject: "google-oauth2|invitee",
+        providerKey: "google"
+      })
+    ).toMatchObject({
+      userId: "user_invitee"
+    });
+  });
+
+  it("stores numeric aggregate operand metadata in workflow versions", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_sum",
+        idempotencyKey: "idem_table_accounts_sum",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-sum",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_account_sum",
+        idempotencyKey: "idem_field_account_sum",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account",
+          fieldKey: "account",
+          fieldType: "relation.record",
+          label: "Account"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_amount_sum",
+        idempotencyKey: "idem_field_amount_sum",
+        payload: {
+          config: {
+            precision: 2
+          },
+          fieldId: "fld_amount",
+          fieldKey: "amount",
+          fieldType: "number.decimal",
+          label: "Amount"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_revenue_sum",
+        idempotencyKey: "idem_field_revenue_sum",
+        payload: {
+          config: {
+            dependsOnFieldIds: ["fld_account", "fld_amount"],
+            expression: "aggregate.account_revenue_sum",
+            resultValueType: "number"
+          },
+          fieldId: "fld_revenue_sum",
+          fieldKey: "revenue_sum",
+          fieldType: "computed.readonly",
+          label: "Revenue Sum"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+
+    const createResult = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.account.row.fields.revenue_sum.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.account.row.fields.revenue_sum.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.account.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.account.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              aggregateDefinitions: [
+                {
+                  alias: "revenue_sum",
+                  groupingSource: {
+                    kind: "related_record",
+                    resolverAlias: "account"
+                  },
+                  operand: {
+                    fieldId: "fld_amount",
+                    kind: "source_field",
+                    valueType: "number"
+                  },
+                  operationId: "sum_numbers",
+                  sourceRelationPath: "relatedTables.account",
+                  targetFieldId: "fld_revenue_sum"
+                }
+              ],
+              relatedTableResolvers: [
+                {
+                  alias: "account",
+                  sourceFieldId: "fld_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_amount",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_ticket_revenue_rollups"
+          },
+          name: "Ticket Revenue Rollups",
+          tableId: "tbl_tickets",
+          workflowId: "wf_ticket_revenue_rollups",
+          workflowKey: "ticket-revenue-rollups"
+        }
+      })
+    );
+
+    expect(createResult.status).toBe("accepted");
+
+    const versionRow = await db
+      .prepare(
+        `SELECT definition_json
+         FROM workflow_versions
+         WHERE workspace_id = ? AND workflow_id = ? AND version = 1`
+      )
+      .bind("ws_1", "wf_ticket_revenue_rollups")
+      .first<{ definition_json: string }>();
+    expect(JSON.parse(versionRow?.definition_json ?? "{}")).toMatchObject({
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "revenue_sum",
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account"
+            },
+            operand: {
+              fieldId: "fld_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationId: "sum_numbers",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_revenue_sum"
+          }
+        ]
+      }
+    });
+  });
+
+  it("rejects non-numeric aggregate operands on workflow.create", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("table.create", {
+        commandId: "cmd_table_accounts_operand_invalid",
+        idempotencyKey: "idem_table_accounts_operand_invalid",
+        payload: {
+          baseId: "base_1",
+          name: "Accounts",
+          slug: "accounts-operand-invalid",
+          tableId: "tbl_accounts"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_account_operand_invalid",
+        idempotencyKey: "idem_field_account_operand_invalid",
+        payload: {
+          config: {
+            allowMultiple: false,
+            targetTableId: "tbl_accounts"
+          },
+          fieldId: "fld_account",
+          fieldKey: "account",
+          fieldType: "relation.record",
+          label: "Account"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_status_operand_invalid",
+        idempotencyKey: "idem_field_status_operand_invalid",
+        payload: {
+          config: {},
+          fieldId: "fld_status",
+          fieldKey: "status",
+          fieldType: "text.single_line",
+          label: "Status"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_status_sum_operand_invalid",
+        idempotencyKey: "idem_field_status_sum_operand_invalid",
+        payload: {
+          config: {
+            dependsOnFieldIds: ["fld_account", "fld_status"],
+            expression: "aggregate.account_status_sum",
+            resultValueType: "number"
+          },
+          fieldId: "fld_status_sum",
+          fieldKey: "status_sum",
+          fieldType: "computed.readonly",
+          label: "Status Sum"
+        },
+        tableId: "tbl_accounts"
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("workflow.create", {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.account.row.fields.status_sum.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.account.row.fields.status_sum.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.account.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.account.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            conditions: [],
+            metadata: {
+              aggregateDefinitions: [
+                {
+                  alias: "status_sum",
+                  groupingSource: {
+                    kind: "related_record",
+                    resolverAlias: "account"
+                  },
+                  operand: {
+                    fieldId: "fld_status",
+                    kind: "source_field",
+                    valueType: "number"
+                  },
+                  operationId: "sum_numbers",
+                  sourceRelationPath: "relatedTables.account",
+                  targetFieldId: "fld_status_sum"
+                }
+              ],
+              relatedTableResolvers: [
+                {
+                  alias: "account",
+                  sourceFieldId: "fld_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ],
+              status: "draft",
+              tableId: "tbl_tickets"
+            },
+            principal: {
+              policyRevision: 7,
+              principalId: "wf_service",
+              schemaEpoch: 1,
+              scopeHash: "scope:wf:tickets"
+            },
+            trigger: {
+              match: {
+                fieldId: "fld_status",
+                fromWorkflow: false,
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            },
+            workflowId: "wf_invalid_numeric_operand"
+          },
+          name: "Invalid Numeric Operand",
+          tableId: "tbl_tickets",
+          workflowId: "wf_invalid_numeric_operand",
+          workflowKey: "invalid-numeric-operand"
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toEqual([
+      "workflow_aggregate_definition_operand_field_type_invalid:status_sum:text.single_line"
     ]);
   });
 });

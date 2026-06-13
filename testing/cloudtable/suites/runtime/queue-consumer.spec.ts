@@ -215,6 +215,81 @@ function insertRecordProjection(db: SqliteD1Database): void {
     );
 }
 
+function readCellRawValue(
+  db: SqliteD1Database,
+  input: {
+    fieldId: string;
+    recordId: string;
+    tableId: string;
+  }
+): unknown {
+  const row = db.inner
+    .prepare(
+      `SELECT value_json
+       FROM cell_current
+       WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+    )
+    .get("ws_1", input.tableId, input.recordId, input.fieldId) as
+    | { value_json: string }
+    | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  return (JSON.parse(row.value_json) as { raw?: unknown } | null)?.raw ?? null;
+}
+
+function readRecordProjectionFields(
+  db: SqliteD1Database,
+  input: {
+    recordId: string;
+    tableId: string;
+  }
+): Record<string, unknown> | null {
+  const row = db.inner
+    .prepare(
+      `SELECT projection_json
+       FROM record_projection
+       WHERE workspace_id = ? AND table_id = ? AND record_id = ?`
+    )
+    .get("ws_1", input.tableId, input.recordId) as
+    | { projection_json: string }
+    | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  return (JSON.parse(row.projection_json) as { fields?: Record<string, unknown> } | null)?.fields ?? null;
+}
+
+function readEventMetadata(
+  db: SqliteD1Database,
+  input: {
+    commandIdLike: string;
+    tableId: string;
+  }
+): Record<string, unknown> | null {
+  const row = db.inner
+    .prepare(
+      `SELECT metadata_json
+       FROM event_ledger
+       WHERE workspace_id = ? AND table_id = ? AND command_id LIKE ?
+       ORDER BY workspace_sequence DESC
+       LIMIT 1`
+    )
+    .get("ws_1", input.tableId, input.commandIdLike) as
+    | { metadata_json: string }
+    | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  return JSON.parse(row.metadata_json) as Record<string, unknown>;
+}
+
 function insertCellCurrent(
   db: SqliteD1Database,
   input: {
@@ -484,6 +559,7 @@ function insertWorkflowDefinition(
   input: {
     actions?: Array<Record<string, unknown>>;
     conditions?: Array<Record<string, unknown>>;
+    definitionJson?: string;
     metadata?: Record<string, unknown>;
     principal?: Record<string, unknown>;
     publishedAt?: string | null;
@@ -538,50 +614,98 @@ function insertWorkflowDefinition(
       "ws_1",
       workflowId,
       1,
-      JSON.stringify({
-        workflowId,
-        principal:
-          input.principal ?? {
-            principalId: "wf_service",
-            policyRevision: 7,
-            schemaEpoch: 0,
-            scopeHash: "scope:wf:status-sync"
-          },
-        trigger:
-          input.trigger ?? {
-            operatorId: "field_changed",
-            match: {
-              fieldId: "fld_source",
-              fromWorkflow: false,
-              tableId: "tbl_1"
-            }
-          },
-        conditions: input.conditions ?? [],
-        ...(input.metadata ? { metadata: input.metadata } : {}),
-        actions:
-          input.actions ?? [
-            {
-              operatorId: "set_cell",
-              input: {
-                fieldId: "fld_status",
-                fieldType: "text.single_line",
-                recordId: {
-                  path: "row.recordId"
-                },
-                tableId: {
-                  path: "table.tableId"
-                },
-                value: "processed"
+      input.definitionJson ??
+        JSON.stringify({
+          workflowId,
+          principal:
+            input.principal ?? {
+              principalId: "wf_service",
+              policyRevision: 7,
+              schemaEpoch: 0,
+              scopeHash: "scope:wf:status-sync"
+            },
+          trigger:
+            input.trigger ?? {
+              operatorId: "field_changed",
+              match: {
+                fieldId: "fld_source",
+                fromWorkflow: false,
+                tableId: "tbl_1"
               }
-            }
-          ]
-      }),
+            },
+          conditions: input.conditions ?? [],
+          ...(input.metadata ? { metadata: input.metadata } : {}),
+          actions:
+            input.actions ?? [
+              {
+                operatorId: "set_cell",
+                input: {
+                  fieldId: "fld_status",
+                  fieldType: "text.single_line",
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: "processed"
+                }
+              }
+            ]
+        }),
       input.publishedAt ?? "2026-06-06T00:00:00.000Z",
       null
     );
 }
 
+function insertEventLedgerEntry(
+  db: SqliteD1Database,
+  input: {
+    aggregateId?: string | null;
+    commandId: string;
+    createdAt?: string;
+    eventId: string;
+    eventType: string;
+    metadata?: Record<string, unknown>;
+    payload?: Record<string, unknown>;
+    tableId?: string | null;
+    tableSequence?: number | null;
+    workspaceSequence: number;
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO event_ledger (
+         event_id,
+         workspace_id,
+         table_id,
+         event_type,
+         command_id,
+         aggregate_id,
+         workspace_sequence,
+         table_sequence,
+         payload_json,
+         metadata_json,
+         created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.eventId,
+      "ws_1",
+      input.tableId ?? null,
+      input.eventType,
+      input.commandId,
+      input.aggregateId ?? null,
+      input.workspaceSequence,
+      input.tableSequence ?? null,
+      JSON.stringify(input.payload ?? {}),
+      JSON.stringify(input.metadata ?? {}),
+      input.createdAt ?? "2026-06-06T00:00:00.000Z"
+    );
+}
+
 function createEnv(): {
+  aggregateQueue: FakeQueue;
   db: SqliteD1Database;
   deadLetterQueue: FakeQueue;
   env: CloudTableEnv;
@@ -601,6 +725,7 @@ function createEnv(): {
   const workflowDispatchQueue = new FakeQueue();
   const workflowStepQueue = new FakeQueue();
   const projectionQueue = new FakeQueue();
+  const aggregateQueue = new FakeQueue();
   const deadLetterQueue = new FakeQueue();
 
   let env!: CloudTableEnv;
@@ -620,6 +745,7 @@ function createEnv(): {
   );
 
   env = {
+    AGGREGATE_MAINTENANCE_QUEUE: aggregateQueue as unknown as Queue<CloudTableQueueMessage>,
     ARTIFACTS_BUCKET: {} as R2Bucket,
     DB: db as unknown as D1Database,
     DEAD_LETTER_REPROCESSOR_QUEUE: deadLetterQueue as unknown as Queue<CloudTableQueueMessage>,
@@ -633,6 +759,7 @@ function createEnv(): {
   };
 
   return {
+    aggregateQueue,
     db,
     deadLetterQueue,
     env,
@@ -669,6 +796,36 @@ function createBatch(
         body,
         retry() {
           throw new Error(`Unexpected retry for ${body.kind}`);
+        }
+      }))
+    }
+  };
+}
+
+function createBatchWithRetryTracking(
+  messages: CloudTableQueueMessage[]
+): {
+  retried: number;
+  batch: {
+    messages: Array<{
+      ack(): void;
+      body: CloudTableQueueMessage;
+      retry(): void;
+    }>;
+  };
+} {
+  let retried = 0;
+
+  return {
+    get retried() {
+      return retried;
+    },
+    batch: {
+      messages: messages.map((body) => ({
+        ack() {},
+        body,
+        retry() {
+          retried += 1;
         }
       }))
     }
@@ -1008,6 +1165,767 @@ describe("workflow queue consumer", () => {
     expect(JSON.parse(statusCell?.value_json ?? "{}")).toMatchObject({
       raw: "manual"
     });
+  });
+
+  it("hydrates related-table resolver context for published cross-table workflow actions", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_dest",
+        "ws_1",
+        "app_1",
+        "table-dest",
+        "Destination Table",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_dest"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_owner_status",
+      fieldKey: "owner_status",
+      fieldType: "text.single_line",
+      label: "Owner Status",
+      tableId: "tbl_dest"
+    });
+
+    insertRecord(db, {
+      recordId: "rec_1",
+      recordKey: "record-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_1",
+      recordKey: "dest-1",
+      tableId: "tbl_dest"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: ["rec_dest_1"]
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_source",
+      fieldType: "text.single_line",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "pending"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "pending"
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_owner_status: {
+          agent: false,
+          fieldId: "fld_owner_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "set_cell",
+          input: {
+            fieldId: {
+              path: "relatedTables.destination.row.fields.owner_status.fieldId"
+            },
+            fieldType: {
+              path: "relatedTables.destination.row.fields.owner_status.fieldType"
+            },
+            recordId: {
+              path: "relatedTables.destination.row.recordId"
+            },
+            tableId: {
+              path: "relatedTables.destination.tableId"
+            },
+            value: {
+              path: "cell.value"
+            }
+          }
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destination",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_dest"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_source",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_related_1",
+            idempotencyKey: "idem_trigger_related_1",
+            payload: {
+              fieldType: "text.single_line",
+              value: "approved"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent.at(-1)!]).batch as never, env, {} as ExecutionContext);
+    expect(workflowDispatchQueue.sent).toHaveLength(1);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    expect(workflowStepQueue.sent).toHaveLength(1);
+    await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    const destinationCell = await db
+      .prepare(
+        `SELECT value_json
+         FROM cell_current
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .bind("ws_1", "tbl_dest", "rec_dest_1", "fld_owner_status")
+      .first<{ value_json: string }>();
+    expect(JSON.parse(destinationCell?.value_json ?? "{}")).toMatchObject({
+      raw: "approved"
+    });
+  });
+
+  it("syncs a source field into a single-related target row through the first-class sync action", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_dest",
+        "ws_1",
+        "app_1",
+        "table-dest",
+        "Destination Table",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_dest"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_owner_status",
+      fieldKey: "owner_status",
+      fieldType: "text.single_line",
+      label: "Owner Status",
+      tableId: "tbl_dest"
+    });
+    insertRecord(db, {
+      recordId: "rec_1",
+      recordKey: "record-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_1",
+      recordKey: "dest-1",
+      tableId: "tbl_dest"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: ["rec_dest_1"]
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_source",
+      fieldType: "text.single_line",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "pending"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "pending"
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_owner_status: {
+          agent: false,
+          fieldId: "fld_owner_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "sync_related_field",
+          input: {
+            resolverAlias: "destination",
+            sourceFieldId: "fld_source",
+            targetFieldId: "fld_owner_status"
+          }
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destination",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_dest"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_source",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_related_sync_single",
+            idempotencyKey: "idem_trigger_related_sync_single",
+            payload: {
+              fieldType: "text.single_line",
+              value: "approved"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent.at(-1)!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    const destinationCell = await db
+      .prepare(
+        `SELECT value_json
+         FROM cell_current
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .bind("ws_1", "tbl_dest", "rec_dest_1", "fld_owner_status")
+      .first<{ value_json: string }>();
+    expect(JSON.parse(destinationCell?.value_json ?? "{}")).toMatchObject({
+      raw: "approved"
+    });
+  });
+
+  it("syncs a source field into every value-matched target row through the first-class sync action", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_dest",
+        "ws_1",
+        "app_1",
+        "table-dest",
+        "Destination Table",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_region",
+      fieldKey: "region",
+      fieldType: "text.single_line",
+      label: "Region",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_region_key",
+      fieldKey: "region_key",
+      fieldType: "text.single_line",
+      label: "Region Key",
+      tableId: "tbl_dest"
+    });
+    insertField(db, {
+      fieldId: "fld_owner_status",
+      fieldKey: "owner_status",
+      fieldType: "text.single_line",
+      label: "Owner Status",
+      tableId: "tbl_dest"
+    });
+    insertRecord(db, {
+      recordId: "rec_1",
+      recordKey: "record-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_1",
+      recordKey: "dest-1",
+      tableId: "tbl_dest"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_2",
+      recordKey: "dest-2",
+      tableId: "tbl_dest"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_3",
+      recordKey: "dest-3",
+      tableId: "tbl_dest"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_source",
+      fieldType: "text.single_line",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "pending"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_2",
+      tableId: "tbl_dest",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_3",
+      tableId: "tbl_dest",
+      value: "emea"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "pending"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_2",
+      tableId: "tbl_dest",
+      value: "pending"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_3",
+      tableId: "tbl_dest",
+      value: "pending"
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_owner_status: {
+          agent: false,
+          fieldId: "fld_owner_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "sync_related_field",
+          input: {
+            resolverAlias: "destinations_by_region",
+            sourceFieldId: "fld_source",
+            targetFieldId: "fld_owner_status"
+          }
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destinations_by_region",
+            sourceFieldId: "fld_region",
+            strategy: "value_match",
+            targetFieldId: "fld_region_key",
+            targetTableId: "tbl_dest"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_source",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_related_sync_value_match",
+            idempotencyKey: "idem_trigger_related_sync_value_match",
+            payload: {
+              fieldType: "text.single_line",
+              value: "approved"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent.at(-1)!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    const syncedRows = await db
+      .prepare(
+        `SELECT record_id, value_json
+         FROM cell_current
+         WHERE workspace_id = ? AND table_id = ? AND field_id = ?
+         ORDER BY record_id ASC`
+      )
+      .bind("ws_1", "tbl_dest", "fld_owner_status")
+      .all<{ record_id: string; value_json: string }>();
+    expect((syncedRows.results ?? []).map((row) => ({
+      raw: (JSON.parse(row.value_json) as { raw?: unknown }).raw,
+      recordId: row.record_id
+    }))).toEqual([
+      { raw: "approved", recordId: "rec_dest_1" },
+      { raw: "approved", recordId: "rec_dest_2" },
+      { raw: "pending", recordId: "rec_dest_3" }
+    ]);
+  });
+
+  it("keeps first-class sync action replay idempotent across duplicate delivery", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_dest",
+        "ws_1",
+        "app_1",
+        "table-dest",
+        "Destination Table",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_dest"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_owner_status",
+      fieldKey: "owner_status",
+      fieldType: "text.single_line",
+      label: "Owner Status",
+      tableId: "tbl_dest"
+    });
+    insertRecord(db, {
+      recordId: "rec_1",
+      recordKey: "record-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_1",
+      recordKey: "dest-1",
+      tableId: "tbl_dest"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: ["rec_dest_1"]
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_source",
+      fieldType: "text.single_line",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "pending"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "pending"
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_owner_status: {
+          agent: false,
+          fieldId: "fld_owner_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "sync_related_field",
+          input: {
+            resolverAlias: "destination",
+            sourceFieldId: "fld_source",
+            targetFieldId: "fld_owner_status"
+          }
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destination",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_dest"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_source",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_related_sync_replay",
+            idempotencyKey: "idem_trigger_related_sync_replay",
+            payload: {
+              fieldType: "text.single_line",
+              value: "approved"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+    expect(eventFanoutQueue.sent).toHaveLength(1);
+
+    const triggerEventId = eventFanoutQueue.sent[0]?.eventId as string;
+    const workflowRunId = `wfr:wf_status_sync:${triggerEventId}`;
+    const workflowCommandId = `${workflowRunId}:action:0:rec_dest_1`;
+
+    const fanoutBatch = createBatch([eventFanoutQueue.sent[0]!]);
+    await handleQueueBatch(fanoutBatch.batch as never, env, {} as ExecutionContext);
+
+    const dispatchBatch = createBatch([workflowDispatchQueue.sent[0]!, workflowDispatchQueue.sent[0]!]);
+    await handleQueueBatch(dispatchBatch.batch as never, env, {} as ExecutionContext);
+    expect(workflowStepQueue.sent).toHaveLength(1);
+
+    const stepBatch = createBatch([workflowStepQueue.sent[0]!, workflowStepQueue.sent[0]!]);
+    await handleQueueBatch(stepBatch.batch as never, env, {} as ExecutionContext);
+
+    const workflowRuns = await db
+      .prepare(
+        `SELECT id, status
+         FROM workflow_runs
+         ORDER BY id ASC`
+      )
+      .bind()
+      .all<{ id: string; status: string }>();
+    expect(workflowRuns.results).toEqual([
+      {
+        id: workflowRunId,
+        status: "completed"
+      }
+    ]);
+
+    const workflowMutationEvents = await db
+      .prepare(
+        `SELECT event_id
+         FROM event_ledger
+         WHERE command_id = ?
+         ORDER BY event_id ASC`
+      )
+      .bind(workflowCommandId)
+      .all<{ event_id: string }>();
+    expect(workflowMutationEvents.results).toHaveLength(1);
   });
 
   it("creates one workflow run and one workflow mutation across duplicate delivery", async () => {
@@ -2427,6 +3345,1122 @@ describe("workflow queue consumer", () => {
     });
   });
 
+  it("routes aggregate recompute envelopes from record changes that hit aggregate dependencies", async () => {
+    const {
+      aggregateQueue,
+      db,
+      env,
+      eventFanoutQueue,
+      projectionQueue,
+      workflowDispatchQueue
+    } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_status",
+      fieldKey: "status",
+      fieldType: "text.single_line",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_open_ticket_count",
+      fieldKey: "open_ticket_count",
+      fieldType: "computed.readonly",
+      label: "Open Ticket Count",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account", "fld_status"],
+        expression: "aggregate.account_open_ticket_count",
+        resultValueType: "number"
+      }
+    });
+    insertRecordProjection(db);
+    insertWorkflowDefinition(db, {
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "open_ticket_count",
+            dependencyFieldIds: ["fld_status"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account"
+            },
+            operationConfig: {
+              includeArchived: false
+            },
+            operationId: "count_records",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_open_ticket_count"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_status", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_aggregate_recompute",
+            idempotencyKey: "idem_trigger_aggregate_recompute",
+            payload: {
+              fieldType: "text.single_line",
+              value: "open"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(
+      createBatch([eventFanoutQueue.sent[0]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(workflowDispatchQueue.sent).toHaveLength(1);
+    expect(projectionQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent[0]).toMatchObject({
+      kind: "aggregate-maintenance",
+      workspaceId: "ws_1",
+      payload: {
+        aggregate: {
+          alias: "open_ticket_count",
+          dependencyFieldIds: ["fld_account", "fld_status"],
+          groupingSource: {
+            kind: "related_record",
+            resolverAlias: "account",
+            sourceFieldId: "fld_account"
+          },
+          operationConfig: {
+            includeArchived: false
+          },
+          operationId: "count_records",
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.account",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_open_ticket_count",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          changedFieldIds: ["fld_status"],
+          kind: "recompute"
+        },
+        workflowId: "wf_status_sync",
+        workflowVersionId: "wf_status_sync:v1"
+      }
+    });
+  });
+
+  it("routes aggregate backfill envelopes when aggregate-enabled workflows publish", async () => {
+    const { aggregateQueue, db, env, workflowDispatchQueue } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_open_ticket_count",
+      fieldKey: "open_ticket_count",
+      fieldType: "computed.readonly",
+      label: "Open Ticket Count",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account"],
+        expression: "aggregate.account_open_ticket_count",
+        resultValueType: "number"
+      }
+    });
+    insertWorkflowDefinition(db, {
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "open_ticket_count",
+            dependencyFieldIds: ["fld_account"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account"
+            },
+            operationId: "count_records",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_open_ticket_count"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      }
+    });
+    insertEventLedgerEntry(db, {
+      aggregateId: "wf_status_sync",
+      commandId: "cmd_workflow_publish_aggregate",
+      eventId: "evt_workflow_publish_aggregate",
+      eventType: "workflow.published",
+      metadata: {
+        aggregateType: "workflow",
+        commandType: "workflow.publish"
+      },
+      payload: {
+        workflowId: "wf_status_sync"
+      },
+      workspaceSequence: 1
+    });
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          kind: "event-fanout",
+          eventId: "evt_workflow_publish_aggregate",
+          payload: {
+            eventId: "evt_workflow_publish_aggregate"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(workflowDispatchQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent[0]).toMatchObject({
+      kind: "aggregate-maintenance",
+      eventId: "evt_workflow_publish_aggregate",
+      workspaceId: "ws_1",
+      payload: {
+        aggregate: {
+          alias: "open_ticket_count",
+          dependencyFieldIds: ["fld_account"],
+          operationId: "count_records",
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_open_ticket_count",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_status_sync",
+        workflowVersionId: "wf_status_sync:v1"
+      }
+    });
+  });
+
+  it("routes lookup recompute envelopes for published single-relation workflows", async () => {
+    const { aggregateQueue, db, env, eventFanoutQueue } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_account_name",
+      fieldKey: "ticket_account_name",
+      fieldType: "computed.readonly",
+      label: "Ticket Account Name",
+      tableId: "tbl_1",
+      config: {
+        lookup: {
+          sourceFieldId: "fld_account",
+          targetFieldId: "fld_account_name"
+        }
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_account_name",
+      fieldKey: "account_name",
+      fieldType: "text.single_line",
+      label: "Account Name",
+      tableId: "tbl_accounts"
+    });
+    insertRecordProjection(db);
+    insertWorkflowDefinition(db, {
+      metadata: {
+        lookupDefinitions: [
+          {
+            alias: "ticket_account_name",
+            dependencyFieldIds: ["fld_account"],
+            lookupSource: {
+              kind: "related_record",
+              resolverAlias: "account_lookup"
+            },
+            sourceRelationPath: "relatedTables.account_lookup",
+            targetFieldId: "fld_ticket_account_name",
+            valueFieldId: "fld_account_name"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account_lookup",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      workflowId: "wf_ticket_lookup",
+      workflowVersionId: "wf_ticket_lookup:v1"
+    });
+
+    insertEventLedgerEntry(db, {
+      aggregateId: "rec_1",
+      commandId: "cmd_trigger_lookup_recompute",
+      eventId: "evt_trigger_lookup_recompute",
+      eventType: "cell.set",
+      metadata: {
+        aggregateType: "record",
+        commandType: "cell.set"
+      },
+      payload: {
+        fieldId: "fld_account",
+        fieldType: "relation.record",
+        recordId: "rec_1",
+        tableId: "tbl_1",
+        value: "rec_account_1"
+      },
+      tableId: "tbl_1",
+      workspaceSequence: 1
+    });
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          kind: "event-fanout",
+          eventId: "evt_trigger_lookup_recompute",
+          payload: {
+            eventId: "evt_trigger_lookup_recompute"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(aggregateQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent[0]).toMatchObject({
+      kind: "aggregate-maintenance",
+      workspaceId: "ws_1",
+      payload: {
+        lookup: {
+          alias: "ticket_account_name",
+          dependencyFieldIds: ["fld_account"],
+          lookupSource: {
+            kind: "related_record",
+            resolverAlias: "account_lookup",
+            sourceFieldId: "fld_account"
+          },
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.account_lookup",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_ticket_account_name",
+          valueFieldId: "fld_account_name"
+        },
+        trigger: {
+          changedFieldIds: ["fld_account"],
+          kind: "recompute"
+        }
+      }
+    });
+  });
+
+  it("executes lookup backfill and recompute for single-relation computed fields", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_account_name",
+      fieldKey: "ticket_account_name",
+      fieldType: "computed.readonly",
+      label: "Ticket Account Name",
+      tableId: "tbl_1",
+      config: {
+        lookup: {
+          sourceFieldId: "fld_account",
+          targetFieldId: "fld_account_name"
+        }
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_account_name",
+      fieldKey: "account_name",
+      fieldType: "text.single_line",
+      label: "Account Name",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_2",
+      recordKey: "account-2",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account_name",
+      fieldType: "text.single_line",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts",
+      value: "Acme"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account_name",
+      fieldType: "text.single_line",
+      recordId: "rec_account_2",
+      tableId: "tbl_accounts",
+      value: "Globex"
+    });
+    insertWorkflowDefinition(db, {
+      metadata: {
+        lookupDefinitions: [
+          {
+            alias: "ticket_account_name",
+            dependencyFieldIds: ["fld_account"],
+            lookupSource: {
+              kind: "related_record",
+              resolverAlias: "account_lookup"
+            },
+            sourceRelationPath: "relatedTables.account_lookup",
+            targetFieldId: "fld_ticket_account_name",
+            valueFieldId: "fld_account_name"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account_lookup",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      workflowId: "wf_ticket_lookup",
+      workflowVersionId: "wf_ticket_lookup:v1"
+    });
+
+    const lookupMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        lookup: {
+          alias: "ticket_account_name",
+          dependencyFieldIds: ["fld_account"],
+          lookupSource: {
+            kind: "related_record",
+            resolverAlias: "account_lookup",
+            sourceFieldId: "fld_account"
+          },
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.account_lookup",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_ticket_account_name",
+          valueFieldId: "fld_account_name"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_ticket_lookup",
+        workflowVersionId: "wf_ticket_lookup:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([lookupMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_ticket_account_name",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1"
+    })).toBe("Acme");
+    expect(
+      readEventMetadata(db, {
+        commandIdLike: "cmd:lookup-maintenance:%",
+        tableId: "tbl_1"
+      })
+    ).toMatchObject({
+      actor: {
+        mode: "workflow",
+        principalId: "wf_service"
+      },
+      coordinatorOwnedMutation: true,
+      permissionScopeHash: "scope:wf:status-sync",
+      permissionsVersion: 7,
+      schemaEpoch: 0,
+      scope: "table"
+    });
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: "rec_account_2",
+          valueType: "relation.record",
+          version: 1
+        }),
+        "rec_account_2",
+        "rec_account_2",
+        JSON.stringify("rec_account_2"),
+        "evt_seed_ticket_account_update",
+        "ws_1",
+        "tbl_1",
+        "rec_ticket_1",
+        "fld_account"
+      );
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...lookupMessage,
+          eventId: "evt_ticket_account_changed",
+          payload: {
+            ...lookupMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_account"],
+              eventId: "evt_ticket_account_changed",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_ticket_1"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_ticket_account_name",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1"
+    })).toBe("Globex");
+  });
+
+  it("executes aggregate backfill and rolling recompute through the coordinator-owned cell writer", async () => {
+    const { db, env, eventFanoutQueue } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_open_ticket_count",
+      fieldKey: "open_ticket_count",
+      fieldType: "computed.readonly",
+      label: "Open Ticket Count",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account"],
+        expression: "aggregate.account_open_ticket_count",
+        resultValueType: "number"
+      }
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_2",
+      recordKey: "account-2",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertWorkflowDefinition(db);
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+
+    const aggregateMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "open_ticket_count",
+          dependencyFieldIds: ["fld_account"],
+          groupingSource: {
+            kind: "related_record",
+            resolverAlias: "account",
+            sourceFieldId: "fld_account"
+          },
+          operationConfig: {
+            includeArchived: false
+          },
+          operationId: "count_records",
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.account",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_open_ticket_count",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_status_sync",
+        workflowVersionId: "wf_status_sync:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([aggregateMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_open_ticket_count",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts"
+    })).toBe(1);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_open_ticket_count",
+      recordId: "rec_account_2",
+      tableId: "tbl_accounts"
+    })).toBe(0);
+    expect(readRecordProjectionFields(db, {
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts"
+    })).toEqual({
+      open_ticket_count: 1
+    });
+    expect(eventFanoutQueue.sent).toHaveLength(2);
+
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...aggregateMessage,
+          eventId: "evt_record_created_ticket_2",
+          payload: {
+            ...aggregateMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_account"],
+              eventId: "evt_record_created_ticket_2",
+              eventType: "record.created",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_open_ticket_count",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts"
+    })).toBe(2);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_open_ticket_count",
+      recordId: "rec_account_2",
+      tableId: "tbl_accounts"
+    })).toBe(0);
+    expect(eventFanoutQueue.sent).toHaveLength(3);
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...aggregateMessage,
+          eventId: "evt_record_created_ticket_2",
+          payload: {
+            ...aggregateMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_account"],
+              eventId: "evt_record_created_ticket_2",
+              eventType: "record.created",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    const aggregateEventCount = (
+      db.inner
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM event_ledger
+           WHERE workspace_id = ?
+             AND table_id = ?
+             AND command_id LIKE ?`
+        )
+        .get("ws_1", "tbl_accounts", "cmd:aggregate-maintenance:%") as { count: number }
+    ).count;
+
+    expect(aggregateEventCount).toBe(3);
+    expect(eventFanoutQueue.sent).toHaveLength(3);
+  });
+
+  it("executes value-matched aggregate backfill and rolling recompute for grouped targets", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_region",
+      fieldKey: "region",
+      fieldType: "text.single_line",
+      label: "Region",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_region_key",
+      fieldKey: "region_key",
+      fieldType: "text.single_line",
+      label: "Region Key",
+      tableId: "tbl_accounts"
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_count",
+      fieldKey: "ticket_count",
+      fieldType: "computed.readonly",
+      label: "Ticket Count",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_region"],
+        expression: "aggregate.region_ticket_count",
+        resultValueType: "number"
+      }
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_1",
+      recordKey: "account-apac-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_2",
+      recordKey: "account-apac-2",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_emea",
+      recordKey: "account-emea",
+      tableId: "tbl_accounts"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts",
+      value: "emea"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertWorkflowDefinition(db, {
+      workflowId: "wf_region_rollup",
+      workflowKey: "region-rollup",
+      workflowName: "Region Rollup"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+
+    const aggregateMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "ticket_count_by_region",
+          dependencyFieldIds: ["fld_region"],
+          groupingSource: {
+            kind: "related_record",
+            resolverAlias: "accounts_by_region",
+            sourceFieldId: "fld_region"
+          },
+          operationConfig: {
+            includeArchived: false
+          },
+          operationId: "count_records",
+          resolver: {
+            sourceFieldId: "fld_region",
+            strategy: "value_match",
+            targetFieldId: "fld_region_key",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.accounts_by_region",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_ticket_count",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_region_rollup",
+        workflowVersionId: "wf_region_rollup:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([aggregateMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_ticket_count",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts"
+    })).toBe(1);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_ticket_count",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts"
+    })).toBe(1);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_ticket_count",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts"
+    })).toBe(0);
+
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...aggregateMessage,
+          eventId: "evt_record_created_ticket_2",
+          payload: {
+            ...aggregateMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_region"],
+              eventId: "evt_record_created_ticket_2",
+              eventType: "record.created",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_ticket_count",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts"
+    })).toBe(2);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_ticket_count",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts"
+    })).toBe(2);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_ticket_count",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts"
+    })).toBe(0);
+  });
+
   it("delivers generic row.fields bindings through published workflow action delivery", async () => {
     const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
 
@@ -3185,5 +5219,770 @@ describe("workflow queue consumer", () => {
     });
     expect(fetchSpy).toHaveBeenCalledTimes(8);
     vi.useRealTimers();
+  });
+
+  it("routes numeric aggregate recompute envelopes with operand metadata", async () => {
+    const { aggregateQueue, db, env, eventFanoutQueue } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_revenue_sum",
+      fieldKey: "revenue_sum",
+      fieldType: "computed.readonly",
+      label: "Revenue Sum",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account", "fld_amount"],
+        expression: "aggregate.account_revenue_sum",
+        resultValueType: "number"
+      }
+    });
+    insertRecordProjection(db);
+    insertWorkflowDefinition(db, {
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "revenue_sum",
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account"
+            },
+            operand: {
+              fieldId: "fld_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationId: "sum_numbers",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_revenue_sum"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      workflowId: "wf_revenue_rollup",
+      workflowVersionId: "wf_revenue_rollup:v1"
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_amount", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_numeric_aggregate_recompute",
+            idempotencyKey: "idem_trigger_numeric_aggregate_recompute",
+            payload: {
+              fieldType: "number.decimal",
+              value: 12.5
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    expect(aggregateQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent[0]).toMatchObject({
+      kind: "aggregate-maintenance",
+      workspaceId: "ws_1",
+      payload: {
+        aggregate: {
+          alias: "revenue_sum",
+          dependencyFieldIds: ["fld_account", "fld_amount"],
+          operand: {
+            fieldId: "fld_amount",
+            kind: "source_field",
+            valueType: "number"
+          },
+          operationId: "sum_numbers",
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          targetFieldId: "fld_revenue_sum"
+        },
+        trigger: {
+          changedFieldIds: ["fld_amount"],
+          kind: "recompute"
+        }
+      }
+    });
+  });
+
+  it("executes numeric aggregate backfill and recompute for single-relation groups", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_revenue_sum",
+      fieldKey: "revenue_sum",
+      fieldType: "computed.readonly",
+      label: "Revenue Sum",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account", "fld_amount"],
+        expression: "aggregate.account_revenue_sum",
+        resultValueType: "number"
+      }
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_2",
+      recordKey: "account-2",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: null
+    });
+    insertWorkflowDefinition(db, {
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "revenue_sum",
+            dependencyFieldIds: ["fld_account", "fld_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account"
+            },
+            operand: {
+              fieldId: "fld_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationId: "sum_numbers",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_revenue_sum"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      workflowId: "wf_revenue_rollup",
+      workflowVersionId: "wf_revenue_rollup:v1"
+    });
+
+    const aggregateMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "revenue_sum",
+          dependencyFieldIds: ["fld_account", "fld_amount"],
+          groupingSource: {
+            kind: "related_record",
+            resolverAlias: "account",
+            sourceFieldId: "fld_account"
+          },
+          operand: {
+            fieldId: "fld_amount",
+            kind: "source_field",
+            valueType: "number"
+          },
+          operationId: "sum_numbers",
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.account",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_revenue_sum",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_revenue_rollup",
+        workflowVersionId: "wf_revenue_rollup:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([aggregateMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_revenue_sum",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts"
+    })).toBe(10);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_revenue_sum",
+      recordId: "rec_account_2",
+      tableId: "tbl_accounts"
+    })).toBe(0);
+    expect(
+      readEventMetadata(db, {
+        commandIdLike: "cmd:aggregate-maintenance:%",
+        tableId: "tbl_accounts"
+      })
+    ).toMatchObject({
+      actor: {
+        mode: "workflow",
+        principalId: "wf_service"
+      },
+      coordinatorOwnedMutation: true,
+      permissionScopeHash: "scope:wf:status-sync",
+      permissionsVersion: 7,
+      schemaEpoch: 0,
+      scope: "table"
+    });
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, number_value = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: 5.5,
+          valueType: "number.decimal",
+          version: 1
+        }),
+        5.5,
+        "5.5",
+        "5.5",
+        JSON.stringify(5.5),
+        "evt_seed_rec_ticket_2_fld_amount_update",
+        "ws_1",
+        "tbl_1",
+        "rec_ticket_2",
+        "fld_amount"
+      );
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...aggregateMessage,
+          eventId: "evt_ticket_2_amount_changed",
+          payload: {
+            ...aggregateMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_amount"],
+              eventId: "evt_ticket_2_amount_changed",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_revenue_sum",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts"
+    })).toBe(15.5);
+    expect(
+      readEventMetadata(db, {
+        commandIdLike: "cmd:aggregate-maintenance:%",
+        tableId: "tbl_accounts"
+      })
+    ).toMatchObject({
+      actor: {
+        mode: "workflow",
+        principalId: "wf_service"
+      },
+      coordinatorOwnedMutation: true,
+      permissionScopeHash: "scope:wf:status-sync",
+      permissionsVersion: 7,
+      schemaEpoch: 0,
+      scope: "table"
+    });
+  });
+
+  it("executes numeric aggregate backfill and recompute for value-matched groups", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_region",
+      fieldKey: "region",
+      fieldType: "text.single_line",
+      label: "Region",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_region_key",
+      fieldKey: "region_key",
+      fieldType: "text.single_line",
+      label: "Region Key",
+      tableId: "tbl_accounts"
+    });
+    insertField(db, {
+      fieldId: "fld_region_revenue",
+      fieldKey: "region_revenue",
+      fieldType: "computed.readonly",
+      label: "Region Revenue",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_region", "fld_amount"],
+        expression: "aggregate.region_revenue_sum",
+        resultValueType: "number"
+      }
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_1",
+      recordKey: "account-apac-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_2",
+      recordKey: "account-apac-2",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_emea",
+      recordKey: "account-emea",
+      tableId: "tbl_accounts"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts",
+      value: "emea"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 7
+    });
+    insertWorkflowDefinition(db, {
+      workflowId: "wf_region_revenue_rollup",
+      workflowKey: "region-revenue-rollup",
+      workflowName: "Region Revenue Rollup"
+    });
+
+    const aggregateMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "region_revenue",
+          dependencyFieldIds: ["fld_region", "fld_amount"],
+          groupingSource: {
+            kind: "related_record",
+            resolverAlias: "accounts_by_region",
+            sourceFieldId: "fld_region"
+          },
+          operand: {
+            fieldId: "fld_amount",
+            kind: "source_field",
+            valueType: "number"
+          },
+          operationId: "sum_numbers",
+          resolver: {
+            sourceFieldId: "fld_region",
+            strategy: "value_match",
+            targetFieldId: "fld_region_key",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.accounts_by_region",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_region_revenue",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_region_revenue_rollup",
+        workflowVersionId: "wf_region_revenue_rollup:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([aggregateMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_revenue",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts"
+    })).toBe(7);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_revenue",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts"
+    })).toBe(7);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_revenue",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts"
+    })).toBe(0);
+
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: "emea"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: 3
+    });
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...aggregateMessage,
+          eventId: "evt_ticket_2_created",
+          payload: {
+            ...aggregateMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_region", "fld_amount"],
+              eventId: "evt_ticket_2_created",
+              eventType: "record.created",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_revenue",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts"
+    })).toBe(7);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_revenue",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts"
+    })).toBe(3);
+  });
+
+  it("retries aggregate maintenance and preserves product state when workflow service identity metadata is malformed", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_revenue_sum",
+      fieldKey: "revenue_sum",
+      fieldType: "number.decimal",
+      label: "Revenue Sum",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+    insertWorkflowDefinition(db, {
+      definitionJson: "{not-json",
+      workflowId: "wf_revenue_rollup_fallback",
+      workflowVersionId: "wf_revenue_rollup_fallback:v1"
+    });
+
+    const batch = createBatchWithRetryTracking([
+      {
+        kind: "aggregate-maintenance",
+        payload: {
+          aggregate: {
+            alias: "revenue_sum",
+            dependencyFieldIds: ["fld_account", "fld_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account",
+              sourceFieldId: "fld_account"
+            },
+            operand: {
+              fieldId: "fld_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationId: "sum_numbers",
+            resolver: {
+              sourceFieldId: "fld_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            },
+            sourceRelationPath: "relatedTables.account",
+            sourceTableId: "tbl_1",
+            targetFieldId: "fld_revenue_sum",
+            targetTableId: "tbl_accounts"
+          },
+          trigger: {
+            kind: "backfill",
+            reason: "workflow_published"
+          },
+          workflowId: "wf_revenue_rollup_fallback",
+          workflowVersionId: "wf_revenue_rollup_fallback:v1"
+        },
+        workspaceId: "ws_1"
+      }
+    ]);
+
+    await handleQueueBatch(batch.batch as never, env, {} as ExecutionContext);
+
+    expect(batch.retried).toBe(1);
+    const maintenanceEvents = db.inner
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM event_ledger
+         WHERE workspace_id = ? AND table_id = ? AND command_id LIKE ?`
+      )
+      .get("ws_1", "tbl_accounts", "cmd:aggregate-maintenance:%") as { count: number };
+    expect(maintenanceEvents.count).toBe(0);
+    expect(
+      readCellRawValue(db, {
+        fieldId: "fld_revenue_sum",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(null);
   });
 });

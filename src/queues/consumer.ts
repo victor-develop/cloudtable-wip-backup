@@ -1,6 +1,7 @@
 import type { MessageBatch } from "@cloudflare/workers-types";
 
 import type { CloudTableEnv, CloudTableQueueMessage } from "../runtime/env";
+import { processAggregateMaintenanceMessage } from "../runtime/aggregate-maintenance";
 import { processProjectionMaintenanceMessage } from "../runtime/projection-maintenance";
 import {
   processDeadLetterReprocessorMessage,
@@ -31,6 +32,10 @@ export async function handleQueueBatch(
           break;
         case "projection-maintenance":
           await processProjectionMaintenanceMessage(_env, message.body);
+          message.ack();
+          break;
+        case "aggregate-maintenance":
+          await processAggregateMaintenanceMessage(_env, message.body);
           message.ack();
           break;
         case "dead-letter-reprocessor":
