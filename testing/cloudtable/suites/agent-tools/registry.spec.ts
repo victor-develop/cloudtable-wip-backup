@@ -20,6 +20,15 @@ import {
   seedAppAndTable,
   seedWorkspace
 } from "../../harness/runtime/sqlite-d1";
+import {
+  buildWorkflowBindingContract,
+  createAssigneeAliasWorkflowBindingField,
+  createDateWorkflowBindingField,
+  createLongTextWorkflowBindingField,
+  createNumberWorkflowBindingField,
+  createRowOwnerWorkflowBindingField,
+  createStatusWorkflowBindingField
+} from "../../harness/workflow-binding-contract";
 
 const fieldTypeRegistry = createFieldTypeRegistry();
 const workflowOperatorRegistry = createWorkflowOperatorRegistry();
@@ -2506,17 +2515,16 @@ describe("cloudtable agent tool registry", () => {
   });
 
   it("drafts owner conditions for workflow proposals from generic binding metadata", async () => {
+    const ownerField = createRowOwnerWorkflowBindingField();
     const registry = createRegistry({
       tableSchemaInspectionResult: {
         appId: "app_crm",
         fields: [
           {
-            config: {
-              rowOwner: true
-            },
-            fieldId: "fld_owner",
-            fieldKey: "owner",
-            fieldType: "principal.user",
+            config: ownerField.config,
+            fieldId: ownerField.fieldId,
+            fieldKey: ownerField.fieldKey,
+            fieldType: ownerField.fieldType,
             fieldTypeVersion: 1,
             label: "Owner"
           }
@@ -2527,69 +2535,7 @@ describe("cloudtable agent tool registry", () => {
         tableSchemaVersion: 2,
         tableSlug: "accounts",
         workflow: {
-          bindings: {
-            "row.owner": {
-              binding: "row.owner",
-              fieldId: "fld_owner",
-              fieldKey: "owner",
-              fieldType: "principal.user",
-              proposalHints: [
-                {
-                  operatorId: "not_equals",
-                  matchPhrases: ["does not equal", "not equals", "not assigned to"],
-                  matchFieldPhrases: [
-                    "{field} does not equal",
-                    "{field} not equals",
-                    "{field} is not",
-                    "{field} is not assigned to",
-                    "{field} not assigned to"
-                  ],
-                  draftInput: {
-                    left: {
-                      path: "row.owner.value"
-                    },
-                    right: null
-                  }
-                },
-                {
-                  operatorId: "equals",
-                  matchPhrases: ["equals", "assigned to"],
-                  matchFieldPhrases: [
-                    "{field} equals",
-                    "{field} is assigned to",
-                    "{field} assigned to"
-                  ],
-                  draftInput: {
-                    left: {
-                      path: "row.owner.value"
-                    },
-                    right: null
-                  }
-                },
-                {
-                  operatorId: "is_empty",
-                  matchPhrases: ["unassigned"],
-                  matchFieldPhrases: ["without {field}", "{field} missing"]
-                },
-                {
-                  operatorId: "is_not_empty",
-                  matchPhrases: ["assigned"]
-                }
-              ],
-              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-              supportedOperators: supportedConditionOperatorManifests([
-                "equals",
-                "not_equals",
-                "is_empty",
-                "is_not_empty"
-              ]),
-              template: {
-                fieldIdPath: "row.owner.fieldId",
-                fieldTypePath: "row.owner.fieldType",
-                valuePath: "row.owner.value"
-              }
-            }
-          }
+          bindings: buildWorkflowBindingContract([ownerField]).bindings
         },
         workspaceId: "ws_demo"
       }
@@ -2655,17 +2601,16 @@ describe("cloudtable agent tool registry", () => {
   });
 
   it("drafts field-declared canonical alias conditions for workflow proposals from binding metadata", async () => {
+    const assigneeField = createAssigneeAliasWorkflowBindingField();
     const registry = createRegistry({
       tableSchemaInspectionResult: {
         appId: "app_crm",
         fields: [
           {
-            config: {
-              workflowBindingAlias: "row.assignee"
-            },
-            fieldId: "fld_assignee",
-            fieldKey: "assignee",
-            fieldType: "principal.user",
+            config: assigneeField.config,
+            fieldId: assigneeField.fieldId,
+            fieldKey: assigneeField.fieldKey,
+            fieldType: assigneeField.fieldType,
             fieldTypeVersion: 1,
             label: "Assignee"
           }
@@ -2676,71 +2621,7 @@ describe("cloudtable agent tool registry", () => {
         tableSchemaVersion: 2,
         tableSlug: "accounts",
         workflow: {
-          bindings: {
-            "row.assignee": {
-              aliasOf: "row.fields.assignee",
-              binding: "row.assignee",
-              fieldId: "fld_assignee",
-              fieldKey: "assignee",
-              fieldType: "principal.user",
-              isCanonical: true,
-              proposalHints: [
-                {
-                  operatorId: "not_equals",
-                  matchPhrases: ["does not equal", "not equals", "not assigned to"],
-                  matchFieldPhrases: [
-                    "{field} does not equal",
-                    "{field} not equals",
-                    "{field} is not",
-                    "{field} is not assigned to",
-                    "{field} not assigned to"
-                  ],
-                  draftInput: {
-                    left: {
-                      path: "row.assignee.value"
-                    },
-                    right: null
-                  }
-                },
-                {
-                  operatorId: "equals",
-                  matchPhrases: ["equals", "assigned to"],
-                  matchFieldPhrases: [
-                    "{field} equals",
-                    "{field} is assigned to",
-                    "{field} assigned to"
-                  ],
-                  draftInput: {
-                    left: {
-                      path: "row.assignee.value"
-                    },
-                    right: null
-                  }
-                },
-                {
-                  operatorId: "is_empty",
-                  matchPhrases: ["unassigned"],
-                  matchFieldPhrases: ["without {field}", "{field} missing"]
-                },
-                {
-                  operatorId: "is_not_empty",
-                  matchPhrases: ["assigned"]
-                }
-              ],
-              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-              supportedOperators: supportedConditionOperatorManifests([
-                "equals",
-                "not_equals",
-                "is_empty",
-                "is_not_empty"
-              ]),
-              template: {
-                fieldIdPath: "row.assignee.fieldId",
-                fieldTypePath: "row.assignee.fieldType",
-                valuePath: "row.assignee.value"
-              }
-            }
-          }
+          bindings: buildWorkflowBindingContract([assigneeField]).bindings
         },
         workspaceId: "ws_demo"
       }
@@ -2806,15 +2687,16 @@ describe("cloudtable agent tool registry", () => {
   });
 
   it("drafts generic field presence conditions for workflow proposals from binding metadata", async () => {
+    const noteField = createLongTextWorkflowBindingField();
     const registry = createRegistry({
       tableSchemaInspectionResult: {
         appId: "app_crm",
         fields: [
           {
-            config: {},
-            fieldId: "fld_note",
-            fieldKey: "customer_note",
-            fieldType: "text.long",
+            config: noteField.config,
+            fieldId: noteField.fieldId,
+            fieldKey: noteField.fieldKey,
+            fieldType: noteField.fieldType,
             fieldTypeVersion: 1,
             label: "Customer Note"
           }
@@ -2825,37 +2707,7 @@ describe("cloudtable agent tool registry", () => {
         tableSchemaVersion: 2,
         tableSlug: "accounts",
         workflow: {
-          bindings: {
-            "row.fields.customer_note": {
-              binding: "row.fields.customer_note",
-              fieldId: "fld_note",
-              fieldKey: "customer_note",
-              fieldType: "text.long",
-              proposalHints: [
-                {
-                  operatorId: "is_empty",
-                  matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
-                  matchFieldPhrases: ["without {field}", "{field} missing"]
-                },
-                {
-                  operatorId: "is_not_empty",
-                  matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-                }
-              ],
-              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-              supportedOperators: supportedConditionOperatorManifests([
-                "equals",
-                "not_equals",
-                "is_empty",
-                "is_not_empty"
-              ]),
-              template: {
-                fieldIdPath: "row.fields.customer_note.fieldId",
-                fieldTypePath: "row.fields.customer_note.fieldType",
-                valuePath: "row.fields.customer_note.value"
-              }
-            }
-          }
+          bindings: buildWorkflowBindingContract([noteField]).bindings
         },
         workspaceId: "ws_demo"
       }
@@ -2921,20 +2773,16 @@ describe("cloudtable agent tool registry", () => {
   });
 
   it("drafts configured status option comparisons for workflow proposals from binding metadata", async () => {
+    const statusField = createStatusWorkflowBindingField();
     const registry = createRegistry({
       tableSchemaInspectionResult: {
         appId: "app_crm",
         fields: [
           {
-            config: {
-              options: [
-                { id: "open", label: "Open", semantic: "todo" },
-                { id: "qualified", label: "Qualified", semantic: "done" }
-              ]
-            },
-            fieldId: "fld_status",
-            fieldKey: "status",
-            fieldType: "status.semantic",
+            config: statusField.config,
+            fieldId: statusField.fieldId,
+            fieldKey: statusField.fieldKey,
+            fieldType: statusField.fieldType,
             fieldTypeVersion: 1,
             label: "Status"
           }
@@ -2945,65 +2793,7 @@ describe("cloudtable agent tool registry", () => {
         tableSchemaVersion: 2,
         tableSlug: "accounts",
         workflow: {
-          bindings: {
-            "row.fields.status": {
-              binding: "row.fields.status",
-              fieldId: "fld_status",
-              fieldKey: "status",
-              fieldType: "status.semantic",
-              proposalHints: [
-                {
-                  operatorId: "equals",
-                  matchPhrases: [
-                    "changes to qualified",
-                    "becomes qualified",
-                    "is qualified",
-                    "set to qualified",
-                    "equals qualified",
-                    "changes to done",
-                    "becomes done",
-                    "is done",
-                    "set to done",
-                    "equals done"
-                  ],
-                  matchFieldPhrases: [
-                    "{field} changes to Qualified",
-                    "{field} becomes Qualified",
-                    "{field} is Qualified",
-                    "{field} set to Qualified",
-                    "{field} equals Qualified"
-                  ],
-                  draftInput: {
-                    left: {
-                      path: "row.fields.status.value"
-                    },
-                    right: "qualified"
-                  }
-                },
-                {
-                  operatorId: "is_empty",
-                  matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
-                  matchFieldPhrases: ["without {field}", "{field} missing"]
-                },
-                {
-                  operatorId: "is_not_empty",
-                  matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-                }
-              ],
-              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-              supportedOperators: supportedConditionOperatorManifests([
-                "equals",
-                "not_equals",
-                "is_empty",
-                "is_not_empty"
-              ]),
-              template: {
-                fieldIdPath: "row.fields.status.fieldId",
-                fieldTypePath: "row.fields.status.fieldType",
-                valuePath: "row.fields.status.value"
-              }
-            }
-          }
+          bindings: buildWorkflowBindingContract([statusField]).bindings
         },
         workspaceId: "ws_demo"
       }
@@ -3077,28 +2867,18 @@ describe("cloudtable agent tool registry", () => {
   });
 
   it("drafts numeric comparisons for workflow proposals from binding metadata", async () => {
-    const workflow = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
-      {
-        config: {
-          precision: 2
-        },
-        fieldId: "fld_amount",
-        fieldKey: "deal_amount",
-        fieldType: "number.decimal"
-      }
-    ]);
+    const amountField = createNumberWorkflowBindingField();
+    const workflow = buildWorkflowBindingContract([amountField]);
 
     const registry = createRegistry({
       tableSchemaInspectionResult: {
         appId: "app_crm",
         fields: [
           {
-            config: {
-              precision: 2
-            },
-            fieldId: "fld_amount",
-            fieldKey: "deal_amount",
-            fieldType: "number.decimal",
+            config: amountField.config,
+            fieldId: amountField.fieldId,
+            fieldKey: amountField.fieldKey,
+            fieldType: amountField.fieldType,
             fieldTypeVersion: 1,
             label: "Deal Amount"
           }
@@ -3183,24 +2963,18 @@ describe("cloudtable agent tool registry", () => {
   });
 
   it("drafts date comparisons for workflow proposals from binding metadata", async () => {
-    const workflow = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
-      {
-        config: {},
-        fieldId: "fld_due_date",
-        fieldKey: "due_date",
-        fieldType: "date.date"
-      }
-    ]);
+    const dueDateField = createDateWorkflowBindingField();
+    const workflow = buildWorkflowBindingContract([dueDateField]);
 
     const registry = createRegistry({
       tableSchemaInspectionResult: {
         appId: "app_crm",
         fields: [
           {
-            config: {},
-            fieldId: "fld_due_date",
-            fieldKey: "due_date",
-            fieldType: "date.date",
+            config: dueDateField.config,
+            fieldId: dueDateField.fieldId,
+            fieldKey: dueDateField.fieldKey,
+            fieldType: dueDateField.fieldType,
             fieldTypeVersion: 1,
             label: "Due Date"
           }

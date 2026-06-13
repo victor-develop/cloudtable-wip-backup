@@ -9,6 +9,12 @@ import { handleQueueBatch } from "../../../../src/queues/consumer";
 import type { CloudTableEnv, CloudTableQueueMessage } from "../../../../src/runtime/env";
 import { handleFetch, handleScheduled } from "../../../../src/runtime/worker";
 import {
+  buildWorkflowBindingContract,
+  createAssigneeAliasWorkflowBindingField,
+  createRowOwnerWorkflowBindingField,
+  createStatusWorkflowBindingField
+} from "../../harness/workflow-binding-contract";
+import {
   SqliteD1Database,
   seedAppAndTable,
   seedWorkspace
@@ -665,6 +671,15 @@ describe("cloudtable runtime smoke", () => {
       scopeHash: "scope:wf:owner-smoke"
     });
 
+    const ownerField = createRowOwnerWorkflowBindingField();
+    const assigneeField = createAssigneeAliasWorkflowBindingField();
+    const statusField = createStatusWorkflowBindingField();
+    const expectedBindings = buildWorkflowBindingContract([
+      ownerField,
+      assigneeField,
+      statusField
+    ]).bindings;
+
     const createOwnerField = await handleFetch(
       new Request("https://example.test/v1/tables/tbl_1/fields", {
         method: "POST",
@@ -676,12 +691,10 @@ describe("cloudtable runtime smoke", () => {
             commandId: "cmd_field_owner_smoke",
             idempotencyKey: "idem_field_owner_smoke",
             payload: {
-              config: {
-                rowOwner: true
-              },
-              fieldId: "fld_owner",
-              fieldKey: "owner",
-              fieldType: "principal.user",
+              config: ownerField.config,
+              fieldId: ownerField.fieldId,
+              fieldKey: ownerField.fieldKey,
+              fieldType: ownerField.fieldType,
               label: "Owner"
             }
           })
@@ -703,12 +716,10 @@ describe("cloudtable runtime smoke", () => {
             commandId: "cmd_field_assignee_smoke",
             idempotencyKey: "idem_field_assignee_smoke",
             payload: {
-              config: {
-                workflowBindingAlias: "row.assignee"
-              },
-              fieldId: "fld_assignee",
-              fieldKey: "assignee",
-              fieldType: "principal.user",
+              config: assigneeField.config,
+              fieldId: assigneeField.fieldId,
+              fieldKey: assigneeField.fieldKey,
+              fieldType: assigneeField.fieldType,
               label: "Assignee"
             }
           })
@@ -754,15 +765,10 @@ describe("cloudtable runtime smoke", () => {
             commandId: "cmd_field_status_smoke",
             idempotencyKey: "idem_field_status_smoke",
             payload: {
-              config: {
-                options: [
-                  { id: "open", label: "Open", semantic: "todo" },
-                  { id: "qualified", label: "Qualified", semantic: "done" }
-                ]
-              },
-              fieldId: "fld_status",
-              fieldKey: "status",
-              fieldType: "status.semantic",
+              config: statusField.config,
+              fieldId: statusField.fieldId,
+              fieldKey: statusField.fieldKey,
+              fieldType: statusField.fieldType,
               label: "Status"
             }
           })
@@ -828,261 +834,21 @@ describe("cloudtable runtime smoke", () => {
       "is_empty",
       "is_not_empty"
     ]);
-    const expectedRowOwnerBinding = {
-      aliasOf: "row.fields.owner",
-      binding: "row.owner",
-      fieldId: "fld_owner",
-      fieldKey: "owner",
-      fieldType: "principal.user",
-      isCanonical: true,
-      proposalHints: [
-        {
-          operatorId: "not_equals",
-          matchPhrases: ["does not equal", "not equals", "not assigned to"],
-          matchFieldPhrases: [
-            "{field} does not equal",
-            "{field} not equals",
-            "{field} is not",
-            "{field} is not assigned to",
-            "{field} not assigned to"
-          ],
-          draftInput: {
-            left: {
-              path: "row.owner.value"
-            },
-            right: null
-          }
-        },
-        {
-          operatorId: "equals",
-          matchPhrases: ["equals", "assigned to"],
-          matchFieldPhrases: [
-            "{field} equals",
-            "{field} is assigned to",
-            "{field} assigned to"
-          ],
-          draftInput: {
-            left: {
-              path: "row.owner.value"
-            },
-            right: null
-          }
-        },
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["unassigned"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["assigned"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: expectedOwnerOperators,
-      template: {
-        fieldIdPath: "row.owner.fieldId",
-        fieldTypePath: "row.owner.fieldType",
-        valuePath: "row.owner.value"
-      }
-    };
-    const expectedOwnerFieldBinding = {
-      binding: "row.fields.owner",
-      fieldId: "fld_owner",
-      fieldKey: "owner",
-      fieldType: "principal.user",
-      proposalHints: [
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: expectedOwnerOperators,
-      template: {
-        fieldIdPath: "row.fields.owner.fieldId",
-        fieldTypePath: "row.fields.owner.fieldType",
-        valuePath: "row.fields.owner.value"
-      }
-    };
-    const expectedAssigneeAliasBinding = {
-      aliasOf: "row.fields.assignee",
-      binding: "row.assignee",
-      fieldId: "fld_assignee",
-      fieldKey: "assignee",
-      fieldType: "principal.user",
-      isCanonical: true,
-      proposalHints: [
-        {
-          operatorId: "not_equals",
-          matchPhrases: ["does not equal", "not equals", "not assigned to"],
-          matchFieldPhrases: [
-            "{field} does not equal",
-            "{field} not equals",
-            "{field} is not",
-            "{field} is not assigned to",
-            "{field} not assigned to"
-          ],
-          draftInput: {
-            left: {
-              path: "row.assignee.value"
-            },
-            right: null
-          }
-        },
-        {
-          operatorId: "equals",
-          matchPhrases: ["equals", "assigned to"],
-          matchFieldPhrases: [
-            "{field} equals",
-            "{field} is assigned to",
-            "{field} assigned to"
-          ],
-          draftInput: {
-            left: {
-              path: "row.assignee.value"
-            },
-            right: null
-          }
-        },
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["unassigned"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["assigned"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: expectedOwnerOperators,
-      template: {
-        fieldIdPath: "row.assignee.fieldId",
-        fieldTypePath: "row.assignee.fieldType",
-        valuePath: "row.assignee.value"
-      }
-    };
-    const expectedAssigneeFieldBinding = {
-      binding: "row.fields.assignee",
-      fieldId: "fld_assignee",
-      fieldKey: "assignee",
-      fieldType: "principal.user",
-      proposalHints: [
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: expectedOwnerOperators,
-      template: {
-        fieldIdPath: "row.fields.assignee.fieldId",
-        fieldTypePath: "row.fields.assignee.fieldType",
-        valuePath: "row.fields.assignee.value"
-      }
-    };
     const expectedStatusOperators = supportedConditionOperatorManifests([
       "equals",
       "not_equals",
       "is_empty",
       "is_not_empty"
     ]);
-    const expectedStatusFieldBinding = {
-      binding: "row.fields.status",
-      fieldId: "fld_status",
-      fieldKey: "status",
-      fieldType: "status.semantic",
-      proposalHints: [
-        {
-          operatorId: "equals",
-          matchPhrases: [
-            "changes to open",
-            "becomes open",
-            "is open",
-            "set to open",
-            "equals open",
-            "changes to todo",
-            "becomes todo",
-            "is todo",
-            "set to todo",
-            "equals todo"
-          ],
-          matchFieldPhrases: [
-            "{field} changes to Open",
-            "{field} becomes Open",
-            "{field} is Open",
-            "{field} set to Open",
-            "{field} equals Open"
-          ],
-          draftInput: {
-            left: {
-              path: "row.fields.status.value"
-            },
-            right: "open"
-          }
-        },
-        {
-          operatorId: "equals",
-          matchPhrases: [
-            "changes to qualified",
-            "becomes qualified",
-            "is qualified",
-            "set to qualified",
-            "equals qualified",
-            "changes to done",
-            "becomes done",
-            "is done",
-            "set to done",
-            "equals done"
-          ],
-          matchFieldPhrases: [
-            "{field} changes to Qualified",
-            "{field} becomes Qualified",
-            "{field} is Qualified",
-            "{field} set to Qualified",
-            "{field} equals Qualified"
-          ],
-          draftInput: {
-            left: {
-              path: "row.fields.status.value"
-            },
-            right: "qualified"
-          }
-        },
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: expectedStatusOperators,
-      template: {
-        fieldIdPath: "row.fields.status.fieldId",
-        fieldTypePath: "row.fields.status.fieldType",
-        valuePath: "row.fields.status.value"
-      }
-    };
-    expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwnerBinding);
-    expect(schemaBody.workflow.bindings["row.assignee"]).toEqual(expectedAssigneeAliasBinding);
-    expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
-    expect(schemaBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedAssigneeFieldBinding);
-    expect(schemaBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
+    expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedBindings["row.owner"]);
+    expect(schemaBody.workflow.bindings["row.assignee"]).toEqual(expectedBindings["row.assignee"]);
+    expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedBindings["row.fields.owner"]);
+    expect(schemaBody.workflow.bindings["row.fields.assignee"]).toEqual(
+      expectedBindings["row.fields.assignee"]
+    );
+    expect(schemaBody.workflow.bindings["row.fields.status"]).toEqual(
+      expectedBindings["row.fields.status"]
+    );
     expect(schemaBody.view.fields["fld_owner"]).toEqual({
       capabilities: {
         supportsFiltering: true,
@@ -1267,6 +1033,9 @@ describe("cloudtable runtime smoke", () => {
       {} as ExecutionContext
     );
     expect(workflowDefinition.status).toBe(200);
+    const expectedAssigneeAliasBinding = JSON.parse(
+      JSON.stringify(expectedBindings["row.assignee"])
+    ) as Record<string, unknown>;
     expect((await workflowDefinition.json()) as { workflow: { bindings: Record<string, unknown> } }).toMatchObject({
       workflow: {
         bindings: {

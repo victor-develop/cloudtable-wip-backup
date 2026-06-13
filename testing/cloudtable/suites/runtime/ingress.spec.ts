@@ -17,6 +17,15 @@ import {
   seedAppAndTable,
   seedWorkspace
 } from "../../harness/runtime/sqlite-d1";
+import {
+  buildWorkflowBindingContract,
+  createAssigneeAliasWorkflowBindingField,
+  createCheckboxWorkflowBindingField,
+  createRowOwnerWorkflowBindingField,
+  createSingleSelectWorkflowBindingField,
+  createStatusWorkflowBindingField,
+  createTitleWorkflowBindingField
+} from "../../harness/workflow-binding-contract";
 
 type StoredValue = unknown;
 
@@ -9472,44 +9481,46 @@ describe("cloudtable runtime ingress", () => {
 
   it("surfaces field-declared canonical workflow aliases through schema and workspace inspection reads", async () => {
     const { db, env } = createEnv();
+    const ownerField = createRowOwnerWorkflowBindingField();
+    const assigneeField = createAssigneeAliasWorkflowBindingField();
+    const statusField = createStatusWorkflowBindingField();
+    const titleField = createTitleWorkflowBindingField();
+    const expectedBindings = buildWorkflowBindingContract([
+      ownerField,
+      assigneeField,
+      statusField,
+      titleField
+    ]).bindings;
 
     insertField(db, {
-      config: {
-        rowOwner: true
-      },
-      fieldId: "fld_owner",
-      fieldKey: "owner",
-      fieldType: "principal.user",
+      config: ownerField.config,
+      fieldId: ownerField.fieldId,
+      fieldKey: ownerField.fieldKey,
+      fieldType: ownerField.fieldType,
       label: "Owner",
       tableId: "tbl_1"
     });
     insertField(db, {
-      config: {
-        workflowBindingAlias: "row.assignee"
-      },
-      fieldId: "fld_assignee",
-      fieldKey: "assignee",
-      fieldType: "principal.user",
+      config: assigneeField.config,
+      fieldId: assigneeField.fieldId,
+      fieldKey: assigneeField.fieldKey,
+      fieldType: assigneeField.fieldType,
       label: "Assignee",
       tableId: "tbl_1"
     });
     insertField(db, {
-      config: {
-        options: [
-          { id: "open", label: "Open", semantic: "todo" },
-          { id: "qualified", label: "Qualified", semantic: "done" }
-        ]
-      },
-      fieldId: "fld_status",
-      fieldKey: "status",
-      fieldType: "status.semantic",
+      config: statusField.config,
+      fieldId: statusField.fieldId,
+      fieldKey: statusField.fieldKey,
+      fieldType: statusField.fieldType,
       label: "Status",
       tableId: "tbl_1"
     });
     insertField(db, {
-      fieldId: "fld_title",
-      fieldKey: "title",
-      fieldType: "text.single_line",
+      config: titleField.config,
+      fieldId: titleField.fieldId,
+      fieldKey: titleField.fieldKey,
+      fieldType: titleField.fieldType,
       label: "Title",
       tableId: "tbl_1"
     });
@@ -9647,305 +9658,6 @@ describe("cloudtable runtime ingress", () => {
     expect(workflowResponse.status).toBe(200);
     expect(workspaceResponse.status).toBe(200);
 
-    const expectedRowOwner = {
-      aliasOf: "row.fields.owner",
-      binding: "row.owner",
-      fieldId: "fld_owner",
-      fieldKey: "owner",
-      fieldType: "principal.user",
-      isCanonical: true,
-      proposalHints: [
-        {
-          operatorId: "not_equals",
-          matchPhrases: ["does not equal", "not equals", "not assigned to"],
-          matchFieldPhrases: [
-            "{field} does not equal",
-            "{field} not equals",
-            "{field} is not",
-            "{field} is not assigned to",
-            "{field} not assigned to"
-          ],
-          draftInput: {
-            left: {
-              path: "row.owner.value"
-            },
-            right: null
-          }
-        },
-        {
-          operatorId: "equals",
-          matchPhrases: ["equals", "assigned to"],
-          matchFieldPhrases: [
-            "{field} equals",
-            "{field} is assigned to",
-            "{field} assigned to"
-          ],
-          draftInput: {
-            left: {
-              path: "row.owner.value"
-            },
-            right: null
-          }
-        },
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["unassigned"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["assigned"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: supportedConditionOperatorManifests([
-        "equals",
-        "not_equals",
-        "is_empty",
-        "is_not_empty"
-      ]),
-      template: {
-        fieldIdPath: "row.owner.fieldId",
-        fieldTypePath: "row.owner.fieldType",
-        valuePath: "row.owner.value"
-      }
-    };
-    const expectedOwnerFieldBinding = {
-      binding: "row.fields.owner",
-      fieldId: "fld_owner",
-      fieldKey: "owner",
-      fieldType: "principal.user",
-      proposalHints: [
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: supportedConditionOperatorManifests([
-        "equals",
-        "not_equals",
-        "is_empty",
-        "is_not_empty"
-      ]),
-      template: {
-        fieldIdPath: "row.fields.owner.fieldId",
-        fieldTypePath: "row.fields.owner.fieldType",
-        valuePath: "row.fields.owner.value"
-      }
-    };
-    const expectedAssigneeAlias = {
-      aliasOf: "row.fields.assignee",
-      binding: "row.assignee",
-      fieldId: "fld_assignee",
-      fieldKey: "assignee",
-      fieldType: "principal.user",
-      isCanonical: true,
-      proposalHints: [
-        {
-          operatorId: "not_equals",
-          matchPhrases: ["does not equal", "not equals", "not assigned to"],
-          matchFieldPhrases: [
-            "{field} does not equal",
-            "{field} not equals",
-            "{field} is not",
-            "{field} is not assigned to",
-            "{field} not assigned to"
-          ],
-          draftInput: {
-            left: {
-              path: "row.assignee.value"
-            },
-            right: null
-          }
-        },
-        {
-          operatorId: "equals",
-          matchPhrases: ["equals", "assigned to"],
-          matchFieldPhrases: [
-            "{field} equals",
-            "{field} is assigned to",
-            "{field} assigned to"
-          ],
-          draftInput: {
-            left: {
-              path: "row.assignee.value"
-            },
-            right: null
-          }
-        },
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["unassigned"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["assigned"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: supportedConditionOperatorManifests([
-        "equals",
-        "not_equals",
-        "is_empty",
-        "is_not_empty"
-      ]),
-      template: {
-        fieldIdPath: "row.assignee.fieldId",
-        fieldTypePath: "row.assignee.fieldType",
-        valuePath: "row.assignee.value"
-      }
-    };
-    const expectedAssigneeFieldBinding = {
-      binding: "row.fields.assignee",
-      fieldId: "fld_assignee",
-      fieldKey: "assignee",
-      fieldType: "principal.user",
-      proposalHints: [
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: supportedConditionOperatorManifests([
-        "equals",
-        "not_equals",
-        "is_empty",
-        "is_not_empty"
-      ]),
-      template: {
-        fieldIdPath: "row.fields.assignee.fieldId",
-        fieldTypePath: "row.fields.assignee.fieldType",
-        valuePath: "row.fields.assignee.value"
-      }
-    };
-    const expectedTitleFieldBinding = {
-      binding: "row.fields.title",
-      fieldId: "fld_title",
-      fieldKey: "title",
-      fieldType: "text.single_line",
-      proposalHints: [
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: supportedConditionOperatorManifests([
-        "equals",
-        "not_equals",
-        "is_empty",
-        "is_not_empty"
-      ]),
-      template: {
-        fieldIdPath: "row.fields.title.fieldId",
-        fieldTypePath: "row.fields.title.fieldType",
-        valuePath: "row.fields.title.value"
-      }
-    };
-    const expectedStatusFieldBinding = {
-      binding: "row.fields.status",
-      fieldId: "fld_status",
-      fieldKey: "status",
-      fieldType: "status.semantic",
-      proposalHints: [
-        {
-          operatorId: "equals",
-          matchPhrases: [
-            "changes to open",
-            "becomes open",
-            "is open",
-            "set to open",
-            "equals open",
-            "changes to todo",
-            "becomes todo",
-            "is todo",
-            "set to todo",
-            "equals todo"
-          ],
-          matchFieldPhrases: [
-            "{field} changes to Open",
-            "{field} becomes Open",
-            "{field} is Open",
-            "{field} set to Open",
-            "{field} equals Open"
-          ],
-          draftInput: {
-            left: {
-              path: "row.fields.status.value"
-            },
-            right: "open"
-          }
-        },
-        {
-          operatorId: "equals",
-          matchPhrases: [
-            "changes to qualified",
-            "becomes qualified",
-            "is qualified",
-            "set to qualified",
-            "equals qualified",
-            "changes to done",
-            "becomes done",
-            "is done",
-            "set to done",
-            "equals done"
-          ],
-          matchFieldPhrases: [
-            "{field} changes to Qualified",
-            "{field} becomes Qualified",
-            "{field} is Qualified",
-            "{field} set to Qualified",
-            "{field} equals Qualified"
-          ],
-          draftInput: {
-            left: {
-              path: "row.fields.status.value"
-            },
-            right: "qualified"
-          }
-        },
-        {
-          operatorId: "is_empty",
-          matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
-          matchFieldPhrases: ["without {field}", "{field} missing"]
-        },
-        {
-          operatorId: "is_not_empty",
-          matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-        }
-      ],
-      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
-      supportedOperators: supportedConditionOperatorManifests([
-        "equals",
-        "not_equals",
-        "is_empty",
-        "is_not_empty"
-      ]),
-      template: {
-        fieldIdPath: "row.fields.status.fieldId",
-        fieldTypePath: "row.fields.status.fieldType",
-        valuePath: "row.fields.status.value"
-      }
-    };
-
     const schemaBody = (await schemaResponse.json()) as {
       view: {
         fields: Record<
@@ -10032,12 +9744,12 @@ describe("cloudtable runtime ingress", () => {
       };
     };
 
-    expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwner);
-    expect(schemaBody.workflow.bindings["row.assignee"]).toEqual(expectedAssigneeAlias);
-    expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
-    expect(schemaBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedAssigneeFieldBinding);
-    expect(schemaBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
-    expect(schemaBody.workflow.bindings["row.fields.title"]).toEqual(expectedTitleFieldBinding);
+    expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedBindings["row.owner"]);
+    expect(schemaBody.workflow.bindings["row.assignee"]).toEqual(expectedBindings["row.assignee"]);
+    expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedBindings["row.fields.owner"]);
+    expect(schemaBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedBindings["row.fields.assignee"]);
+    expect(schemaBody.workflow.bindings["row.fields.status"]).toEqual(expectedBindings["row.fields.status"]);
+    expect(schemaBody.workflow.bindings["row.fields.title"]).toEqual(expectedBindings["row.fields.title"]);
     expect(schemaBody.view.fields["fld_owner"]).toEqual({
       capabilities: {
         supportsFiltering: true,
@@ -10071,43 +9783,43 @@ describe("cloudtable runtime ingress", () => {
       expect.arrayContaining(["fld_owner", "fld_assignee", "fld_status", "fld_title"])
     );
     expect(schemaAgentBody.output.schema.view).toEqual(schemaBody.view);
-    expect(workflowBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwner);
-    expect(workflowBody.workflow.bindings["row.assignee"]).toEqual(expectedAssigneeAlias);
-    expect(workflowBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
-    expect(workflowBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedAssigneeFieldBinding);
-    expect(workflowBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
-    expect(workflowBody.workflow.bindings["row.fields.title"]).toEqual(expectedTitleFieldBinding);
+    expect(workflowBody.workflow.bindings["row.owner"]).toEqual(expectedBindings["row.owner"]);
+    expect(workflowBody.workflow.bindings["row.assignee"]).toEqual(expectedBindings["row.assignee"]);
+    expect(workflowBody.workflow.bindings["row.fields.owner"]).toEqual(expectedBindings["row.fields.owner"]);
+    expect(workflowBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedBindings["row.fields.assignee"]);
+    expect(workflowBody.workflow.bindings["row.fields.status"]).toEqual(expectedBindings["row.fields.status"]);
+    expect(workflowBody.workflow.bindings["row.fields.title"]).toEqual(expectedBindings["row.fields.title"]);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.view
     ).toEqual(schemaBody.view);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings["row.owner"]
-    ).toEqual(expectedRowOwner);
+    ).toEqual(expectedBindings["row.owner"]);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
         "row.assignee"
       ]
-    ).toEqual(expectedAssigneeAlias);
+    ).toEqual(expectedBindings["row.assignee"]);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
         "row.fields.owner"
       ]
-    ).toEqual(expectedOwnerFieldBinding);
+    ).toEqual(expectedBindings["row.fields.owner"]);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
         "row.fields.assignee"
       ]
-    ).toEqual(expectedAssigneeFieldBinding);
+    ).toEqual(expectedBindings["row.fields.assignee"]);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
         "row.fields.status"
       ]
-    ).toEqual(expectedStatusFieldBinding);
+    ).toEqual(expectedBindings["row.fields.status"]);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
         "row.fields.title"
       ]
-    ).toEqual(expectedTitleFieldBinding);
+    ).toEqual(expectedBindings["row.fields.title"]);
   });
 
   it("drafts row.owner workflow proposal conditions through the agent-tool preview ingress", async () => {
@@ -10389,17 +10101,13 @@ describe("cloudtable runtime ingress", () => {
 
   it("drafts configured status workflow proposal conditions through the agent-tool preview ingress", async () => {
     const { db, env } = createEnv();
+    const statusField = createStatusWorkflowBindingField();
 
     insertField(db, {
-      config: {
-        options: [
-          { id: "open", label: "Open", semantic: "todo" },
-          { id: "qualified", label: "Qualified", semantic: "done" }
-        ]
-      },
-      fieldId: "fld_status",
-      fieldKey: "status",
-      fieldType: "status.semantic",
+      config: statusField.config,
+      fieldId: statusField.fieldId,
+      fieldKey: statusField.fieldKey,
+      fieldType: statusField.fieldType,
       label: "Status",
       tableId: "tbl_1"
     });
@@ -10482,17 +10190,13 @@ describe("cloudtable runtime ingress", () => {
 
   it("drafts configured single-select workflow proposal conditions through the agent-tool preview ingress", async () => {
     const { db, env } = createEnv();
+    const stageField = createSingleSelectWorkflowBindingField();
 
     insertField(db, {
-      config: {
-        options: [
-          { id: "lead", label: "Lead" },
-          { id: "customer", label: "Customer" }
-        ]
-      },
-      fieldId: "fld_stage",
-      fieldKey: "lifecycle_stage",
-      fieldType: "select.single",
+      config: stageField.config,
+      fieldId: stageField.fieldId,
+      fieldKey: stageField.fieldKey,
+      fieldType: stageField.fieldType,
       label: "Lifecycle Stage",
       tableId: "tbl_1"
     });
@@ -10575,12 +10279,13 @@ describe("cloudtable runtime ingress", () => {
 
   it("drafts checkbox workflow proposal conditions through the agent-tool preview ingress", async () => {
     const { db, env } = createEnv();
+    const verifiedField = createCheckboxWorkflowBindingField();
 
     insertField(db, {
-      config: {},
-      fieldId: "fld_verified",
-      fieldKey: "is_verified",
-      fieldType: "boolean.checkbox",
+      config: verifiedField.config,
+      fieldId: verifiedField.fieldId,
+      fieldKey: verifiedField.fieldKey,
+      fieldType: verifiedField.fieldType,
       label: "Is Verified",
       tableId: "tbl_1"
     });

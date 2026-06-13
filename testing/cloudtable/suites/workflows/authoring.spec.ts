@@ -9,6 +9,11 @@ import {
 import { serializeWorkflowOperatorManifest } from "../../../../src/core/workflows/manifest";
 import { createWorkflowOperatorRegistry } from "../../../../src/core/workflows/operator-registry";
 import type { WorkflowConditionManifest } from "../../../../src/core/workflows/types";
+import {
+  buildWorkflowBindingContract,
+  createAssigneeAliasWorkflowBindingField,
+  createRowOwnerWorkflowBindingField
+} from "../../harness/workflow-binding-contract";
 
 const fieldTypeRegistry = createFieldTypeRegistry();
 const workflowOperatorRegistry = createWorkflowOperatorRegistry();
@@ -46,14 +51,7 @@ describe("workflow authoring", () => {
 
   it("prefers the canonical row.owner binding when metadata hints would draft the same owner-assigned condition", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
-      {
-        config: {
-          rowOwner: true
-        },
-        fieldId: "fld_owner",
-        fieldKey: "owner",
-        fieldType: "principal.user"
-      }
+      createRowOwnerWorkflowBindingField()
     ]);
 
     expect(
@@ -81,48 +79,13 @@ describe("workflow authoring", () => {
 
   it("drafts canonical row.owner comparisons from metadata-defined proposal templates", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
-      {
-        config: {
-          rowOwner: true
-        },
-        fieldId: "fld_owner",
-        fieldKey: "owner",
-        fieldType: "principal.user"
-      }
+      createRowOwnerWorkflowBindingField()
     ]);
+    const expectedBindings = buildWorkflowBindingContract([
+      createRowOwnerWorkflowBindingField()
+    ]).bindings;
 
-    expect(metadata.bindings["row.owner"].proposalHints).toContainEqual({
-      operatorId: "equals",
-      matchPhrases: ["equals", "assigned to"],
-      matchFieldPhrases: [
-        "{field} equals",
-        "{field} is assigned to",
-        "{field} assigned to"
-      ],
-      draftInput: {
-        left: {
-          path: "row.owner.value"
-        },
-        right: null
-      }
-    });
-    expect(metadata.bindings["row.owner"].proposalHints).toContainEqual({
-      operatorId: "not_equals",
-      matchPhrases: ["does not equal", "not equals", "not assigned to"],
-      matchFieldPhrases: [
-        "{field} does not equal",
-        "{field} not equals",
-        "{field} is not",
-        "{field} is not assigned to",
-        "{field} not assigned to"
-      ],
-      draftInput: {
-        left: {
-          path: "row.owner.value"
-        },
-        right: null
-      }
-    });
+    expect(metadata.bindings["row.owner"]).toEqual(expectedBindings["row.owner"]);
 
     expect(
       draftWorkflowConditionsFromMetadata(metadata, {
@@ -179,39 +142,13 @@ describe("workflow authoring", () => {
 
   it("emits canonical aliases from field metadata instead of a row-owner-only helper", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
-      {
-        config: {
-          workflowBindingAlias: "row.assignee"
-        },
-        fieldId: "fld_assignee",
-        fieldKey: "assignee",
-        fieldType: "principal.user"
-      }
+      createAssigneeAliasWorkflowBindingField()
     ]);
+    const expectedBindings = buildWorkflowBindingContract([
+      createAssigneeAliasWorkflowBindingField()
+    ]).bindings;
 
-    expect(metadata.bindings["row.assignee"]).toMatchObject({
-      aliasOf: "row.fields.assignee",
-      binding: "row.assignee",
-      fieldId: "fld_assignee",
-      fieldKey: "assignee",
-      fieldType: "principal.user",
-      isCanonical: true
-    });
-    expect(metadata.bindings["row.assignee"].proposalHints).toContainEqual({
-      operatorId: "equals",
-      matchPhrases: ["equals", "assigned to"],
-      matchFieldPhrases: [
-        "{field} equals",
-        "{field} is assigned to",
-        "{field} assigned to"
-      ],
-      draftInput: {
-        left: {
-          path: "row.assignee.value"
-        },
-        right: null
-      }
-    });
+    expect(metadata.bindings["row.assignee"]).toEqual(expectedBindings["row.assignee"]);
   });
 
   it("rejects conflicting canonical aliases before authoring metadata can collapse them", () => {

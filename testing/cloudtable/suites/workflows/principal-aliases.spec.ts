@@ -4,6 +4,10 @@ import {
   listCanonicalWorkflowBindingAliases,
   listPrincipalUserCanonicalBindings
 } from "../../../../src/core/ownership/row-owner";
+import {
+  createAssigneeAliasWorkflowBindingField,
+  createRowOwnerWorkflowBindingField
+} from "../../harness/workflow-binding-contract";
 
 describe("principal workflow aliases", () => {
   it("lists canonical principal bindings from principal.user field config", () => {
@@ -25,24 +29,13 @@ describe("principal workflow aliases", () => {
   });
 
   it("surfaces field-declared canonical aliases alongside row.owner across fields", () => {
+    const ownerField = createRowOwnerWorkflowBindingField();
+    const assigneeField = createAssigneeAliasWorkflowBindingField();
+
     expect(
       listCanonicalWorkflowBindingAliases([
-        {
-          config: {
-            rowOwner: true
-          },
-          fieldId: "fld_owner",
-          fieldKey: "owner",
-          fieldType: "principal.user"
-        },
-        {
-          config: {
-            workflowBindingAlias: "row.assignee"
-          },
-          fieldId: "fld_assignee",
-          fieldKey: "assignee",
-          fieldType: "principal.user"
-        },
+        ownerField,
+        assigneeField,
         {
           config: {},
           fieldId: "fld_title",
@@ -55,12 +48,10 @@ describe("principal workflow aliases", () => {
         aliasOf: "row.fields.assignee",
         binding: "row.assignee",
         field: {
-          config: {
-            workflowBindingAlias: "row.assignee"
-          },
-          fieldId: "fld_assignee",
-          fieldKey: "assignee",
-          fieldType: "principal.user"
+          config: assigneeField.config,
+          fieldId: assigneeField.fieldId,
+          fieldKey: assigneeField.fieldKey,
+          fieldType: assigneeField.fieldType
         },
         isCanonical: true
       },
@@ -68,12 +59,10 @@ describe("principal workflow aliases", () => {
         aliasOf: "row.fields.owner",
         binding: "row.owner",
         field: {
-          config: {
-            rowOwner: true
-          },
-          fieldId: "fld_owner",
-          fieldKey: "owner",
-          fieldType: "principal.user"
+          config: ownerField.config,
+          fieldId: ownerField.fieldId,
+          fieldKey: ownerField.fieldKey,
+          fieldType: ownerField.fieldType
         },
         isCanonical: true
       }
