@@ -444,6 +444,85 @@ describe("workflow authoring", () => {
     ]);
   });
 
+  it("drafts date comparison conditions from metadata-defined proposal templates", () => {
+    const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {},
+        fieldId: "fld_due_date",
+        fieldKey: "due_date",
+        fieldType: "date.date"
+      }
+    ]);
+    const datetimeMetadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {},
+        fieldId: "fld_review_timestamp",
+        fieldKey: "review_timestamp",
+        fieldType: "date.datetime"
+      }
+    ]);
+
+    expect(metadata.bindings["row.fields.due_date"].proposalHints).toContainEqual({
+      operatorId: "date_compare",
+      matchPhrases: ["on or before", "no later than"],
+      matchFieldPhrases: [
+        "{field} on or before",
+        "{field} is on or before",
+        "{field} no later than"
+      ],
+      draftInput: {
+        comparator: "on_or_before",
+        left: {
+          path: "row.fields.due_date.value"
+        },
+        right: null
+      }
+    });
+    expect(datetimeMetadata.bindings["row.fields.review_timestamp"].proposalHints).toContainEqual({
+      operatorId: "date_compare",
+      matchPhrases: ["on or after", "no earlier than"],
+      matchFieldPhrases: [
+        "{field} on or after",
+        "{field} is on or after",
+        "{field} no earlier than"
+      ],
+      draftInput: {
+        comparator: "on_or_after",
+        left: {
+          path: "row.fields.review_timestamp.value"
+        },
+        right: null
+      }
+    });
+
+    expect(
+      draftWorkflowConditionsFromMetadata(metadata, {
+        businessRule: "Escalate when due date is on or before the contract deadline.",
+        fieldIds: ["fld_due_date"]
+      })
+    ).toEqual([
+      {
+        input: {
+          fieldId: {
+            path: "row.fields.due_date.fieldId"
+          },
+          fieldType: {
+            path: "row.fields.due_date.fieldType"
+          },
+          value: {
+            path: "row.fields.due_date.value"
+          },
+          comparator: "on_or_before",
+          left: {
+            path: "row.fields.due_date.value"
+          },
+          right: null
+        },
+        operatorId: "date_compare"
+      }
+    ]);
+  });
+
   it("drafts operator-specific condition input from metadata templates without hard-coded field/value scaffolding", () => {
     const metadata = {
       bindings: {

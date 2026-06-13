@@ -909,6 +909,48 @@ function buildNumberComparisonWorkflowProposalHints(binding: string): FieldWorkf
   }));
 }
 
+function buildDateComparisonWorkflowProposalHints(binding: string): FieldWorkflowProposalHint[] {
+  const comparisons: ReadonlyArray<{
+    comparator: string;
+    fieldPhrases: readonly string[];
+    phrases: readonly string[];
+  }> = [
+    {
+      comparator: "on_or_before",
+      fieldPhrases: ["{field} on or before", "{field} is on or before", "{field} no later than"],
+      phrases: ["on or before", "no later than"]
+    },
+    {
+      comparator: "before",
+      fieldPhrases: ["{field} before", "{field} is before", "{field} earlier than"],
+      phrases: ["before", "earlier than"]
+    },
+    {
+      comparator: "on_or_after",
+      fieldPhrases: ["{field} on or after", "{field} is on or after", "{field} no earlier than"],
+      phrases: ["on or after", "no earlier than"]
+    },
+    {
+      comparator: "after",
+      fieldPhrases: ["{field} after", "{field} is after", "{field} later than"],
+      phrases: ["after", "later than"]
+    }
+  ];
+
+  return comparisons.map((comparison) => ({
+    draftInput: {
+      comparator: comparison.comparator,
+      left: {
+        path: `${binding}.value`
+      },
+      right: null
+    },
+    matchFieldPhrases: [...comparison.fieldPhrases],
+    matchPhrases: [...comparison.phrases],
+    operatorId: "date_compare"
+  }));
+}
+
 function buildSelectMeta(option: SelectOption | undefined): Record<string, JsonValue> | undefined {
   if (!option) {
     return undefined;
@@ -2304,6 +2346,10 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
     normalize: (input) => normalizeDateValue("date.date", input),
     normalizeSample: (input) => normalizeDateValue("date.date", input),
     validateConfig: (config) => validateStrictObjectConfig(config, []),
+    workflowProposalHints: ({ binding }) => [
+      ...buildDateComparisonWorkflowProposalHints(binding),
+      ...defaultWorkflowProposalHints
+    ],
     validateValue: (value) => validateDateValue("date.date", value),
     invalidConfigFixtures: [
       {
@@ -2347,6 +2393,10 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
     normalize: (input) => normalizeDateValue("date.datetime", input),
     normalizeSample: (input) => normalizeDateValue("date.datetime", input),
     validateConfig: (config) => validateStrictObjectConfig(config, []),
+    workflowProposalHints: ({ binding }) => [
+      ...buildDateComparisonWorkflowProposalHints(binding),
+      ...defaultWorkflowProposalHints
+    ],
     validateValue: (value) => validateDateValue("date.datetime", value),
     invalidConfigFixtures: [
       {

@@ -3182,6 +3182,108 @@ describe("cloudtable agent tool registry", () => {
     });
   });
 
+  it("drafts date comparisons for workflow proposals from binding metadata", async () => {
+    const workflow = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {},
+        fieldId: "fld_due_date",
+        fieldKey: "due_date",
+        fieldType: "date.date"
+      }
+    ]);
+
+    const registry = createRegistry({
+      tableSchemaInspectionResult: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: {},
+            fieldId: "fld_due_date",
+            fieldKey: "due_date",
+            fieldType: "date.date",
+            fieldTypeVersion: 1,
+            label: "Due Date"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_accounts",
+        tableName: "Accounts",
+        tableSchemaVersion: 2,
+        tableSlug: "accounts",
+        workflow,
+        workspaceId: "ws_demo"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["update_record"],
+        businessRule: "Escalate when due date is on or before the contract deadline.",
+        fieldIds: ["fld_due_date"],
+        name: "Due date escalation",
+        tableId: "tbl_accounts",
+        triggerId: "field_changed",
+        workflowId: "wf_due_date_escalation"
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "workflow-proposal",
+      proposal: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.fields.due_date.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.due_date.fieldType"
+              },
+              value: {
+                path: "row.fields.due_date.value"
+              },
+              comparator: "on_or_before",
+              left: {
+                path: "row.fields.due_date.value"
+              },
+              right: null
+            },
+            operatorId: "date_compare"
+          }
+        ]
+      },
+      command: {
+        payload: {
+          definition: {
+            conditions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.fields.due_date.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.fields.due_date.fieldType"
+                  },
+                  value: {
+                    path: "row.fields.due_date.value"
+                  },
+                  comparator: "on_or_before",
+                  left: {
+                    path: "row.fields.due_date.value"
+                  },
+                  right: null
+                },
+                operatorId: "date_compare"
+              }
+            ]
+          }
+        }
+      }
+    });
+  });
+
   it("drafts metadata-defined template.input conditions for workflow proposals without default field scaffolding", async () => {
     const registry = createRegistry({
       tableSchemaInspectionResult: {
