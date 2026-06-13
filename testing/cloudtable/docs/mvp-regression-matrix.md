@@ -64,11 +64,14 @@ The deterministic command golden corpus now uses real MVP command scenarios inst
 | `field-create-invalid-boolean-config` | invalid | `field.create` |
 | `field-create-invalid-date-config` | invalid | `field.create` |
 | `field-create-invalid-principal-config` | invalid | `field.create` |
+| `field-create-invalid-principal-workflow-binding-alias-config` | invalid | `field.create` |
 | `field-create-invalid-relation-config` | invalid | `field.create` |
 | `field-create-invalid-computed-config` | invalid | `field.create` |
 | `view-create-basic` | accepted | `view.create` |
 | `view-update-basic` | accepted | `view.update` |
 | `workflow-manual-basic` | accepted | `workflow.manual` |
+| `workflow-create-owner-binding-basic` | accepted | `workflow.create` |
+| `workflow-create-assignee-binding-basic` | accepted | `workflow.create` |
 | `workflow-webhook-enqueue-basic` | accepted | `workflow.webhook.enqueue` |
 | `workflow-job-enqueue-basic` | accepted | `job.enqueue` |
 | `workflow-job-enqueue-invalid-payload` | invalid | `job.enqueue` |

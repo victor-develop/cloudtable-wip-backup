@@ -1781,6 +1781,117 @@ describe("cloudtable D1 repository", () => {
     expect(result.diagnostics).toContain("row_owner_field_conflict:fld_owner_primary");
   });
 
+  it("rejects creating a principal.user field that reuses another canonical alias", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_assignee_primary",
+        idempotencyKey: "idem_field_assignee_primary",
+        payload: {
+          config: {
+            workflowBindingAlias: "row.assignee"
+          },
+          fieldId: "fld_assignee_primary",
+          fieldKey: "assigneePrimary",
+          fieldType: "principal.user",
+          label: "Primary Assignee"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_assignee_secondary",
+        idempotencyKey: "idem_field_assignee_secondary",
+        payload: {
+          config: {
+            workflowBindingAlias: "row.assignee"
+          },
+          fieldId: "fld_assignee_secondary",
+          fieldKey: "assigneeSecondary",
+          fieldType: "principal.user",
+          label: "Secondary Assignee"
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toEqual([
+      "canonical_workflow_binding_alias_conflict:row.assignee:fld_assignee_primary:fld_assignee_secondary"
+    ]);
+  });
+
+  it("rejects updating a principal.user field into another field's canonical alias", async () => {
+    const db = createDatabase();
+    const fieldTypeRegistry = createFieldTypeRegistry();
+    const eventLedger = createEventLedger(db as unknown as D1Database, fieldTypeRegistry);
+    const commandBus = createCommandBus({
+      eventLedger,
+      fieldTypeRegistry,
+      permissionEngine: createPermissionEngineStub(),
+      workflowOperatorRegistry: createWorkflowOperatorRegistry()
+    });
+
+    await commandBus.execute(createDomainCommand("base.create"));
+    await commandBus.execute(createDomainCommand("table.create"));
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_assignee_primary_update_guard",
+        idempotencyKey: "idem_field_assignee_primary_update_guard",
+        payload: {
+          config: {
+            workflowBindingAlias: "row.assignee"
+          },
+          fieldId: "fld_assignee_primary",
+          fieldKey: "assigneePrimary",
+          fieldType: "principal.user",
+          label: "Primary Assignee"
+        }
+      })
+    );
+    await commandBus.execute(
+      createDomainCommand("field.create", {
+        commandId: "cmd_field_assignee_secondary_update_guard",
+        idempotencyKey: "idem_field_assignee_secondary_update_guard",
+        payload: {
+          fieldId: "fld_assignee_secondary",
+          fieldKey: "assigneeSecondary",
+          fieldType: "principal.user",
+          label: "Secondary Assignee"
+        }
+      })
+    );
+
+    const result = await commandBus.execute(
+      createDomainCommand("field.update", {
+        commandId: "cmd_field_assignee_secondary_conflict_update",
+        idempotencyKey: "idem_field_assignee_secondary_conflict_update",
+        payload: {
+          config: {
+            workflowBindingAlias: "row.assignee"
+          },
+          fieldId: "fld_assignee_secondary"
+        }
+      })
+    );
+
+    expect(result.status).toBe("rejected");
+    expect(result.diagnostics).toEqual([
+      "canonical_workflow_binding_alias_conflict:row.assignee:fld_assignee_primary:fld_assignee_secondary"
+    ]);
+  });
+
   it("rejects creating a canonical row-owner field after records already exist", async () => {
     const db = createDatabase();
     const fieldTypeRegistry = createFieldTypeRegistry();

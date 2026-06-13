@@ -1,0 +1,6 @@
+{
+  "logicalStartTime": "2026-06-06T00:00:00.000Z",
+  "scenarioId": "workflow-create-canonical-alias-persistence",
+  "schemaVersion": 1,
+  "seed": 29
+}

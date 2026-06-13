@@ -214,34 +214,44 @@ function summarizeFieldExplanation(
       ? " Row owner matches the current principal."
       : " Row owner does not match the current principal."
     : "";
+  const principalAliasSummary = Object.values(decision.evaluationContext?.principalAliases ?? {})
+    .filter((context) => context.alias !== "row.owner")
+    .sort((left, right) => left.alias.localeCompare(right.alias))
+    .map((context) =>
+      context.matchesPrincipal
+        ? ` Principal alias ${context.alias} matches the current principal.`
+        : ` Principal alias ${context.alias} does not match the current principal.`
+    )
+    .join("");
+  const principalSummary = `${rowOwnerSummary}${principalAliasSummary}`;
 
   if (decision.readState === "hidden") {
-    return `Field is hidden for ${surfaceLabel(surface)}.${rowOwnerSummary}`;
+    return `Field is hidden for ${surfaceLabel(surface)}.${principalSummary}`;
   }
 
   if (decision.readState === "redacted") {
-    return `Field value is redacted for ${surfaceLabel(surface)}.${rowOwnerSummary}`;
+    return `Field value is redacted for ${surfaceLabel(surface)}.${principalSummary}`;
   }
 
   if (surface === "command-ingress") {
     return decision.writeAllowed
-      ? `Field can be written through commands.${rowOwnerSummary}`
-      : `Field is visible but cannot be written through commands.${rowOwnerSummary}`;
+      ? `Field can be written through commands.${principalSummary}`
+      : `Field is visible but cannot be written through commands.${principalSummary}`;
   }
 
   if (surface === "workflow-step") {
     return decision.writeAllowed
-      ? `Workflow steps can read and write this field in the current scope.${rowOwnerSummary}`
-      : `Workflow steps can read this field, but they cannot write it in the current scope.${rowOwnerSummary}`;
+      ? `Workflow steps can read and write this field in the current scope.${principalSummary}`
+      : `Workflow steps can read this field, but they cannot write it in the current scope.${principalSummary}`;
   }
 
   if (surface === "agent-tool") {
     return decision.writeAllowed
-      ? `Agent tools can read and write this field in the current scope.${rowOwnerSummary}`
-      : `Agent tools can read this field, but they cannot write it in the current scope.${rowOwnerSummary}`;
+      ? `Agent tools can read and write this field in the current scope.${principalSummary}`
+      : `Agent tools can read this field, but they cannot write it in the current scope.${principalSummary}`;
   }
 
-  return `Field is visible for ${surfaceLabel(surface)}.${rowOwnerSummary}`;
+  return `Field is visible for ${surfaceLabel(surface)}.${principalSummary}`;
 }
 
 export function createPermissionEngine(

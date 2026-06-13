@@ -177,6 +177,66 @@ describe("workflow authoring", () => {
     ]);
   });
 
+  it("emits canonical aliases from field metadata instead of a row-owner-only helper", () => {
+    const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+      {
+        config: {
+          workflowBindingAlias: "row.assignee"
+        },
+        fieldId: "fld_assignee",
+        fieldKey: "assignee",
+        fieldType: "principal.user"
+      }
+    ]);
+
+    expect(metadata.bindings["row.assignee"]).toMatchObject({
+      aliasOf: "row.fields.assignee",
+      binding: "row.assignee",
+      fieldId: "fld_assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      isCanonical: true
+    });
+    expect(metadata.bindings["row.assignee"].proposalHints).toContainEqual({
+      operatorId: "equals",
+      matchPhrases: ["equals", "assigned to"],
+      matchFieldPhrases: [
+        "{field} equals",
+        "{field} is assigned to",
+        "{field} assigned to"
+      ],
+      draftInput: {
+        left: {
+          path: "row.assignee.value"
+        },
+        right: null
+      }
+    });
+  });
+
+  it("rejects conflicting canonical aliases before authoring metadata can collapse them", () => {
+    expect(() =>
+      buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
+        {
+          config: {
+            workflowBindingAlias: "row.assignee"
+          },
+          fieldId: "fld_assignee_a",
+          fieldKey: "assignee_a",
+          fieldType: "principal.user"
+        },
+        {
+          config: {
+            workflowBindingAlias: "row.assignee"
+          },
+          fieldId: "fld_assignee_b",
+          fieldKey: "assignee_b",
+          fieldType: "principal.user"
+        }
+      ])
+    ).toThrow("canonical_workflow_binding_alias_conflict:row.assignee:fld_assignee_a:fld_assignee_b");
+  });
+
   it("drafts generic missing-field conditions from metadata-declared proposal hints", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
       {

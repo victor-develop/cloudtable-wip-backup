@@ -1,0 +1,15 @@
+{
+  "persistence": {
+    "fields": [
+      {
+        "config": {
+          "workflowBindingAlias": "row.assignee"
+        },
+        "fieldId": "fld_assignee_primary",
+        "fieldKey": "assignee_primary",
+        "fieldType": "principal.user",
+        "label": "Primary Assignee"
+      }
+    ]
+  }
+}

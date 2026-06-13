@@ -42,13 +42,13 @@ import type {
 } from "../core/agent-tools/types";
 import type { CommandEnvelope, CommandResult } from "../core/commands/types";
 import { serializeFieldTypeManifest } from "../core/field-types/manifest";
+import type { FieldTypeRegistry } from "../core/field-types/types";
 import type { JsonValue } from "../core/field-types/types";
 import type { EffectivePermissionSnapshot } from "../core/permissions/types";
 import type {
   PermissionEvaluationContext,
   PermissionProjectionInput
 } from "../core/permissions/types";
-import { findRowOwnerField } from "../core/ownership/row-owner";
 import { aggregateDescriptorForCommand } from "../core/commands/domain";
 import {
   dispatchCommandToCoordinator,
@@ -185,7 +185,7 @@ export async function handleFetch(
       }
     }
 
-    const history = await readWorkspaceActivityHistory(env.DB, {
+    const history = await readWorkspaceActivityHistory(env.DB, runtime.fieldTypeRegistry, {
       beforeWorkspaceSequence: beforeWorkspaceSequence.value,
       limit: limit.value,
       workspaceId
@@ -300,7 +300,7 @@ export async function handleFetch(
       }
     }
 
-    const history = await readAppActivityHistory(env.DB, {
+    const history = await readAppActivityHistory(env.DB, runtime.fieldTypeRegistry, {
       appId,
       beforeWorkspaceSequence: beforeWorkspaceSequence.value,
       limit: limit.value,
@@ -836,7 +836,7 @@ export async function handleFetch(
       }
     }
 
-    const history = await readRecordActivityHistory(env.DB, {
+    const history = await readRecordActivityHistory(env.DB, runtime.fieldTypeRegistry, {
       beforeTableSequence: beforeTableSequence.value,
       limit: limit.value,
       recordId,
@@ -931,7 +931,7 @@ export async function handleFetch(
       }
     }
 
-    const history = await readTableActivityHistory(env.DB, {
+    const history = await readTableActivityHistory(env.DB, runtime.fieldTypeRegistry, {
       beforeTableSequence: beforeTableSequence.value,
       limit: limit.value,
       tableId,
@@ -1218,7 +1218,8 @@ export async function handleScheduled(
   _ctx: ExecutionContext
 ): Promise<void> {
   await enqueueScheduledWorkflowDispatches(env, controller.scheduledTime);
-  const repository = createCloudTableD1Repository(env.DB);
+  const runtime = createRuntime(env);
+  const repository = createCloudTableD1Repository(env.DB, runtime.fieldTypeRegistry);
   await drainPendingOutboxEntries(
     env,
     repository,
@@ -2934,7 +2935,7 @@ async function handleAgentToolIngress(
               invocation.input,
               snapshot,
               permissionedRuntime.permissionEngine,
-              await resolvePermissionEvaluationContext(env.DB, {
+              await resolvePermissionEvaluationContext(env.DB, runtime.fieldTypeRegistry, {
                 principalId,
                 recordId: invocation.input.recordId,
                 tableId: invocation.input.tableId,
@@ -3074,7 +3075,7 @@ async function handlePermissionExplainIngress(
     },
     resolvedSnapshot.snapshot,
     runtime.permissionEngine,
-    await resolvePermissionEvaluationContext(env.DB, {
+    await resolvePermissionEvaluationContext(env.DB, runtime.fieldTypeRegistry, {
       principalId,
       recordId: recordId ?? undefined,
       tableId,
@@ -3236,7 +3237,7 @@ async function handlePermissionExplanationIngress(
     explainInvocation.input,
     snapshot,
     permissionedRuntime.permissionEngine,
-    await resolvePermissionEvaluationContext(env.DB, {
+    await resolvePermissionEvaluationContext(env.DB, runtime.fieldTypeRegistry, {
       principalId,
       recordId: explainInvocation.input.recordId,
       tableId: explainInvocation.input.tableId,
@@ -3613,6 +3614,7 @@ type PermissionContextFieldRow = {
 
 async function resolvePermissionEvaluationContext(
   db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
   input: {
     principalId: string;
     recordId?: string;
@@ -3623,8 +3625,9 @@ async function resolvePermissionEvaluationContext(
   if (!input.recordId || !input.tableId) {
     return undefined;
   }
+  const recordId = input.recordId;
 
-  const detail = await readRecordDetail(db, input.workspaceId, input.tableId, input.recordId);
+  const detail = await readRecordDetail(db, input.workspaceId, input.tableId, recordId);
   if (!detail?.projection) {
     return undefined;
   }
@@ -3637,36 +3640,56 @@ async function resolvePermissionEvaluationContext(
     )
     .bind(input.workspaceId, input.tableId)
     .all<PermissionContextFieldRow>();
-  const rowOwnerField = findRowOwnerField(
-    (fieldRows.results ?? []).map((field) => ({
-      config: JSON.parse(field.config_json) as JsonValue,
-      fieldId: field.id,
-      fieldKey: field.field_key,
-      fieldType: field.field_type
-    }))
-  );
-  if (!rowOwnerField) {
-    return undefined;
-  }
-
   const projection = JSON.parse(detail.projection.projection_json) as {
     fields?: Record<string, unknown>;
   };
-  const rawOwnerValue = projection.fields?.[rowOwnerField.fieldKey];
-  const principalIds = Array.isArray(rawOwnerValue)
-    ? rawOwnerValue.filter((value): value is string => typeof value === "string")
-    : typeof rawOwnerValue === "string"
-      ? [rawOwnerValue]
-      : [];
+  const principalAliases = Object.fromEntries(
+    (fieldRows.results ?? [])
+      .map((field) => ({
+        config: JSON.parse(field.config_json) as JsonValue,
+        fieldId: field.id,
+        fieldKey: field.field_key,
+        fieldType: field.field_type
+      }))
+      .filter((field) => field.fieldType === "principal.user")
+      .sort((left, right) => left.fieldId.localeCompare(right.fieldId))
+      .flatMap((field) => {
+        const aliases = fieldTypeRegistry
+          .require(field.fieldType)
+          .getWorkflowBindingAliases({
+            fieldConfig: field.config,
+            fieldType: field.fieldType
+          })
+          .filter((alias) => alias.isCanonical === true && alias.binding.startsWith("row."));
+        const rawPrincipalValue = projection.fields?.[field.fieldKey];
+        const principalIds = Array.isArray(rawPrincipalValue)
+          ? rawPrincipalValue.filter((value): value is string => typeof value === "string")
+          : typeof rawPrincipalValue === "string"
+            ? [rawPrincipalValue]
+            : [];
+
+        return aliases.map((alias) => [
+          alias.binding,
+          {
+            alias: alias.binding,
+            fieldId: field.fieldId,
+            fieldKey: field.fieldKey,
+            fieldType: field.fieldType,
+            matchesPrincipal: principalIds.includes(input.principalId),
+            principalIds,
+            recordId
+          }
+        ] as const);
+      })
+  );
+
+  if (Object.keys(principalAliases).length === 0) {
+    return undefined;
+  }
 
   return {
-    rowOwner: {
-      fieldId: rowOwnerField.fieldId,
-      fieldType: rowOwnerField.fieldType,
-      matchesPrincipal: principalIds.includes(input.principalId),
-      principalIds,
-      recordId: input.recordId
-    }
+    principalAliases,
+    rowOwner: principalAliases["row.owner"]
   };
 }
 

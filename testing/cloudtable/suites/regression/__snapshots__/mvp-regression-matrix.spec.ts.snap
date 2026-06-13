@@ -3266,8 +3266,45 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
             ]
           },
           {
-            "diagnostics": [],
+            "diagnostics": [
+              "workflow_condition_binding_missing:1:row.assignee"
+            ],
             "index": 1,
+            "operator": {
+              "fixtureContract": [
+                {
+                  "id": "is_not_empty.condition.sample",
+                  "kind": "condition"
+                }
+              ],
+              "id": "is_not_empty",
+              "idempotencyMode": "deterministic",
+              "inputSchema": {
+                "description": "Inputs for is_not_empty.",
+                "type": "object"
+              },
+              "kind": "condition",
+              "outputSchema": {
+                "description": "Boolean result for is_not_empty.",
+                "type": "boolean"
+              },
+              "purity": "pure",
+              "requiredCapabilities": [
+                "fields.read"
+              ],
+              "retryClass": "none",
+              "timeoutClass": "fast",
+              "version": 1
+            },
+            "operatorId": "is_not_empty",
+            "referencedBindingNames": [
+              "row.assignee"
+            ],
+            "resolvedBindings": []
+          },
+          {
+            "diagnostics": [],
+            "index": 2,
             "operator": {
               "fixtureContract": [
                 {
@@ -5738,7 +5775,7 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
       }
     },
     "category": "metadata_parity",
-    "scenario": "owner_metadata_parity_across_schema_workspace_workflow_and_views"
+    "scenario": "owner_and_alias_metadata_parity_across_schema_workspace_workflow_and_views"
   },
   {
     "actual": {
@@ -7075,7 +7112,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
             "definition": {
               "actions": [
                 {
-                  "input": {},
+                  "input": {
+                    "patch": {
+                      "title": "Bravo"
+                    },
+                    "recordId": "rec_001"
+                  },
                   "operatorId": "update_record"
                 }
               ],
@@ -7155,6 +7197,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
                   "outputSchema": {
                     "description": "Command result emitted through the normal command bus.",
                     "type": "object"
+                  },
+                  "proposalTemplate": {
+                    "patch": {
+                      "title": "Bravo"
+                    },
+                    "recordId": "rec_001"
                   },
                   "purity": "impure",
                   "requiredCapabilities": [
@@ -7236,6 +7284,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
               "outputSchema": {
                 "description": "Command result emitted through the normal command bus.",
                 "type": "object"
+              },
+              "proposalTemplate": {
+                "patch": {
+                  "title": "Bravo"
+                },
+                "recordId": "rec_001"
               },
               "purity": "impure",
               "requiredCapabilities": [

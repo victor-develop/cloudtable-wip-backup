@@ -6673,7 +6673,9 @@ describe("cloudtable runtime ingress", () => {
         explanation: {
           evaluationContext?: {
             rowOwner?: {
+              alias: string;
               fieldId: string;
+              fieldKey: string;
               fieldType: string;
               matchesPrincipal: boolean;
               principalIds: string[];
@@ -6729,8 +6731,21 @@ describe("cloudtable runtime ingress", () => {
     expect(body.output).toEqual({
       explanation: {
         evaluationContext: {
+          principalAliases: {
+            "row.owner": {
+              alias: "row.owner",
+              fieldId: "fld_owner",
+              fieldKey: "owner",
+              fieldType: "principal.user",
+              matchesPrincipal: false,
+              principalIds: ["usr_owner"],
+              recordId: "rec_permission_owner_context"
+            }
+          },
           rowOwner: {
+            alias: "row.owner",
             fieldId: "fld_owner",
+            fieldKey: "owner",
             fieldType: "principal.user",
             matchesPrincipal: false,
             principalIds: ["usr_owner"],
@@ -6749,8 +6764,21 @@ describe("cloudtable runtime ingress", () => {
           {
             allowed: false,
             evaluationContext: {
+              principalAliases: {
+                "row.owner": {
+                  alias: "row.owner",
+                  fieldId: "fld_owner",
+                  fieldKey: "owner",
+                  fieldType: "principal.user",
+                  matchesPrincipal: false,
+                  principalIds: ["usr_owner"],
+                  recordId: "rec_permission_owner_context"
+                }
+              },
               rowOwner: {
+                alias: "row.owner",
                 fieldId: "fld_owner",
+                fieldKey: "owner",
                 fieldType: "principal.user",
                 matchesPrincipal: false,
                 principalIds: ["usr_owner"],
@@ -6770,8 +6798,21 @@ describe("cloudtable runtime ingress", () => {
           {
             allowed: false,
             evaluationContext: {
+              principalAliases: {
+                "row.owner": {
+                  alias: "row.owner",
+                  fieldId: "fld_owner",
+                  fieldKey: "owner",
+                  fieldType: "principal.user",
+                  matchesPrincipal: false,
+                  principalIds: ["usr_owner"],
+                  recordId: "rec_permission_owner_context"
+                }
+              },
               rowOwner: {
+                alias: "row.owner",
                 fieldId: "fld_owner",
+                fieldKey: "owner",
                 fieldType: "principal.user",
                 matchesPrincipal: false,
                 principalIds: ["usr_owner"],
@@ -6928,6 +6969,137 @@ describe("cloudtable runtime ingress", () => {
     expect(directBody).toEqual({
       explanation: toolBody.output.explanation,
       permissionScope: toolBody.permissionScope
+    });
+  });
+
+  it("surfaces field-declared principal aliases through the direct permission explanation ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        workflowBindingAlias: "row.assignee"
+      },
+      fieldId: "fld_assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      label: "Assignee",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_secret_note",
+      fieldKey: "secret_note",
+      fieldType: "text.long",
+      label: "Secret Note",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        assignee: ["agt_reviewer"],
+        secret_note: "hidden note"
+      },
+      recordId: "rec_permission_assignee_match",
+      recordKey: "permission-assignee-match",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      fields: {
+        fld_secret_note: {
+          agent: false,
+          fieldId: "fld_secret_note",
+          fieldType: "text.long",
+          read: "hidden",
+          workflow: false,
+          write: false
+        }
+      },
+      policyRevision: 14,
+      principalId: "agt_reviewer",
+      schemaEpoch: 1,
+      scopeHash: "scope:table:tbl_1",
+      snapshotId: "snap_table_1",
+      workspaceId: "ws_1"
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/permissions/explain", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          fieldId: "fld_secret_note",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 14,
+          principalId: "agt_reviewer",
+          recordId: "rec_permission_assignee_match",
+          surfaces: ["command-ingress"],
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as Record<string, unknown>).toEqual({
+      explanation: {
+        evaluationContext: {
+          principalAliases: {
+            "row.assignee": {
+              alias: "row.assignee",
+              fieldId: "fld_assignee",
+              fieldKey: "assignee",
+              fieldType: "principal.user",
+              matchesPrincipal: true,
+              principalIds: ["agt_reviewer"],
+              recordId: "rec_permission_assignee_match"
+            }
+          }
+        },
+        fieldId: "fld_secret_note",
+        fieldType: "text.long",
+        scope: {
+          recordId: "rec_permission_assignee_match",
+          tableId: "tbl_1",
+          viewId: null,
+          workspaceId: "ws_1"
+        },
+        surfaces: [
+          {
+            allowed: false,
+            evaluationContext: {
+              principalAliases: {
+                "row.assignee": {
+                  alias: "row.assignee",
+                  fieldId: "fld_assignee",
+                  fieldKey: "assignee",
+                  fieldType: "principal.user",
+                  matchesPrincipal: true,
+                  principalIds: ["agt_reviewer"],
+                  recordId: "rec_permission_assignee_match"
+                }
+              }
+            },
+            message:
+              "Field is hidden for command writes. Principal alias row.assignee matches the current principal.",
+            readState: "hidden",
+            reasonMessages: [
+              "Field is hidden for command writes.",
+              "Field is read-only for this principal."
+            ],
+            reasons: ["field_hidden:fld_secret_note", "field_read_only:fld_secret_note"],
+            surface: "command-ingress",
+            writeAllowed: false
+          }
+        ]
+      },
+      permissionScope: {
+        policyRevision: 14,
+        principalId: "agt_reviewer",
+        scopeHash: "scope:table:tbl_1",
+        workspaceId: "ws_1"
+      }
     });
   });
 
@@ -9298,7 +9470,7 @@ describe("cloudtable runtime ingress", () => {
     ]);
   });
 
-  it("surfaces canonical row owner workflow metadata through schema and workspace inspection reads", async () => {
+  it("surfaces field-declared canonical workflow aliases through schema and workspace inspection reads", async () => {
     const { db, env } = createEnv();
 
     insertField(db, {
@@ -9312,6 +9484,9 @@ describe("cloudtable runtime ingress", () => {
       tableId: "tbl_1"
     });
     insertField(db, {
+      config: {
+        workflowBindingAlias: "row.assignee"
+      },
       fieldId: "fld_assignee",
       fieldKey: "assignee",
       fieldType: "principal.user",
@@ -9564,6 +9739,69 @@ describe("cloudtable runtime ingress", () => {
         valuePath: "row.fields.owner.value"
       }
     };
+    const expectedAssigneeAlias = {
+      aliasOf: "row.fields.assignee",
+      binding: "row.assignee",
+      fieldId: "fld_assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      isCanonical: true,
+      proposalHints: [
+        {
+          operatorId: "not_equals",
+          matchPhrases: ["does not equal", "not equals", "not assigned to"],
+          matchFieldPhrases: [
+            "{field} does not equal",
+            "{field} not equals",
+            "{field} is not",
+            "{field} is not assigned to",
+            "{field} not assigned to"
+          ],
+          draftInput: {
+            left: {
+              path: "row.assignee.value"
+            },
+            right: null
+          }
+        },
+        {
+          operatorId: "equals",
+          matchPhrases: ["equals", "assigned to"],
+          matchFieldPhrases: [
+            "{field} equals",
+            "{field} is assigned to",
+            "{field} assigned to"
+          ],
+          draftInput: {
+            left: {
+              path: "row.assignee.value"
+            },
+            right: null
+          }
+        },
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["unassigned"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["assigned"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: supportedConditionOperatorManifests([
+        "equals",
+        "not_equals",
+        "is_empty",
+        "is_not_empty"
+      ]),
+      template: {
+        fieldIdPath: "row.assignee.fieldId",
+        fieldTypePath: "row.assignee.fieldType",
+        valuePath: "row.assignee.value"
+      }
+    };
     const expectedAssigneeFieldBinding = {
       binding: "row.fields.assignee",
       fieldId: "fld_assignee",
@@ -9795,6 +10033,7 @@ describe("cloudtable runtime ingress", () => {
     };
 
     expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwner);
+    expect(schemaBody.workflow.bindings["row.assignee"]).toEqual(expectedAssigneeAlias);
     expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
     expect(schemaBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedAssigneeFieldBinding);
     expect(schemaBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
@@ -9833,6 +10072,7 @@ describe("cloudtable runtime ingress", () => {
     );
     expect(schemaAgentBody.output.schema.view).toEqual(schemaBody.view);
     expect(workflowBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwner);
+    expect(workflowBody.workflow.bindings["row.assignee"]).toEqual(expectedAssigneeAlias);
     expect(workflowBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
     expect(workflowBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedAssigneeFieldBinding);
     expect(workflowBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
@@ -9843,6 +10083,11 @@ describe("cloudtable runtime ingress", () => {
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings["row.owner"]
     ).toEqual(expectedRowOwner);
+    expect(
+      workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
+        "row.assignee"
+      ]
+    ).toEqual(expectedAssigneeAlias);
     expect(
       workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1")?.workflow.bindings[
         "row.fields.owner"
@@ -9956,6 +10201,92 @@ describe("cloudtable runtime ingress", () => {
                 },
                 value: {
                   path: "row.owner.value"
+                }
+              },
+              operatorId: "is_not_empty"
+            }
+          ]
+        }
+      }
+    });
+  });
+
+  it("drafts field-declared canonical alias workflow proposal conditions through the agent-tool preview ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      config: {
+        workflowBindingAlias: "row.assignee"
+      },
+      fieldId: "fld_assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      label: "Assignee",
+      tableId: "tbl_1"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_assignee_workflow_proposal",
+      workspaceId: "ws_1",
+      principalId: "agt_assignee_workflow",
+      policyRevision: 460,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create"],
+      fields: {
+        fld_assignee: {
+          agent: true,
+          fieldId: "fld_assignee",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "Notify sales ops when the assignee is assigned.",
+            fieldIds: ["fld_assignee"],
+            name: "Assignee assigned follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_assignee_assigned"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 460,
+          principalId: "agt_assignee_workflow",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()) as { output: { kind: string; proposal: { conditions: unknown[] } } }).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.assignee.fieldId"
+                },
+                fieldType: {
+                  path: "row.assignee.fieldType"
+                },
+                value: {
+                  path: "row.assignee.value"
                 }
               },
               operatorId: "is_not_empty"

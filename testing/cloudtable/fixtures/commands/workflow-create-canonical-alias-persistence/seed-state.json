@@ -1,0 +1,16 @@
+{
+  "persistence": {
+    "appId": "app_demo",
+    "fields": [
+      {
+        "config": {
+          "workflowBindingAlias": "row.assignee"
+        },
+        "fieldId": "fld_assignee",
+        "fieldKey": "assignee",
+        "fieldType": "principal.user",
+        "label": "Assignee"
+      }
+    ]
+  }
+}

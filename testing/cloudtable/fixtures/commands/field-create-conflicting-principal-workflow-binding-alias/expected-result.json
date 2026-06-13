@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "canonical_workflow_binding_alias_conflict:row.assignee:fld_assignee_primary:fld_assignee_secondary"
+  ],
+  "status": "rejected"
+}

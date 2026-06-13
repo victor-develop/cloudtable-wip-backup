@@ -61,7 +61,7 @@ export type WorkflowRowContext = {
   owner?: WorkflowFieldValue;
   recordId: string;
   fields: Record<string, WorkflowFieldValue>;
-};
+} & Record<string, unknown>;
 
 export type WorkflowTableContext = {
   tableId: string;

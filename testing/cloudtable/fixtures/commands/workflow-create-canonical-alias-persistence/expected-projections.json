@@ -1,0 +1,14 @@
+{
+  "acceptedCommandIds": [
+    "cmd_workflow_create_canonical_alias_persistence_001"
+  ],
+  "lastLogicalTime": "2026-06-06T00:00:00.000Z",
+  "receiptCount": 1,
+  "receipts": [
+    {
+      "idempotencyKey": "idem_workflow_create_canonical_alias_persistence_001",
+      "payloadHash": "{\n  \"actor\": {\n    \"mode\": \"user\",\n    \"principalId\": \"usr_builder\"\n  },\n  \"commandType\": \"workflow.create\",\n  \"payload\": {\n    \"definition\": {\n      \"actions\": [\n        {\n          \"input\": {},\n          \"operatorId\": \"set_cell\"\n        }\n      ],\n      \"conditions\": [\n        {\n          \"input\": {\n            \"fieldId\": {\n              \"path\": \"row.assignee.fieldId\"\n            },\n            \"fieldType\": {\n              \"path\": \"row.assignee.fieldType\"\n            },\n            \"left\": {\n              \"path\": \"row.assignee.value\"\n            },\n            \"right\": [\n              \"usr_assignee\"\n            ]\n          },\n          \"operatorId\": \"equals\"\n        }\n      ],\n      \"metadata\": {\n        \"status\": \"draft\",\n        \"tableId\": \"tbl_accounts\"\n      },\n      \"principal\": {\n        \"policyRevision\": 7,\n        \"principalId\": \"wf_service\",\n        \"schemaEpoch\": 1,\n        \"scopeHash\": \"scope:wf:accounts\"\n      },\n      \"trigger\": {\n        \"match\": {\n          \"tableId\": \"tbl_accounts\"\n        },\n        \"operatorId\": \"record_updated\"\n      },\n      \"workflowId\": \"wf_assignee_assignment_guard_persistence\"\n    },\n    \"name\": \"Assignee assignment guard\",\n    \"tableId\": \"tbl_accounts\",\n    \"workflowId\": \"wf_assignee_assignment_guard_persistence\",\n    \"workflowKey\": \"assignee-assignment-guard-persistence\"\n  },\n  \"scope\": \"workflow\",\n  \"tableId\": \"tbl_accounts\",\n  \"workspaceId\": \"ws_demo\"\n}",
+      "status": "accepted"
+    }
+  ]
+}

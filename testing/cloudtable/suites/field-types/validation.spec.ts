@@ -67,6 +67,16 @@ describe("cloudtable field-type validation", () => {
     });
 
     expect(
+      registry.require("principal.user").validateConfig(
+        { workflowBindingAlias: "row.owner" },
+        { fieldType: "principal.user" }
+      )
+    ).toEqual({
+      valid: false,
+      errors: ["workflowBindingAlias row.owner requires rowOwner to be true."]
+    });
+
+    expect(
       registry.require("relation.record").validateConfig(
         { allowMultiple: "yes" },
         { fieldType: "relation.record" }

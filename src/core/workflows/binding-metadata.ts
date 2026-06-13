@@ -1,6 +1,7 @@
 import type { FieldTypeRegistry, JsonValue } from "../field-types/types";
 import {
-  listCanonicalWorkflowBindingAliases
+  findCanonicalWorkflowBindingAliasConflicts,
+  formatCanonicalWorkflowBindingAliasConflictDiagnostic
 } from "../ownership/row-owner";
 import { serializeWorkflowOperatorManifest } from "./manifest";
 import { createWorkflowOperatorRegistry } from "./operator-registry";
@@ -25,6 +26,13 @@ type WorkflowBindingMetadataSource = {
   field: WorkflowBindingMetadataField;
   isCanonical?: boolean;
   workflowOperatorRegistry: WorkflowOperatorRegistry;
+};
+
+type WorkflowBindingAliasSource = {
+  aliasOf: string;
+  binding: string;
+  field: WorkflowBindingMetadataField;
+  isCanonical?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -93,14 +101,39 @@ function buildBindingMetadata({
   };
 }
 
+function listWorkflowBindingAliases(
+  fieldTypeRegistry: FieldTypeRegistry,
+  fields: readonly WorkflowBindingMetadataField[]
+): readonly WorkflowBindingAliasSource[] {
+  return fields.flatMap((field) => {
+    const definition = fieldTypeRegistry.require(field.fieldType);
+    const aliasOf = `row.fields.${field.fieldKey}`;
+
+    return definition.getWorkflowBindingAliases({
+      fieldConfig: field.config,
+      fieldType: field.fieldType
+    }).map((alias) => ({
+      aliasOf,
+      binding: alias.binding,
+      field,
+      isCanonical: alias.isCanonical
+    }));
+  });
+}
+
 export function buildWorkflowAuthoringMetadata(
   fieldTypeRegistry: FieldTypeRegistry,
   fields: readonly WorkflowBindingMetadataField[],
   workflowOperatorRegistry: WorkflowOperatorRegistry = createWorkflowOperatorRegistry()
 ): WorkflowAuthoringMetadata {
+  const aliasConflicts = findCanonicalWorkflowBindingAliasConflicts(fields);
+  if (aliasConflicts.length > 0) {
+    throw new Error(formatCanonicalWorkflowBindingAliasConflictDiagnostic(aliasConflicts[0]!));
+  }
+
   const bindings: Record<string, WorkflowConditionBindingMetadata> = {};
 
-  for (const alias of listCanonicalWorkflowBindingAliases(fields)) {
+  for (const alias of listWorkflowBindingAliases(fieldTypeRegistry, fields)) {
     bindings[alias.binding] = buildBindingMetadata({
       aliasOf: alias.aliasOf,
       binding: alias.binding,

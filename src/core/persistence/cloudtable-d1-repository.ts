@@ -6,6 +6,8 @@ import type {
   NormalizedCellValue
 } from "../field-types/types";
 import {
+  findCanonicalWorkflowBindingAliasConflicts,
+  formatCanonicalWorkflowBindingAliasConflictDiagnostic,
   findRowOwnerField,
   isRowOwnerEnabled
 } from "../ownership/row-owner";
@@ -455,6 +457,39 @@ function assertRowOwnerFieldConfiguration(
   );
   if (conflictingField) {
     throw new CommandCommitError(`row_owner_field_conflict:${conflictingField.id}`);
+  }
+}
+
+function assertCanonicalWorkflowBindingAliasConfiguration(
+  fields: readonly FieldRow[],
+  input: {
+    candidateFieldId: string;
+    config: JsonValue;
+    fieldKey: string;
+    fieldType: string;
+  }
+): void {
+  const conflicts = findCanonicalWorkflowBindingAliasConflicts([
+    ...fields
+      .filter((field) => field.id !== input.candidateFieldId)
+      .map((field) => ({
+        config: parseFieldConfig(field.config_json),
+        fieldId: field.id,
+        fieldKey: field.field_key,
+        fieldType: field.field_type
+      })),
+    {
+      config: input.config,
+      fieldId: input.candidateFieldId,
+      fieldKey: input.fieldKey,
+      fieldType: input.fieldType
+    }
+  ]).filter((conflict) => conflict.fields.some((field) => field.fieldId === input.candidateFieldId));
+
+  if (conflicts.length > 0) {
+    throw new CommandCommitError(
+      formatCanonicalWorkflowBindingAliasConflictDiagnostic(conflicts[0]!)
+    );
   }
 }
 
@@ -1796,6 +1831,12 @@ async function appendDomainStatements(
         config,
         fieldType
       });
+      assertCanonicalWorkflowBindingAliasConfiguration(existingFields, {
+        candidateFieldId: fieldId,
+        config,
+        fieldKey,
+        fieldType
+      });
       await assertRowOwnerActivationInvariant(db, command.workspaceId, table.id, {
         activatingExistingField: false,
         fieldId,
@@ -1878,6 +1919,12 @@ async function appendDomainStatements(
       assertRowOwnerFieldConfiguration(existingFields, {
         candidateFieldId: field.id,
         config: nextConfig,
+        fieldType: field.field_type
+      });
+      assertCanonicalWorkflowBindingAliasConfiguration(existingFields, {
+        candidateFieldId: field.id,
+        config: nextConfig,
+        fieldKey: field.field_key,
         fieldType: field.field_type
       });
       await assertRowOwnerActivationInvariant(db, command.workspaceId, table.id, {

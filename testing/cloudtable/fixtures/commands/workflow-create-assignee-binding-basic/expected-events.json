@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "wf_assignee_assignment_guard",
+    "aggregateType": "workflow",
+    "commandId": "cmd_workflow_create_assignee_binding_001",
+    "commandType": "workflow.create",
+    "eventId": "evt_0001",
+    "eventType": "workflow.created",
+    "tableId": "tbl_accounts",
+    "workspaceId": "ws_demo"
+  }
+]

@@ -1,0 +1,21 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_field_conflicting_principal_workflow_binding_alias_001",
+  "commandType": "field.create",
+  "idempotencyKey": "idem_field_conflicting_principal_workflow_binding_alias_001",
+  "payload": {
+    "config": {
+      "workflowBindingAlias": "row.assignee"
+    },
+    "fieldId": "fld_assignee_secondary",
+    "fieldKey": "assignee_secondary",
+    "fieldType": "principal.user",
+    "label": "Secondary Assignee"
+  },
+  "scope": "workspace",
+  "tableId": "tbl_tasks",
+  "workspaceId": "ws_demo"
+}

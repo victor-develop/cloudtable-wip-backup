@@ -605,7 +605,7 @@ describe("cloudtable runtime smoke", () => {
     expect(readBody.record.record_revision).toBe(1);
   });
 
-  it("proves generic workflow field-binding metadata through the smoke runtime path", async () => {
+  it("proves field-declared canonical workflow aliases through the smoke runtime path", async () => {
     const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
 
     const ownerFieldAccess = {
@@ -703,6 +703,9 @@ describe("cloudtable runtime smoke", () => {
             commandId: "cmd_field_assignee_smoke",
             idempotencyKey: "idem_field_assignee_smoke",
             payload: {
+              config: {
+                workflowBindingAlias: "row.assignee"
+              },
               fieldId: "fld_assignee",
               fieldKey: "assignee",
               fieldType: "principal.user",
@@ -907,6 +910,64 @@ describe("cloudtable runtime smoke", () => {
         valuePath: "row.fields.owner.value"
       }
     };
+    const expectedAssigneeAliasBinding = {
+      aliasOf: "row.fields.assignee",
+      binding: "row.assignee",
+      fieldId: "fld_assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      isCanonical: true,
+      proposalHints: [
+        {
+          operatorId: "not_equals",
+          matchPhrases: ["does not equal", "not equals", "not assigned to"],
+          matchFieldPhrases: [
+            "{field} does not equal",
+            "{field} not equals",
+            "{field} is not",
+            "{field} is not assigned to",
+            "{field} not assigned to"
+          ],
+          draftInput: {
+            left: {
+              path: "row.assignee.value"
+            },
+            right: null
+          }
+        },
+        {
+          operatorId: "equals",
+          matchPhrases: ["equals", "assigned to"],
+          matchFieldPhrases: [
+            "{field} equals",
+            "{field} is assigned to",
+            "{field} assigned to"
+          ],
+          draftInput: {
+            left: {
+              path: "row.assignee.value"
+            },
+            right: null
+          }
+        },
+        {
+          operatorId: "is_empty",
+          matchPhrases: ["unassigned"],
+          matchFieldPhrases: ["without {field}", "{field} missing"]
+        },
+        {
+          operatorId: "is_not_empty",
+          matchPhrases: ["assigned"]
+        }
+      ],
+      supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+      supportedOperators: expectedOwnerOperators,
+      template: {
+        fieldIdPath: "row.assignee.fieldId",
+        fieldTypePath: "row.assignee.fieldType",
+        valuePath: "row.assignee.value"
+      }
+    };
     const expectedAssigneeFieldBinding = {
       binding: "row.fields.assignee",
       fieldId: "fld_assignee",
@@ -1018,6 +1079,7 @@ describe("cloudtable runtime smoke", () => {
       }
     };
     expect(schemaBody.workflow.bindings["row.owner"]).toEqual(expectedRowOwnerBinding);
+    expect(schemaBody.workflow.bindings["row.assignee"]).toEqual(expectedAssigneeAliasBinding);
     expect(schemaBody.workflow.bindings["row.fields.owner"]).toEqual(expectedOwnerFieldBinding);
     expect(schemaBody.workflow.bindings["row.fields.assignee"]).toEqual(expectedAssigneeFieldBinding);
     expect(schemaBody.workflow.bindings["row.fields.status"]).toEqual(expectedStatusFieldBinding);
@@ -1101,6 +1163,28 @@ describe("cloudtable runtime smoke", () => {
     );
     expect(setStatus.status).toBe(200);
 
+    const setAssignee = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_owner_smoke/cells/fld_assignee", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_assignee_smoke_seed",
+            idempotencyKey: "idem_assignee_smoke_seed",
+            payload: {
+              fieldType: "principal.user",
+              value: "usr_assignee"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(setAssignee.status).toBe(200);
+
     const createWorkflow = await handleFetch(
       new Request("https://example.test/v1/tables/tbl_1/workflows", {
         method: "POST",
@@ -1118,14 +1202,14 @@ describe("cloudtable runtime smoke", () => {
                     input: {
                       channel: "activity",
                       details: {
+                        assigneeId: {
+                          path: "row.assignee.value"
+                        },
                         recordId: {
                           path: "row.recordId"
-                        },
-                        status: {
-                          path: "row.fields.status.value"
                         }
                       },
-                      message: "Status workflow step completed."
+                      message: "Assignee workflow step completed."
                     },
                     operatorId: "emit_notification_event"
                   }
@@ -1134,9 +1218,9 @@ describe("cloudtable runtime smoke", () => {
                   {
                     input: {
                       left: {
-                        path: "row.fields.status.value"
+                        path: "row.assignee.value"
                       },
-                      right: "open"
+                      right: ["usr_assignee"]
                     },
                     operatorId: "equals"
                   }
@@ -1172,6 +1256,22 @@ describe("cloudtable runtime smoke", () => {
       result: {
         accepted: true,
         diagnostics: []
+      }
+    });
+
+    const workflowDefinition = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_owner_smoke/definition?workspaceId=ws_1&principalId=usr_owner&permissionScopeHash=scope:table:tbl_1&policyRevision=44"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(workflowDefinition.status).toBe(200);
+    expect((await workflowDefinition.json()) as { workflow: { bindings: Record<string, unknown> } }).toMatchObject({
+      workflow: {
+        bindings: {
+          "row.assignee": expectedAssigneeAliasBinding
+        }
       }
     });
 
@@ -1257,10 +1357,10 @@ describe("cloudtable runtime smoke", () => {
     expect(JSON.parse(notificationCommand?.payload_json ?? "{}")).toMatchObject({
       channel: "activity",
       details: {
-        recordId: "rec_owner_smoke",
-        status: "open"
+        assigneeId: ["usr_assignee"],
+        recordId: "rec_owner_smoke"
       },
-      message: "Status workflow step completed."
+      message: "Assignee workflow step completed."
     });
   });
 
@@ -1390,6 +1490,144 @@ describe("cloudtable runtime smoke", () => {
                     },
                     value: {
                       path: "row.owner.value"
+                    }
+                  },
+                  operatorId: "is_not_empty"
+                }
+              ]
+            }
+          }
+        }
+      }
+    });
+  });
+
+  it("proves field-declared canonical alias agent-tool preview through the smoke runtime path", async () => {
+    const { db, env } = createEnv();
+
+    insertPermissionSnapshot(db, {
+      commandTypes: ["field.create", "workflow.create"],
+      fields: {
+        fld_assignee: {
+          agent: true,
+          fieldId: "fld_assignee",
+          fieldType: "principal.user",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      policyRevision: 46,
+      principalId: "usr_owner",
+      scopeHash: "scope:table:tbl_1"
+    });
+
+    const createAssigneeField = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/fields", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_field_assignee_preview_smoke",
+            idempotencyKey: "idem_field_assignee_preview_smoke",
+            payload: {
+              config: {
+                workflowBindingAlias: "row.assignee"
+              },
+              fieldId: "fld_assignee",
+              fieldKey: "assignee",
+              fieldType: "principal.user",
+              label: "Assignee"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(createAssigneeField.status).toBe(200);
+
+    const previewResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["update_record"],
+            businessRule: "Notify sales ops when the assignee is assigned.",
+            fieldIds: ["fld_assignee"],
+            name: "Assignee assigned follow-up",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_assignee_assigned_smoke"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 46,
+          principalId: "usr_owner",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(previewResponse.status).toBe(200);
+    expect(
+      (await previewResponse.json()) as {
+        output: {
+          command: {
+            payload: {
+              definition: {
+                conditions: unknown[];
+              };
+            };
+          };
+          kind: string;
+          proposal: {
+            conditions: unknown[];
+          };
+        };
+      }
+    ).toMatchObject({
+      output: {
+        kind: "workflow-proposal",
+        proposal: {
+          conditions: [
+            {
+              input: {
+                fieldId: {
+                  path: "row.assignee.fieldId"
+                },
+                fieldType: {
+                  path: "row.assignee.fieldType"
+                },
+                value: {
+                  path: "row.assignee.value"
+                }
+              },
+              operatorId: "is_not_empty"
+            }
+          ]
+        },
+        command: {
+          payload: {
+            definition: {
+              conditions: [
+                {
+                  input: {
+                    fieldId: {
+                      path: "row.assignee.fieldId"
+                    },
+                    fieldType: {
+                      path: "row.assignee.fieldType"
+                    },
+                    value: {
+                      path: "row.assignee.value"
                     }
                   },
                   operatorId: "is_not_empty"

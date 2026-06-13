@@ -1,0 +1,62 @@
+{
+  "actor": {
+    "mode": "user",
+    "principalId": "usr_builder"
+  },
+  "commandId": "cmd_workflow_create_assignee_binding_001",
+  "commandType": "workflow.create",
+  "idempotencyKey": "idem_workflow_create_assignee_binding_001",
+  "payload": {
+    "definition": {
+      "actions": [
+        {
+          "input": {},
+          "operatorId": "set_cell"
+        }
+      ],
+      "conditions": [
+        {
+          "input": {
+            "fieldId": {
+              "path": "row.assignee.fieldId"
+            },
+            "fieldType": {
+              "path": "row.assignee.fieldType"
+            },
+            "left": {
+              "path": "row.assignee.value"
+            },
+            "right": [
+              "usr_assignee"
+            ]
+          },
+          "operatorId": "equals"
+        }
+      ],
+      "metadata": {
+        "status": "draft",
+        "tableId": "tbl_accounts"
+      },
+      "principal": {
+        "policyRevision": 7,
+        "principalId": "wf_service",
+        "schemaEpoch": 1,
+        "scopeHash": "scope:wf:accounts"
+      },
+      "trigger": {
+        "match": {
+          "tableId": "tbl_accounts"
+        },
+        "operatorId": "record_updated"
+      },
+      "workflowId": "wf_assignee_assignment_guard"
+    },
+    "name": "Assignee assignment guard",
+    "tableId": "tbl_accounts",
+    "workflowId": "wf_assignee_assignment_guard",
+    "workflowKey": "assignee-assignment-guard"
+  },
+  "scope": "workflow",
+  "tableId": "tbl_accounts",
+  "workspaceId": "ws_demo"
+}

@@ -2058,6 +2058,9 @@ describe("cloudtable MVP regression matrix", () => {
         workspaceId: "ws_demo"
       });
       insertField(db, {
+        config: {
+          workflowBindingAlias: "row.assignee"
+        },
         fieldId: "fld_assignee",
         fieldKey: "assignee",
         fieldType: "principal.user",
@@ -3044,6 +3047,20 @@ describe("cloudtable MVP regression matrix", () => {
             }
           },
           {
+            operatorId: "is_not_empty",
+            input: {
+              fieldId: {
+                path: "row.assignee.fieldId"
+              },
+              fieldType: {
+                path: "row.assignee.fieldType"
+              },
+              value: {
+                path: "row.assignee.value"
+              }
+            }
+          },
+          {
             operatorId: "equals",
             input: {
               fieldId: {
@@ -3301,7 +3318,7 @@ describe("cloudtable MVP regression matrix", () => {
             workspaceBody.output.workspace.tables.find((table) => table.tableId === "tbl_1") ?? null
         },
         category: "metadata_parity",
-        scenario: "owner_metadata_parity_across_schema_workspace_workflow_and_views"
+        scenario: "owner_and_alias_metadata_parity_across_schema_workspace_workflow_and_views"
       });
     }
 
@@ -3487,50 +3504,83 @@ describe("cloudtable MVP regression matrix", () => {
         workspaceSequence: 5
       });
 
-      const tableFirst = await readTableActivityHistory(db as unknown as D1Database, {
-        limit: 2,
-        tableId: "tbl_1",
-        workspaceId: "ws_1"
-      });
-      const tableSecond = await readTableActivityHistory(db as unknown as D1Database, {
-        beforeTableSequence: tableFirst.nextBeforeTableSequence,
-        limit: 2,
-        tableId: "tbl_1",
-        workspaceId: "ws_1"
-      });
-      const recordFirst = await readRecordActivityHistory(db as unknown as D1Database, {
-        limit: 1,
-        recordId: "rec_1",
-        tableId: "tbl_1",
-        workspaceId: "ws_1"
-      });
-      const recordSecond = await readRecordActivityHistory(db as unknown as D1Database, {
-        beforeTableSequence: recordFirst.nextBeforeTableSequence,
-        limit: 2,
-        recordId: "rec_1",
-        tableId: "tbl_1",
-        workspaceId: "ws_1"
-      });
-      const workspaceFirst = await readWorkspaceActivityHistory(db as unknown as D1Database, {
-        limit: 2,
-        workspaceId: "ws_1"
-      });
-      const workspaceSecond = await readWorkspaceActivityHistory(db as unknown as D1Database, {
-        beforeWorkspaceSequence: workspaceFirst.nextBeforeWorkspaceSequence,
-        limit: 2,
-        workspaceId: "ws_1"
-      });
-      const appFirst = await readAppActivityHistory(db as unknown as D1Database, {
-        appId: "app_1",
-        limit: 2,
-        workspaceId: "ws_1"
-      });
-      const appSecond = await readAppActivityHistory(db as unknown as D1Database, {
-        appId: "app_1",
-        beforeWorkspaceSequence: appFirst.nextBeforeWorkspaceSequence,
-        limit: 2,
-        workspaceId: "ws_1"
-      });
+      const fieldTypeRegistry = createFieldTypeRegistry();
+      const tableFirst = await readTableActivityHistory(
+        db as unknown as D1Database,
+        fieldTypeRegistry,
+        {
+          limit: 2,
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        }
+      );
+      const tableSecond = await readTableActivityHistory(
+        db as unknown as D1Database,
+        fieldTypeRegistry,
+        {
+          beforeTableSequence: tableFirst.nextBeforeTableSequence,
+          limit: 2,
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        }
+      );
+      const recordFirst = await readRecordActivityHistory(
+        db as unknown as D1Database,
+        fieldTypeRegistry,
+        {
+          limit: 1,
+          recordId: "rec_1",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        }
+      );
+      const recordSecond = await readRecordActivityHistory(
+        db as unknown as D1Database,
+        fieldTypeRegistry,
+        {
+          beforeTableSequence: recordFirst.nextBeforeTableSequence,
+          limit: 2,
+          recordId: "rec_1",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        }
+      );
+      const workspaceFirst = await readWorkspaceActivityHistory(
+        db as unknown as D1Database,
+        fieldTypeRegistry,
+        {
+          limit: 2,
+          workspaceId: "ws_1"
+        }
+      );
+      const workspaceSecond = await readWorkspaceActivityHistory(
+        db as unknown as D1Database,
+        fieldTypeRegistry,
+        {
+          beforeWorkspaceSequence: workspaceFirst.nextBeforeWorkspaceSequence,
+          limit: 2,
+          workspaceId: "ws_1"
+        }
+      );
+      const appFirst = await readAppActivityHistory(
+        db as unknown as D1Database,
+        fieldTypeRegistry,
+        {
+          appId: "app_1",
+          limit: 2,
+          workspaceId: "ws_1"
+        }
+      );
+      const appSecond = await readAppActivityHistory(
+        db as unknown as D1Database,
+        fieldTypeRegistry,
+        {
+          appId: "app_1",
+          beforeWorkspaceSequence: appFirst.nextBeforeWorkspaceSequence,
+          limit: 2,
+          workspaceId: "ws_1"
+        }
+      );
 
       matrix.push({
         actual: {

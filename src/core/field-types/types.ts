@@ -123,6 +123,11 @@ export type FieldWorkflowProposalHint = {
   matchFieldPhrases?: readonly string[];
 };
 
+export type FieldWorkflowBindingAlias = {
+  binding: string;
+  isCanonical?: boolean;
+};
+
 export type WorkflowProposalHintContext = {
   aliasOf?: string;
   binding: string;
@@ -130,6 +135,11 @@ export type WorkflowProposalHintContext = {
   fieldType: string;
   fieldConfig?: JsonValue;
   isCanonical?: boolean;
+};
+
+export type WorkflowBindingAliasContext = {
+  fieldType: string;
+  fieldConfig?: JsonValue;
 };
 
 export type SortContext = {
@@ -210,6 +220,7 @@ export type FieldTypeDefinition = {
   toIndex(value: NormalizedCellValue | null, context: IndexContext): FieldIndexValue;
   toSearchText(value: NormalizedCellValue | null, context: SearchContext): string;
   getSupportedConditionOperators(context: OperatorContext): readonly string[];
+  getWorkflowBindingAliases(context: WorkflowBindingAliasContext): readonly FieldWorkflowBindingAlias[];
   getWorkflowProposalHints(context: WorkflowProposalHintContext): readonly FieldWorkflowProposalHint[];
   getSupportedSortModes(context: SortContext): readonly string[];
   getPermissionBehavior(context: PermissionContext): FieldPermissionBehavior;

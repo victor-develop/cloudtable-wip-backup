@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:principal.user:workflowBindingAlias row.owner requires rowOwner to be true."
+  ],
+  "status": "rejected"
+}

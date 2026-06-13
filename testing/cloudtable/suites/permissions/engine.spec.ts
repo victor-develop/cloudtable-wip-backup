@@ -68,7 +68,9 @@ const snapshot: EffectivePermissionSnapshot = {
 
 const ownerMatchContext: PermissionEvaluationContext = {
   rowOwner: {
+    alias: "row.owner",
     fieldId: "owner",
+    fieldKey: "owner",
     fieldType: "principal.user",
     matchesPrincipal: true,
     principalIds: ["usr_alice"],
@@ -78,11 +80,27 @@ const ownerMatchContext: PermissionEvaluationContext = {
 
 const ownerMismatchContext: PermissionEvaluationContext = {
   rowOwner: {
+    alias: "row.owner",
     fieldId: "owner",
+    fieldKey: "owner",
     fieldType: "principal.user",
     matchesPrincipal: false,
     principalIds: ["usr_bob"],
     recordId: "rec_not_owned"
+  }
+};
+
+const assigneeMatchContext: PermissionEvaluationContext = {
+  principalAliases: {
+    "row.assignee": {
+      alias: "row.assignee",
+      fieldId: "assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      matchesPrincipal: true,
+      principalIds: ["usr_alice"],
+      recordId: "rec_assigned"
+    }
   }
 };
 
@@ -398,6 +416,34 @@ describe("cloudtable permission engine", () => {
     );
     expect(ownerMatchDecision.allowed).toBe(true);
     expect(ownerMismatchDecision.allowed).toBe(true);
+  });
+
+  it("includes field-declared principal aliases in explanation summaries", () => {
+    const permissionEngine = createPermissionEngine(registry, {
+      snapshot
+    });
+
+    const explanation = permissionEngine.explainFieldAccess(
+      {
+        fieldId: "title",
+        fieldType: "text.single_line"
+      },
+      ["command-ingress"],
+      undefined,
+      assigneeMatchContext
+    );
+
+    expect(explanation.evaluationContext?.principalAliases?.["row.assignee"]).toEqual(
+      assigneeMatchContext.principalAliases?.["row.assignee"]
+    );
+    expect(explanation.surfaces).toEqual([
+      expect.objectContaining({
+        evaluationContext: assigneeMatchContext,
+        message:
+          "Field can be written through commands. Principal alias row.assignee matches the current principal.",
+        surface: "command-ingress"
+      })
+    ]);
   });
 
   it("filters agent tools against visible writable fields", () => {

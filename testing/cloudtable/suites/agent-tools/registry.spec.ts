@@ -2653,6 +2653,157 @@ describe("cloudtable agent tool registry", () => {
     });
   });
 
+  it("drafts field-declared canonical alias conditions for workflow proposals from binding metadata", async () => {
+    const registry = createRegistry({
+      tableSchemaInspectionResult: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: {
+              workflowBindingAlias: "row.assignee"
+            },
+            fieldId: "fld_assignee",
+            fieldKey: "assignee",
+            fieldType: "principal.user",
+            fieldTypeVersion: 1,
+            label: "Assignee"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_accounts",
+        tableName: "Accounts",
+        tableSchemaVersion: 2,
+        tableSlug: "accounts",
+        workflow: {
+          bindings: {
+            "row.assignee": {
+              aliasOf: "row.fields.assignee",
+              binding: "row.assignee",
+              fieldId: "fld_assignee",
+              fieldKey: "assignee",
+              fieldType: "principal.user",
+              isCanonical: true,
+              proposalHints: [
+                {
+                  operatorId: "not_equals",
+                  matchPhrases: ["does not equal", "not equals", "not assigned to"],
+                  matchFieldPhrases: [
+                    "{field} does not equal",
+                    "{field} not equals",
+                    "{field} is not",
+                    "{field} is not assigned to",
+                    "{field} not assigned to"
+                  ],
+                  draftInput: {
+                    left: {
+                      path: "row.assignee.value"
+                    },
+                    right: null
+                  }
+                },
+                {
+                  operatorId: "equals",
+                  matchPhrases: ["equals", "assigned to"],
+                  matchFieldPhrases: [
+                    "{field} equals",
+                    "{field} is assigned to",
+                    "{field} assigned to"
+                  ],
+                  draftInput: {
+                    left: {
+                      path: "row.assignee.value"
+                    },
+                    right: null
+                  }
+                },
+                {
+                  operatorId: "is_empty",
+                  matchPhrases: ["unassigned"],
+                  matchFieldPhrases: ["without {field}", "{field} missing"]
+                },
+                {
+                  operatorId: "is_not_empty",
+                  matchPhrases: ["assigned"]
+                }
+              ],
+              supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
+              supportedOperators: supportedConditionOperatorManifests([
+                "equals",
+                "not_equals",
+                "is_empty",
+                "is_not_empty"
+              ]),
+              template: {
+                fieldIdPath: "row.assignee.fieldId",
+                fieldTypePath: "row.assignee.fieldType",
+                valuePath: "row.assignee.value"
+              }
+            }
+          }
+        },
+        workspaceId: "ws_demo"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["update_record"],
+        businessRule: "Notify sales ops when the assignee is assigned.",
+        fieldIds: ["fld_assignee"],
+        name: "Assignee assigned follow-up",
+        tableId: "tbl_accounts",
+        triggerId: "field_changed",
+        workflowId: "wf_assignee_assigned"
+      }
+    });
+
+    expect(result).toMatchObject({
+      kind: "workflow-proposal",
+      proposal: {
+        conditions: [
+          {
+            input: {
+              fieldId: {
+                path: "row.assignee.fieldId"
+              },
+              fieldType: {
+                path: "row.assignee.fieldType"
+              },
+              value: {
+                path: "row.assignee.value"
+              }
+            },
+            operatorId: "is_not_empty"
+          }
+        ]
+      },
+      command: {
+        payload: {
+          definition: {
+            conditions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.assignee.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.assignee.fieldType"
+                  },
+                  value: {
+                    path: "row.assignee.value"
+                  }
+                },
+                operatorId: "is_not_empty"
+              }
+            ]
+          }
+        }
+      }
+    });
+  });
+
   it("drafts generic field presence conditions for workflow proposals from binding metadata", async () => {
     const registry = createRegistry({
       tableSchemaInspectionResult: {

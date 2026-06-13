@@ -85,7 +85,7 @@ export class TableCoordinatorDurableObject {
       ...command,
       scope: "table"
     });
-    const repository = createCloudTableD1Repository(this.env.DB);
+    const repository = createCloudTableD1Repository(this.env.DB, runtime.fieldTypeRegistry);
 
     const eventId = result.events[0]?.eventId;
     const published =

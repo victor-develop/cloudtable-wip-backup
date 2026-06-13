@@ -1,0 +1,12 @@
+[
+  {
+    "aggregateId": "wf_assignee_assignment_guard_persistence",
+    "aggregateType": "workflow",
+    "commandId": "cmd_workflow_create_canonical_alias_persistence_001",
+    "commandType": "workflow.create",
+    "eventId": "evt_0001",
+    "eventType": "workflow.created",
+    "tableId": "tbl_accounts",
+    "workspaceId": "ws_demo"
+  }
+]

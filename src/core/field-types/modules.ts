@@ -1,5 +1,6 @@
 import type {
   CellValidationContext,
+  FieldWorkflowBindingAlias,
   FieldWorkflowProposalHint,
   FieldSchemaContext,
   FieldIndexValue,
@@ -13,6 +14,7 @@ import type {
   NormalizeResult,
   ValidationResult
 } from "./types";
+import { listPrincipalUserCanonicalBindings } from "../ownership/row-owner";
 
 const baseCapabilities: FieldTypeCapabilities = {
   scalar: true,
@@ -105,6 +107,9 @@ type ModuleFixtureInput = {
           isCanonical?: boolean;
         }
       ) => readonly FieldWorkflowProposalHint[]);
+  workflowBindingAliases?:
+    | readonly FieldWorkflowBindingAlias[]
+    | ((context: { fieldConfig?: JsonValue; fieldType: string }) => readonly FieldWorkflowBindingAlias[]);
 };
 
 type SelectOption = {
@@ -245,6 +250,14 @@ function defineFieldType(input: ModuleFixtureInput): FieldTypeDefinition {
     },
     getSupportedConditionOperators() {
       return supportedConditionOperators;
+    },
+    getWorkflowBindingAliases(context) {
+      const aliases =
+        typeof input.workflowBindingAliases === "function"
+          ? input.workflowBindingAliases(context)
+          : input.workflowBindingAliases ?? [];
+
+      return aliases.map((alias) => ({ ...alias }));
     },
     getWorkflowProposalHints(context) {
       const hints =
@@ -1269,6 +1282,9 @@ function createSelectFieldType(input: {
     getSupportedConditionOperators() {
       return supportedConditionOperators;
     },
+    getWorkflowBindingAliases() {
+      return [];
+    },
     getWorkflowProposalHints(context) {
       const parsedConfig = parseSelectConfig(context.fieldConfig);
       const configuredOptionHints =
@@ -1775,7 +1791,8 @@ function validateDateValue(
 function validatePrincipalConfig(config: unknown): ValidationResult {
   const { config: parsedConfig, errors } = validateObjectConfig(config, [
     "allowedRoleIds",
-    "rowOwner"
+    "rowOwner",
+    "workflowBindingAlias"
   ]);
   if (!parsedConfig) {
     return {
@@ -1789,6 +1806,20 @@ function validatePrincipalConfig(config: unknown): ValidationResult {
   }
   if (parsedConfig.rowOwner !== undefined && typeof parsedConfig.rowOwner !== "boolean") {
     errors.push("rowOwner must be a boolean.");
+  }
+  if (parsedConfig.workflowBindingAlias !== undefined) {
+    if (typeof parsedConfig.workflowBindingAlias !== "string") {
+      errors.push("workflowBindingAlias must be a string.");
+    } else {
+      const alias = parsedConfig.workflowBindingAlias.trim();
+      if (alias.length === 0) {
+        errors.push("workflowBindingAlias must be a non-empty string.");
+      } else if (!/^row\.[a-z][a-z0-9_]*$/.test(alias)) {
+        errors.push("workflowBindingAlias must use the form row.<name>.");
+      } else if (alias === "row.owner" && parsedConfig.rowOwner !== true) {
+        errors.push("workflowBindingAlias row.owner requires rowOwner to be true.");
+      }
+    }
   }
 
   return {
@@ -2317,6 +2348,10 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
         rowOwner: {
           type: "boolean",
           description: "Marks this principal field as the table's canonical row-owner binding."
+        },
+        workflowBindingAlias: {
+          type: "string",
+          description: "Optional canonical workflow binding alias exposed as row.<name>."
         }
       }
     },
@@ -2332,7 +2367,8 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
     normalize: (input) => normalizeReferenceValue("principal.user", input),
     normalizeSample: (input) => normalizeReferenceValue("principal.user", input),
     validateConfig: (config) => validatePrincipalConfig(config),
-    workflowProposalHints: ({ bindingKind, isCanonical }) =>
+    workflowBindingAliases: ({ fieldConfig }) => listPrincipalUserCanonicalBindings(fieldConfig ?? null),
+    workflowProposalHints: ({ binding, bindingKind, isCanonical }) =>
       bindingKind === "alias" && isCanonical === true
         ? [
             {
@@ -2347,7 +2383,7 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
               ],
               draftInput: {
                 left: {
-                  path: "row.owner.value"
+                  path: `${binding}.value`
                 },
                 right: null
               }
@@ -2362,7 +2398,7 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
               ],
               draftInput: {
                 left: {
-                  path: "row.owner.value"
+                  path: `${binding}.value`
                 },
                 right: null
               }
@@ -2406,6 +2442,21 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
         idSuffix: "row_owner_non_boolean",
         config: { rowOwner: "yes" },
         expectedErrors: ["rowOwner must be a boolean."]
+      },
+      {
+        idSuffix: "workflow_binding_alias_non_string",
+        config: { workflowBindingAlias: true },
+        expectedErrors: ["workflowBindingAlias must be a string."]
+      },
+      {
+        idSuffix: "workflow_binding_alias_invalid_shape",
+        config: { workflowBindingAlias: "fields.owner" },
+        expectedErrors: ["workflowBindingAlias must use the form row.<name>."]
+      },
+      {
+        idSuffix: "workflow_binding_alias_row_owner_requires_row_owner",
+        config: { workflowBindingAlias: "row.owner" },
+        expectedErrors: ["workflowBindingAlias row.owner requires rowOwner to be true."]
       }
     ],
     invalidValueFixtures: [

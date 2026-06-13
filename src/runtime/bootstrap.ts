@@ -103,7 +103,12 @@ function createRecordInspector(
   };
 }
 
-function createActivityHistoryReader(env: CloudTableEnv) {
+function createActivityHistoryReader(
+  env: CloudTableEnv,
+  runtime: {
+    fieldTypeRegistry: ReturnType<typeof createFieldTypeRegistry>;
+  }
+) {
   return {
     async read(input: {
       appId?: string;
@@ -116,7 +121,7 @@ function createActivityHistoryReader(env: CloudTableEnv) {
     }) {
       const limit = input.limit ?? 25;
       if (input.appId) {
-        const history = await readAppActivityHistory(env.DB, {
+        const history = await readAppActivityHistory(env.DB, runtime.fieldTypeRegistry, {
           appId: input.appId,
           beforeWorkspaceSequence: input.beforeWorkspaceSequence ?? null,
           limit,
@@ -135,7 +140,7 @@ function createActivityHistoryReader(env: CloudTableEnv) {
       }
 
       if (!input.tableId) {
-        const history = await readWorkspaceActivityHistory(env.DB, {
+        const history = await readWorkspaceActivityHistory(env.DB, runtime.fieldTypeRegistry, {
           beforeWorkspaceSequence: input.beforeWorkspaceSequence ?? null,
           limit,
           workspaceId: input.workspaceId
@@ -165,7 +170,7 @@ function createActivityHistoryReader(env: CloudTableEnv) {
           };
         }
 
-        const history = await readRecordActivityHistory(env.DB, {
+        const history = await readRecordActivityHistory(env.DB, runtime.fieldTypeRegistry, {
           beforeTableSequence: input.beforeTableSequence ?? null,
           limit,
           recordId: input.recordId,
@@ -187,7 +192,7 @@ function createActivityHistoryReader(env: CloudTableEnv) {
         };
       }
 
-      const history = await readTableActivityHistory(env.DB, {
+      const history = await readTableActivityHistory(env.DB, runtime.fieldTypeRegistry, {
         beforeTableSequence: input.beforeTableSequence ?? null,
         limit,
         tableId: input.tableId,
@@ -703,7 +708,9 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
     },
     undefined
   );
-  const activityHistoryReader = createActivityHistoryReader(env);
+  const activityHistoryReader = createActivityHistoryReader(env, {
+    fieldTypeRegistry
+  });
   const viewQueryReader = {
     read(input: { tableId: string; viewId: string; workspaceId: string }) {
       return readViewQuery(
@@ -866,7 +873,9 @@ export function createRuntimeWithSnapshot(
     },
     snapshot
   );
-  const activityHistoryReader = createActivityHistoryReader(env);
+  const activityHistoryReader = createActivityHistoryReader(env, {
+    fieldTypeRegistry
+  });
   const viewQueryReader = {
     read(input: { tableId: string; viewId: string; workspaceId: string }) {
       return readViewQuery(

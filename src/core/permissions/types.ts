@@ -41,8 +41,10 @@ export type EffectivePermissionSnapshot = {
   fields: Record<string, PermissionFieldAccess>;
 };
 
-export type PermissionRowOwnerContext = {
+export type PermissionPrincipalMatchContext = {
+  alias: string;
   fieldId: string;
+  fieldKey: string;
   fieldType: string;
   matchesPrincipal: boolean;
   principalIds: string[];
@@ -50,7 +52,8 @@ export type PermissionRowOwnerContext = {
 };
 
 export type PermissionEvaluationContext = {
-  rowOwner?: PermissionRowOwnerContext;
+  principalAliases?: Record<string, PermissionPrincipalMatchContext>;
+  rowOwner?: PermissionPrincipalMatchContext;
 };
 
 export type FieldAccessDecision = {

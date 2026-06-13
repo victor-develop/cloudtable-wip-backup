@@ -2682,6 +2682,132 @@ describe("workflow queue consumer", () => {
     });
   });
 
+  it("delivers field-declared canonical aliases through published workflow action delivery", async () => {
+    const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
+
+    insertField(db, {
+      config: {
+        workflowBindingAlias: "row.assignee"
+      },
+      fieldId: "fld_assignee",
+      fieldKey: "assignee",
+      fieldType: "principal.user",
+      label: "Assignee",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db);
+    insertCellCurrent(db, {
+      fieldId: "fld_assignee",
+      fieldType: "principal.user",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "usr_assignee"
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["notification.emit"]
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "emit_notification_event",
+          input: {
+            channel: "activity",
+            details: {
+              assigneeId: {
+                path: "row.assignee.value"
+              },
+              recordId: {
+                path: "row.recordId"
+              }
+            },
+            message: "Assignee workflow step completed."
+          }
+        }
+      ],
+      conditions: [
+        {
+          operatorId: "equals",
+          input: {
+            left: {
+              path: "row.assignee.value"
+            },
+            right: "usr_assignee"
+          }
+        }
+      ]
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/records/rec_1/cells/fld_source", {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(
+          createRouteBody({
+            commandId: "cmd_trigger_assignee_delivery_1",
+            idempotencyKey: "idem_trigger_assignee_delivery_1",
+            payload: {
+              fieldType: "text.single_line",
+              value: "crm"
+            }
+          })
+        )
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(response.status).toBe(200);
+
+    await handleQueueBatch(createBatch([eventFanoutQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowDispatchQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+    await handleQueueBatch(createBatch([workflowStepQueue.sent[0]!]).batch as never, env, {} as ExecutionContext);
+
+    const workflowRun = await db
+      .prepare(`SELECT id, status FROM workflow_runs ORDER BY id ASC LIMIT 1`)
+      .bind()
+      .first<{ id: string; status: string }>();
+    expect(workflowRun?.status).toBe("completed");
+
+    const workflowStep = await db
+      .prepare(
+        `SELECT status, last_error_code
+         FROM workflow_run_steps
+         ORDER BY id ASC
+         LIMIT 1`
+      )
+      .bind()
+      .first<{ last_error_code: string | null; status: string }>();
+    expect(workflowStep).toEqual({
+      last_error_code: null,
+      status: "completed"
+    });
+
+    const notificationCommand = await db
+      .prepare(
+        `SELECT payload_json
+         FROM event_ledger
+         WHERE command_id = ?`
+      )
+      .bind(`${workflowRun?.id}:action:0`)
+      .first<{ payload_json: string }>();
+    expect(JSON.parse(notificationCommand?.payload_json ?? "{}")).toMatchObject({
+      channel: "activity",
+      details: {
+        assigneeId: "usr_assignee",
+        recordId: "rec_1"
+      },
+      message: "Assignee workflow step completed."
+    });
+  });
+
   it("keeps canonical row.owner condition misses on the generic conditions-failed runtime path", async () => {
     const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createEnv();
 

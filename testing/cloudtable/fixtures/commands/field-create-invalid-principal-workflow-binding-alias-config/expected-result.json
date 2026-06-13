@@ -1,0 +1,7 @@
+{
+  "accepted": false,
+  "diagnostics": [
+    "invalid_field_config:principal.user:workflowBindingAlias must use the form row.<name>."
+  ],
+  "status": "rejected"
+}

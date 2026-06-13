@@ -1,8 +1,7 @@
 import type { EventLedgerRecord } from "../core/events/types";
 import { cloneCommandResult } from "../core/commands/transcript";
-import type { JsonValue } from "../core/field-types/types";
+import type { FieldTypeRegistry, JsonValue } from "../core/field-types/types";
 import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
-import { findRowOwnerField } from "../core/ownership/row-owner";
 import {
   executeWorkflowDefinition,
   matchWorkflowTrigger,
@@ -618,8 +617,14 @@ async function processScheduledWorkflowDispatchMessage(
     return;
   }
 
-  const scope = await buildExecutionScope(env.DB, definition.workflowId, workflowRunId, event);
   const runtime = createRuntime(env);
+  const scope = await buildExecutionScope(
+    env.DB,
+    runtime.fieldTypeRegistry,
+    definition.workflowId,
+    workflowRunId,
+    event
+  );
   const trigger = runtime.workflowOperatorRegistry.require(definition.trigger.operatorId);
   if (trigger.kind !== "trigger" || !matchWorkflowTrigger(trigger, definition.trigger, scope)) {
     return;
@@ -1029,6 +1034,7 @@ async function persistWorkflowDeadLetter(
 
 async function loadRecordContext(
   db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
   workspaceId: string,
   tableId: string,
   recordId: string
@@ -1071,35 +1077,46 @@ async function loadRecordContext(
     .bind(workspaceId, tableId, recordId)
     .all<FieldCellRow>();
 
-  const fields = Object.fromEntries(
-    (cells.results ?? []).map((cell) => {
-      const parsed = JSON.parse(cell.value_json) as { raw?: unknown } | null;
-      const value: WorkflowFieldValue = {
-        fieldId: cell.field_id,
-        fieldType: cell.field_type,
-        value: parsed?.raw
-      };
-      return [cell.field_key, value];
-    })
-  );
-  const rowOwnerField = findRowOwnerField(
-    (cells.results ?? []).map((cell) => ({
-      config: JSON.parse(cell.config_json) as JsonValue,
+  const fields: Record<string, WorkflowFieldValue> = {};
+  const canonicalBindings: Record<string, WorkflowFieldValue> = {};
+
+  for (const cell of cells.results ?? []) {
+    const parsed = JSON.parse(cell.value_json) as { raw?: unknown } | null;
+    const fieldConfig = JSON.parse(cell.config_json) as JsonValue;
+    const value: WorkflowFieldValue = {
       fieldId: cell.field_id,
-      fieldKey: cell.field_key,
+      fieldType: cell.field_type,
+      value: parsed?.raw
+    };
+    fields[cell.field_key] = value;
+
+    const definition = fieldTypeRegistry.get(cell.field_type);
+    if (!definition) {
+      continue;
+    }
+
+    for (const alias of definition.getWorkflowBindingAliases({
+      fieldConfig,
       fieldType: cell.field_type
-    }))
-  );
+    })) {
+      if (alias.isCanonical !== true || !alias.binding.startsWith("row.")) {
+        continue;
+      }
+
+      canonicalBindings[alias.binding.slice("row.".length)] = value;
+    }
+  }
 
   return {
     fields,
-    ...(rowOwnerField ? { owner: fields[rowOwnerField.fieldKey] } : {}),
+    ...canonicalBindings,
     recordId: record.record_id
   };
 }
 
 async function buildExecutionScope(
   db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
   workflowId: string,
   workflowRunId: string,
   event: EventLedgerRecord
@@ -1113,7 +1130,7 @@ async function buildExecutionScope(
     typeof event.payload.fieldType === "string" ? event.payload.fieldType : undefined;
   const row =
     tableId && recordId
-      ? await loadRecordContext(db, event.workspaceId, tableId, recordId)
+      ? await loadRecordContext(db, fieldTypeRegistry, event.workspaceId, tableId, recordId)
       : undefined;
   const cell =
     tableId && recordId && fieldId
@@ -1192,6 +1209,7 @@ export async function fanOutWorkflowRunsForEvent(
         : workflowRunIdForEvent(definition.workflowId, event.eventId);
     const scope = await buildExecutionScope(
       env.DB,
+      runtime.fieldTypeRegistry,
       definition.workflowId,
       workflowRunId,
       event
@@ -1319,6 +1337,7 @@ export async function executeWorkflowDispatchStep(
 
   const scope = await buildExecutionScope(
     env.DB,
+    runtime.fieldTypeRegistry,
     workflow.workflowId,
     workflowRunId,
     triggerEvent

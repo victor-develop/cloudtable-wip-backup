@@ -1,0 +1,27 @@
+{
+  "workflowAuthoringMetadata": {
+    "bindings": {
+      "row.assignee": {
+        "aliasOf": "row.fields.assignee",
+        "binding": "row.assignee",
+        "fieldId": "fld_assignee",
+        "fieldKey": "assignee",
+        "fieldType": "principal.user",
+        "isCanonical": true,
+        "proposalHints": [],
+        "supportedOperatorIds": [
+          "equals",
+          "not_equals",
+          "is_empty",
+          "is_not_empty"
+        ],
+        "supportedOperators": [],
+        "template": {
+          "fieldIdPath": "row.assignee.fieldId",
+          "fieldTypePath": "row.assignee.fieldType",
+          "valuePath": "row.assignee.value"
+        }
+      }
+    }
+  }
+}

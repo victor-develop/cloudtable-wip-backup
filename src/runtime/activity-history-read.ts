@@ -1,4 +1,5 @@
 import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
+import type { FieldTypeRegistry } from "../core/field-types/types";
 import type { ActivityHistoryEntry } from "../core/persistence/types";
 
 export type ActivityHistoryItem = {
@@ -95,6 +96,7 @@ function mapActivityEntry(entry: ActivityHistoryEntry): ActivityHistoryItem {
 
 export async function readTableActivityHistory(
   db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
   input: {
     beforeTableSequence?: number | null;
     limit: number;
@@ -102,7 +104,7 @@ export async function readTableActivityHistory(
     workspaceId: string;
   }
 ): Promise<ActivityHistoryPage> {
-  const repository = createCloudTableD1Repository(db);
+  const repository = createCloudTableD1Repository(db, fieldTypeRegistry);
   const entries = await repository.listTableActivity(input);
 
   return {
@@ -114,13 +116,14 @@ export async function readTableActivityHistory(
 
 export async function readWorkspaceActivityHistory(
   db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
   input: {
     beforeWorkspaceSequence?: number | null;
     limit: number;
     workspaceId: string;
   }
 ): Promise<WorkspaceActivityHistoryPage> {
-  const repository = createCloudTableD1Repository(db);
+  const repository = createCloudTableD1Repository(db, fieldTypeRegistry);
   const entries = await repository.listWorkspaceActivity(input);
 
   return {
@@ -132,6 +135,7 @@ export async function readWorkspaceActivityHistory(
 
 export async function readAppActivityHistory(
   db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
   input: {
     appId: string;
     beforeWorkspaceSequence?: number | null;
@@ -139,7 +143,7 @@ export async function readAppActivityHistory(
     workspaceId: string;
   }
 ): Promise<WorkspaceActivityHistoryPage> {
-  const repository = createCloudTableD1Repository(db);
+  const repository = createCloudTableD1Repository(db, fieldTypeRegistry);
   const entries = await repository.listAppActivity(input);
 
   return {
@@ -151,6 +155,7 @@ export async function readAppActivityHistory(
 
 export async function readRecordActivityHistory(
   db: D1Database,
+  fieldTypeRegistry: FieldTypeRegistry,
   input: {
     beforeTableSequence?: number | null;
     limit: number;
@@ -159,7 +164,7 @@ export async function readRecordActivityHistory(
     workspaceId: string;
   }
 ): Promise<ActivityHistoryPage> {
-  const repository = createCloudTableD1Repository(db);
+  const repository = createCloudTableD1Repository(db, fieldTypeRegistry);
   const entries = await repository.listRecordActivity(input);
 
   return {
