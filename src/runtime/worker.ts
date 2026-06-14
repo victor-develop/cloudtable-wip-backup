@@ -17,6 +17,7 @@ import type {
   ExplainPermissionsToolInput,
   ExecuteCommandToolInput,
   InspectAppToolInput,
+  PreviewWorkflowTestToolInput,
   InspectWorkflowDefinitionToolInput,
   InspectTableSchemaToolInput,
   InspectViewDefinitionToolInput,
@@ -81,7 +82,12 @@ import { createRuntime, createRuntimeWithSnapshot } from "./bootstrap";
 import type { CloudTableRuntime } from "./bootstrap";
 import { badRequest, conflict, forbidden, json, methodNotAllowed, notFound, unauthorized } from "./http";
 import type { CloudTableEnv } from "./env";
-import { enqueueScheduledWorkflowDispatches, requestManualAggregateMaintenance } from "./workflow-runtime";
+import {
+  enqueueScheduledWorkflowDispatches,
+  previewWorkflowTestRun,
+  requestManualAggregateMaintenance,
+  requestManualSyncMaintenance
+} from "./workflow-runtime";
 import {
   readWorkflowDefinitionMetadata,
   readWorkflowExecutionCandidate,
@@ -914,6 +920,111 @@ export async function handleFetch(
     );
   }
 
+  const workflowSyncMaintenanceMatch = url.pathname.match(
+    /^\/v1\/workflows\/([^/]+)\/sync-maintenance$/
+  );
+  if (workflowSyncMaintenanceMatch) {
+    if (request.method !== "POST") {
+      return methodNotAllowed(request.method, ["POST"]);
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      return badRequest("Workflow sync-maintenance body must be valid JSON.");
+    }
+
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
+      principalId: readNonEmptyString(body.principalId),
+      workflowId: workflowSyncMaintenanceMatch[1] ?? null,
+      workspaceId: readNonEmptyString(body.workspaceId),
+      permissionScopeHash: readNonEmptyString(body.permissionScopeHash),
+      policyRevisionValue:
+        typeof body.policyRevision === "number" ? String(body.policyRevision) : null
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    const kind = readNonEmptyString(body.kind);
+    if (kind !== "backfill" && kind !== "recompute") {
+      return badRequest("kind must be either backfill or recompute.");
+    }
+
+    const syncAliasesValue = body.syncAliases;
+    if (syncAliasesValue !== undefined && !Array.isArray(syncAliasesValue)) {
+      return badRequest("syncAliases must be an array of strings when provided.");
+    }
+    const syncAliases = Array.isArray(syncAliasesValue)
+      ? Array.from(
+          new Set(
+            syncAliasesValue.filter(
+              (entry): entry is string => typeof entry === "string" && entry.length > 0
+            )
+          )
+        )
+      : undefined;
+    if (Array.isArray(syncAliasesValue) && syncAliases?.length !== syncAliasesValue.length) {
+      return badRequest("syncAliases entries must all be non-empty strings.");
+    }
+
+    const changedFieldIdsValue = body.changedFieldIds;
+    if (changedFieldIdsValue !== undefined && !Array.isArray(changedFieldIdsValue)) {
+      return badRequest("changedFieldIds must be an array of strings when provided.");
+    }
+    const changedFieldIds = Array.isArray(changedFieldIdsValue)
+      ? Array.from(
+          new Set(
+            changedFieldIdsValue.filter(
+              (entry): entry is string => typeof entry === "string" && entry.length > 0
+            )
+          )
+        )
+      : undefined;
+    if (Array.isArray(changedFieldIdsValue) && changedFieldIds?.length !== changedFieldIdsValue.length) {
+      return badRequest("changedFieldIds entries must all be non-empty strings.");
+    }
+
+    const requestId =
+      readNonEmptyString(body.requestId) ??
+      readNonEmptyString(body.idempotencyKey) ??
+      `workflow-sync-maintenance:${workflowSyncMaintenanceMatch[1]!}:${kind}`;
+    const result = await requestManualSyncMaintenance(env, {
+      changedFieldIds,
+      kind,
+      principalId: auth.principalId,
+      reason: readNonEmptyString(body.reason) ?? undefined,
+      recordId: readNonEmptyString(body.recordId),
+      requestId,
+      syncAliases,
+      workflowId: workflowSyncMaintenanceMatch[1]!,
+      workspaceId: auth.workspaceId
+    });
+
+    if (!result.ok) {
+      if (result.reason === "workflow_not_found") {
+        return notFound(result.message);
+      }
+      if (result.reason === "already_requested") {
+        return conflict(result.message);
+      }
+      return badRequest(result.message);
+    }
+
+    return json(
+      {
+        kind,
+        requestId,
+        status: result.status,
+        syncAliases: result.syncAliases,
+        workflowId: workflowSyncMaintenanceMatch[1]!,
+        workflowVersionId: result.workflowVersionId
+      },
+      { status: 202 }
+    );
+  }
+
   const workflowRunHistoryMatch = url.pathname.match(/^\/v1\/workflow-runs\/([^/]+)$/);
   if (workflowRunHistoryMatch) {
     if (request.method !== "GET") {
@@ -938,6 +1049,49 @@ export async function handleFetch(
     }
 
     return json(history);
+  }
+
+  const workflowTestPreviewMatch = url.pathname.match(/^\/v1\/workflows\/([^/]+)\/test-preview$/);
+  if (workflowTestPreviewMatch) {
+    if (request.method !== "POST") {
+      return methodNotAllowed(request.method, ["POST"]);
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      return badRequest("Workflow test-preview body must be valid JSON.");
+    }
+
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
+      principalId: readNonEmptyString(body.principalId),
+      workflowId: workflowTestPreviewMatch[1] ?? null,
+      workspaceId: readNonEmptyString(body.workspaceId),
+      permissionScopeHash: readNonEmptyString(body.permissionScopeHash),
+      policyRevisionValue:
+        typeof body.policyRevision === "number" ? String(body.policyRevision) : null
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    const preview = await previewWorkflowTestRun(env, {
+      recordId: readRequiredAgentToolString(body.recordId, "recordId"),
+      selectedFieldId: readOptionalAgentToolString(body.selectedFieldId) ?? undefined,
+      workflowId: auth.workflowId,
+      workspaceId: auth.workspaceId
+    });
+
+    if (preview.status === "rejected") {
+      if (preview.reason === "workflow_not_found" || preview.reason === "record_not_found") {
+        return json(preview, { status: 404 });
+      }
+
+      return json(preview, { status: 400 });
+    }
+
+    return json(preview);
   }
 
   const workflowDeadLetterReplayMatch = url.pathname.match(
@@ -3395,6 +3549,16 @@ function buildAgentToolInvocation(
         } as InspectWorkflowDefinitionToolInput,
         toolId
       };
+    case "previewWorkflowTest":
+      return {
+        input: {
+          recordId: readRequiredAgentToolString(input.recordId, "recordId"),
+          selectedFieldId: readOptionalAgentToolString(input.selectedFieldId) ?? undefined,
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId"),
+          workspaceId: context.workspaceId
+        } as PreviewWorkflowTestToolInput,
+        toolId
+      };
     case "readAppActivityHistory":
       return {
         input: {
@@ -3593,8 +3757,35 @@ function buildAgentToolInvocation(
     case "proposeWorkflow":
       return {
         input: {
-          ...input,
-          ...commandContext
+          ...commandContext,
+          actionIds: readRequiredAgentToolStringArray(input.actionIds, "actionIds"),
+          businessRule: readRequiredAgentToolString(input.businessRule, "businessRule"),
+          fieldIds: Array.isArray(input.fieldIds)
+            ? readRequiredAgentToolStringArray(input.fieldIds, "fieldIds")
+            : undefined,
+          name: readRequiredAgentToolString(input.name, "name"),
+          relatedSourceFieldId:
+            typeof input.relatedSourceFieldId === "string"
+              ? readRequiredAgentToolString(input.relatedSourceFieldId, "relatedSourceFieldId")
+              : undefined,
+          relatedTargetFieldId:
+            typeof input.relatedTargetFieldId === "string"
+              ? readRequiredAgentToolString(input.relatedTargetFieldId, "relatedTargetFieldId")
+              : undefined,
+          rollupFieldIds: Array.isArray(input.rollupFieldIds)
+            ? readRequiredAgentToolStringArray(input.rollupFieldIds, "rollupFieldIds")
+            : undefined,
+          syncSourceFieldId:
+            typeof input.syncSourceFieldId === "string"
+              ? readRequiredAgentToolString(input.syncSourceFieldId, "syncSourceFieldId")
+              : undefined,
+          syncTargetFieldId:
+            typeof input.syncTargetFieldId === "string"
+              ? readRequiredAgentToolString(input.syncTargetFieldId, "syncTargetFieldId")
+              : undefined,
+          tableId: readRequiredAgentToolString(input.tableId, "tableId"),
+          triggerId: readRequiredAgentToolString(input.triggerId, "triggerId"),
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
         } as ProposeWorkflowToolInput,
         toolId
       };
@@ -3700,6 +3891,7 @@ async function handleAgentToolIngress(
   const runtime = createRuntime(env);
   const workflowOperationsTool =
     toolId === "inspectWorkflowDefinition" ||
+    toolId === "previewWorkflowTest" ||
     toolId === "readWorkflowHistory" ||
     toolId === "readWorkflowRunDetail" ||
     toolId === "prepareWorkflowDeadLetterReplay" ||
@@ -3715,7 +3907,9 @@ async function handleAgentToolIngress(
         policyRevisionValue: policyRevision === null ? null : String(policyRevision),
         principalId,
         workflowId:
-          toolId === "inspectWorkflowDefinition" || toolId === "readWorkflowHistory"
+          toolId === "inspectWorkflowDefinition" ||
+          toolId === "previewWorkflowTest" ||
+          toolId === "readWorkflowHistory"
             ? readNonEmptyString(input.workflowId)
             : null,
         workflowRunId:
@@ -3867,6 +4061,7 @@ async function handleAgentToolIngress(
   const sanitizedOutput =
     tool.id === "readWorkflowHistory" ||
     tool.id === "readWorkflowRunDetail" ||
+    tool.id === "previewWorkflowTest" ||
     tool.id === "prepareWorkflowDeadLetterReplay" ||
     tool.id === "requestWorkflowDeadLetterReplay"
       ? {

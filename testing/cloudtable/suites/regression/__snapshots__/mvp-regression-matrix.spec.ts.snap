@@ -6433,6 +6433,13 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
         },
         {
           "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "previewWorkflowTest",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
           "hiddenFieldIds": [
             "salary",
             "customer_note"
@@ -7230,6 +7237,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
                   "operatorId": "is_not_empty"
                 }
               ],
+              "metadata": {
+                "businessRule": "Notify sales ops when the title is set.",
+                "name": "Title set follow-up",
+                "status": "draft",
+                "tableId": "tbl_tasks"
+              },
               "name": "Title set follow-up",
               "tableId": "tbl_tasks",
               "trigger": {
@@ -7317,6 +7330,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
               "operatorId": "is_not_empty"
             }
           ],
+          "metadata": {
+            "businessRule": "Notify sales ops when the title is set.",
+            "name": "Title set follow-up",
+            "status": "draft",
+            "tableId": "tbl_tasks"
+          },
           "name": "Title set follow-up",
           "tableId": "tbl_tasks",
           "trigger": {

@@ -2,6 +2,7 @@ import type { EventLedgerRecord } from "../core/events/types";
 import { cloneCommandResult } from "../core/commands/transcript";
 import type { FieldTypeRegistry, JsonValue } from "../core/field-types/types";
 import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
+import type { EffectivePermissionSnapshot } from "../core/permissions/types";
 import {
   executeWorkflowDefinition,
   matchWorkflowTrigger,
@@ -12,6 +13,7 @@ import type {
   WorkflowActionBinding,
   WorkflowActionDefinition,
   WorkflowActionExecution,
+  WorkflowConditionBinding,
   WorkflowAggregateDefinition,
   WorkflowDefinition,
   WorkflowExecutionResult,
@@ -38,9 +40,39 @@ import { workflowStatus } from "./workflow-definition";
 
 type WorkflowVersionRow = {
   definition_json: string;
+  status?: "draft" | "published" | "paused";
   workflow_id: string;
   workflow_version_id: string;
   workspace_id: string;
+};
+
+type WorkflowTestPreviewStatus = "ready" | "rejected";
+
+type WorkflowTestPreview = {
+  actions: Array<{
+    command?: Record<string, unknown>;
+    diagnostics: string[];
+    operatorId: string;
+    plan: Record<string, unknown>;
+    resolvedInput: Record<string, unknown>;
+    result?: Record<string, unknown>;
+    skipped?: string;
+    wouldRun: boolean;
+  }>;
+  conditions: Array<{
+    operatorId: string;
+    passed: boolean;
+    resolvedInput: Record<string, unknown>;
+  }>;
+  diagnostics: string[];
+  message?: string;
+  reason?: string;
+  scope?: Record<string, unknown>;
+  status: WorkflowTestPreviewStatus;
+  trigger: Record<string, unknown>;
+  workflowId: string;
+  workflowStatus?: "draft" | "published" | "paused";
+  workflowVersionId: string | null;
 };
 
 type WorkflowRunRow = {
@@ -203,6 +235,16 @@ type RoutedLookupDefinition = {
   valueFieldId: string;
 };
 
+type RoutedSyncDefinition = {
+  alias: string;
+  dependencyFieldIds: string[];
+  resolver: WorkflowRelatedTableResolver;
+  sourceFieldId: string;
+  sourceTableId: string;
+  targetFieldId: string;
+  targetTableId: string;
+};
+
 function deriveAggregateDefinitions(
   definition: PersistedWorkflowDefinition
 ): RoutedAggregateDefinition[] {
@@ -291,6 +333,67 @@ function deriveLookupDefinitions(
       };
     })
     .filter((lookup): lookup is RoutedLookupDefinition => lookup !== null);
+}
+
+function workflowSyncAlias(input: {
+  resolverAlias: string;
+  sourceFieldId: string;
+  targetFieldId: string;
+}): string {
+  return `${input.resolverAlias}:${input.sourceFieldId}:${input.targetFieldId}`;
+}
+
+function deriveSyncDefinitions(
+  definition: PersistedWorkflowDefinition
+): RoutedSyncDefinition[] {
+  const sourceTableId =
+    typeof definition.metadata?.tableId === "string" ? definition.metadata.tableId : null;
+  if (!sourceTableId) {
+    return [];
+  }
+
+  const resolvers = new Map(
+    readWorkflowRelatedTableResolvers(definition).map((resolver) => [resolver.alias, resolver])
+  );
+
+  return definition.actions
+    .map((action) => {
+      if (action.operatorId !== "sync_related_field") {
+        return null;
+      }
+
+      const input = isRecord(action.input) ? action.input : null;
+      const resolverAlias =
+        input && typeof input.resolverAlias === "string" ? input.resolverAlias : null;
+      const sourceFieldId =
+        input && typeof input.sourceFieldId === "string" ? input.sourceFieldId : null;
+      const targetFieldId =
+        input && typeof input.targetFieldId === "string" ? input.targetFieldId : null;
+
+      if (!resolverAlias || !sourceFieldId || !targetFieldId) {
+        return null;
+      }
+
+      const resolver = resolvers.get(resolverAlias);
+      if (!resolver) {
+        return null;
+      }
+
+      return {
+        alias: workflowSyncAlias({
+          resolverAlias,
+          sourceFieldId,
+          targetFieldId
+        }),
+        dependencyFieldIds: Array.from(new Set([resolver.sourceFieldId, sourceFieldId])),
+        resolver,
+        sourceFieldId,
+        sourceTableId,
+        targetFieldId,
+        targetTableId: resolver.targetTableId
+      };
+    })
+    .filter((sync): sync is RoutedSyncDefinition => sync !== null);
 }
 
 function parseJsonRecord(input: string | null): Record<string, unknown> {
@@ -503,6 +606,32 @@ async function enqueueLookupMaintenanceMessage(
   });
 }
 
+async function enqueueSyncMaintenanceMessage(
+  env: CloudTableEnv,
+  input: {
+    eventId?: string;
+    sync: RoutedSyncDefinition;
+    trigger: AggregateTriggerPayload;
+    workspaceId: string;
+    workflowId: string;
+    workflowVersionId: string;
+  }
+): Promise<void> {
+  const { eventId, sync, trigger, workflowId, workflowVersionId, workspaceId } = input;
+
+  await env.AGGREGATE_MAINTENANCE_QUEUE.send({
+    kind: "aggregate-maintenance",
+    ...(eventId ? { eventId } : {}),
+    payload: {
+      sync,
+      trigger,
+      workflowId,
+      workflowVersionId
+    },
+    workspaceId
+  });
+}
+
 export async function requestManualAggregateMaintenance(
   env: CloudTableEnv,
   input: {
@@ -661,6 +790,168 @@ export async function requestManualAggregateMaintenance(
     aggregateAliases: requestedAliases,
     ok: true,
     status: "enqueued",
+    workflowVersionId: version.workflow_version_id
+  };
+}
+
+export async function requestManualSyncMaintenance(
+  env: CloudTableEnv,
+  input: {
+    changedFieldIds?: string[];
+    kind: AggregateTriggerKind;
+    principalId: string;
+    reason?: string;
+    recordId?: string | null;
+    requestId: string;
+    syncAliases?: string[];
+    workflowId: string;
+    workspaceId: string;
+  }
+): Promise<
+  | {
+      ok: true;
+      status: "enqueued";
+      syncAliases: string[];
+      workflowVersionId: string;
+    }
+  | {
+      message: string;
+      ok: false;
+      reason:
+        | "already_requested"
+        | "sync_alias_not_found"
+        | "sync_not_configured"
+        | "workflow_service_identity_invalid"
+        | "workflow_not_found"
+        | "workflow_paused";
+    }
+> {
+  const version = await loadPublishedWorkflowVersion(env.DB, input.workspaceId, input.workflowId);
+  if (!version) {
+    return {
+      message: `Workflow ${input.workflowId} was not found.`,
+      ok: false,
+      reason: "workflow_not_found"
+    };
+  }
+
+  const definition = parseWorkflowDefinition(version.definition_json);
+  if (workflowStatus(definition) !== "published") {
+    return {
+      message: `Workflow ${input.workflowId} is paused and cannot accept sync maintenance requests.`,
+      ok: false,
+      reason: "workflow_paused"
+    };
+  }
+
+  const syncDefinitions = deriveSyncDefinitions(definition);
+  if (syncDefinitions.length === 0) {
+    return {
+      message: `Workflow ${input.workflowId} does not define sync maintenance metadata.`,
+      ok: false,
+      reason: "sync_not_configured"
+    };
+  }
+
+  try {
+    assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
+  } catch (error) {
+    return {
+      message: error instanceof Error ? error.message : "Workflow service identity metadata is invalid.",
+      ok: false,
+      reason: "workflow_service_identity_invalid"
+    };
+  }
+
+  const syncByAlias = new Map(syncDefinitions.map((sync) => [sync.alias, sync] as const));
+  const requestedAliases =
+    input.syncAliases && input.syncAliases.length > 0
+      ? Array.from(new Set(input.syncAliases))
+      : syncDefinitions.map((sync) => sync.alias);
+  const missingAlias = requestedAliases.find((alias) => !syncByAlias.has(alias));
+  if (missingAlias) {
+    return {
+      message: `Workflow ${input.workflowId} does not define sync alias ${missingAlias}.`,
+      ok: false,
+      reason: "sync_alias_not_found"
+    };
+  }
+
+  const scopeKey = `workflow.sync-maintenance:${input.workspaceId}:${input.workflowId}`;
+  const existingReceipt = await env.DB
+    .prepare(
+      `SELECT id
+       FROM idempotency_receipts
+       WHERE scope_key = ? AND idempotency_key = ?`
+    )
+    .bind(scopeKey, input.requestId)
+    .first<{ id: string }>();
+  if (existingReceipt) {
+    return {
+      message: `Sync maintenance request ${input.requestId} was already accepted for workflow ${input.workflowId}.`,
+      ok: false,
+      reason: "already_requested"
+    };
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO idempotency_receipts (
+         id,
+         scope_key,
+         idempotency_key,
+         command_id,
+         receipt_json,
+         created_at,
+         last_event_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      `idem:workflow.sync-maintenance:${input.workflowId}:${input.requestId}`,
+      scopeKey,
+      input.requestId,
+      `workflow.sync-maintenance:${input.workflowId}:${input.requestId}`,
+      JSON.stringify({
+        kind: input.kind,
+        requestedAt: now,
+        requestedBy: input.principalId,
+        syncAliases: requestedAliases,
+        workflowId: input.workflowId
+      }),
+      now,
+      null
+    )
+  ]);
+
+  const trigger: AggregateTriggerPayload =
+    input.kind === "backfill"
+      ? {
+          kind: "backfill",
+          reason: input.reason ?? "manual"
+        }
+      : {
+          changedFieldIds: input.changedFieldIds ?? [],
+          eventId: `manual-sync-recompute:${input.requestId}`,
+          eventType: "workflow.sync.manual_recompute",
+          kind: "recompute",
+          recordId: input.recordId ?? null
+        };
+
+  for (const alias of requestedAliases) {
+    await enqueueSyncMaintenanceMessage(env, {
+      eventId: trigger.kind === "recompute" ? trigger.eventId ?? undefined : undefined,
+      sync: syncByAlias.get(alias)!,
+      trigger,
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: input.workspaceId
+    });
+  }
+
+  return {
+    ok: true,
+    status: "enqueued",
+    syncAliases: requestedAliases,
     workflowVersionId: version.workflow_version_id
   };
 }
@@ -850,6 +1141,457 @@ async function loadPublishedWorkflowVersion(
     )
     .bind(workspaceId, workflowId)
     .first<WorkflowVersionRow>();
+}
+
+async function loadCurrentWorkflowVersion(
+  db: D1Database,
+  workspaceId: string,
+  workflowId: string
+): Promise<WorkflowVersionRow | null> {
+  return db
+    .prepare(
+      `SELECT
+         workflow_versions.workspace_id AS workspace_id,
+         workflow_versions.id AS workflow_version_id,
+         workflow_versions.workflow_id AS workflow_id,
+         workflow_versions.definition_json AS definition_json,
+         CASE
+           WHEN json_extract(workflow_versions.definition_json, '$.metadata.status') IN ('draft', 'published', 'paused')
+             THEN json_extract(workflow_versions.definition_json, '$.metadata.status')
+           ELSE 'published'
+         END AS status
+       FROM workflow_versions
+       INNER JOIN workflows
+         ON workflows.workspace_id = workflow_versions.workspace_id
+        AND workflows.id = workflow_versions.workflow_id
+        AND workflows.current_version = workflow_versions.version
+       WHERE workflow_versions.workspace_id = ?
+         AND workflow_versions.workflow_id = ?
+         AND workflows.archived_at IS NULL
+       LIMIT 1`
+    )
+    .bind(workspaceId, workflowId)
+    .first<WorkflowVersionRow>();
+}
+
+function resolvePreviewTriggerFieldIds(workflow: WorkflowDefinition): string[] {
+  if (Array.isArray(workflow.trigger.match?.fieldIds)) {
+    return workflow.trigger.match.fieldIds.filter(
+      (fieldId): fieldId is string => typeof fieldId === "string" && fieldId.length > 0
+    );
+  }
+
+  if (
+    typeof workflow.trigger.match?.fieldId === "string" &&
+    workflow.trigger.match.fieldId.length > 0
+  ) {
+    return [workflow.trigger.match.fieldId];
+  }
+
+  return [];
+}
+
+function serializeWorkflowFieldContext(
+  runtime: CloudTableRuntime,
+  row: NonNullable<WorkflowExecutionScope["row"]> | undefined,
+  snapshot: NonNullable<EffectivePermissionSnapshot | undefined>
+): Record<string, unknown> | null {
+  if (!row) {
+    return null;
+  }
+
+  const fieldEntries = Object.entries(row.fields);
+  const projection = runtime.permissionEngine.projectFields(
+    fieldEntries.map(([_, field]) => ({
+      fieldId: field.fieldId,
+      fieldType: field.fieldType ?? "",
+      value: field.value
+    })),
+    "workflow-step",
+    snapshot
+  );
+
+  return {
+    diagnostics: projection.diagnostics,
+    fields: fieldEntries.map(([fieldKey, field]) => ({
+      fieldId: field.fieldId,
+      fieldKey,
+      fieldType: field.fieldType ?? "",
+      readState: projection.states[field.fieldId] ?? "visible",
+      value: Object.prototype.hasOwnProperty.call(projection.fields, field.fieldId)
+        ? projection.fields[field.fieldId]
+        : null
+    })),
+    hiddenFieldIds: projection.hiddenFieldIds,
+    recordId: row.recordId,
+    redactedFieldIds: projection.redactedFieldIds
+  };
+}
+
+function summarizeWorkflowActionPlan(
+  definition: PersistedWorkflowDefinition,
+  action: WorkflowActionBinding,
+  resolvedInput: Record<string, unknown>,
+  scope: WorkflowExecutionScope
+): Record<string, unknown> {
+  if (action.operatorId === "sync_related_field") {
+    const resolverAlias =
+      typeof resolvedInput.resolverAlias === "string" ? resolvedInput.resolverAlias : null;
+    const sourceFieldId =
+      typeof resolvedInput.sourceFieldId === "string" ? resolvedInput.sourceFieldId : null;
+    const targetFieldId =
+      typeof resolvedInput.targetFieldId === "string" ? resolvedInput.targetFieldId : null;
+    const sync = deriveSyncDefinitions(definition).find(
+      (candidate) =>
+        candidate.alias ===
+        workflowSyncAlias({
+          resolverAlias: resolverAlias ?? "",
+          sourceFieldId: sourceFieldId ?? "",
+          targetFieldId: targetFieldId ?? ""
+        })
+    );
+
+    return {
+      alias: sync?.alias ?? null,
+      kind: "sync_related_field",
+      resolverAlias,
+      sourceFieldId,
+      sourceRecordId: scope.row?.recordId ?? null,
+      targetFieldId,
+      targetRecordIds:
+        resolverAlias && scope.relatedTables?.[resolverAlias]
+          ? scope.relatedTables[resolverAlias].recordIds ?? []
+          : []
+    };
+  }
+
+  if (action.operatorId === "set_cell") {
+    const targetFieldId =
+      typeof resolvedInput.fieldId === "string" ? resolvedInput.fieldId : null;
+    const aggregate = deriveAggregateDefinitions(definition).find(
+      (candidate) => candidate.targetFieldId === targetFieldId
+    );
+
+    return {
+      aggregateAlias: aggregate?.alias ?? null,
+      kind: aggregate ? "reactive_rollup" : "command",
+      operationId: aggregate?.operationId ?? null,
+      targetFieldId,
+      targetRecordId:
+        typeof resolvedInput.recordId === "string" ? resolvedInput.recordId : null,
+      targetTableId:
+        typeof resolvedInput.tableId === "string" ? resolvedInput.tableId : null
+    };
+  }
+
+  return {
+    kind: "command",
+    operatorId: action.operatorId
+  };
+}
+
+function rejectedWorkflowTestPreview(
+  input: {
+    diagnostics?: string[];
+    message: string;
+    reason: string;
+    trigger?: Record<string, unknown>;
+    workflowId: string;
+    workflowStatus?: "draft" | "published" | "paused";
+    workflowVersionId?: string | null;
+  }
+): WorkflowTestPreview {
+  return {
+    actions: [],
+    conditions: [],
+    diagnostics: input.diagnostics ?? [],
+    message: input.message,
+    reason: input.reason,
+    status: "rejected",
+    trigger: input.trigger ?? {},
+    workflowId: input.workflowId,
+    workflowStatus: input.workflowStatus,
+    workflowVersionId: input.workflowVersionId ?? null
+  };
+}
+
+export async function previewWorkflowTestRun(
+  env: CloudTableEnv,
+  input: {
+    recordId: string;
+    selectedFieldId?: string;
+    workflowId: string;
+    workspaceId: string;
+  }
+): Promise<WorkflowTestPreview> {
+  const version = await loadCurrentWorkflowVersion(env.DB, input.workspaceId, input.workflowId);
+  if (!version) {
+    return rejectedWorkflowTestPreview({
+      message: `Workflow ${input.workflowId} was not found.`,
+      reason: "workflow_not_found",
+      workflowId: input.workflowId
+    });
+  }
+
+  let definition: PersistedWorkflowDefinition;
+  try {
+    definition = parseWorkflowDefinition(version.definition_json);
+  } catch {
+    return rejectedWorkflowTestPreview({
+      message: `Workflow ${input.workflowId} version ${version.workflow_version_id} has malformed definition JSON.`,
+      reason: "workflow_definition_invalid",
+      workflowId: input.workflowId,
+      workflowStatus: version.status,
+      workflowVersionId: version.workflow_version_id
+    });
+  }
+
+  let workflowIdentity;
+  try {
+    workflowIdentity = requireWorkflowServiceIdentityMetadata(definition, {
+      workflowId: input.workflowId,
+      workflowVersionId: version.workflow_version_id
+    });
+  } catch (error) {
+    return rejectedWorkflowTestPreview({
+      message: error instanceof Error ? error.message : "Workflow service identity metadata is invalid.",
+      reason: "workflow_service_identity_invalid",
+      workflowId: input.workflowId,
+      workflowStatus: workflowStatus(definition),
+      workflowVersionId: version.workflow_version_id
+    });
+  }
+
+  const workflowSnapshot =
+    (await readLatestPermissionSnapshotForScope(env.DB, {
+      permissionScopeHash: workflowIdentity.scopeHash,
+      principalId: workflowIdentity.principalId,
+      workspaceId: input.workspaceId
+    })) ??
+    (await readPermissionSnapshot(env.DB, {
+      permissionScopeHash: workflowIdentity.scopeHash,
+      policyRevision: workflowIdentity.policyRevision,
+      principalId: workflowIdentity.principalId,
+      workspaceId: input.workspaceId
+    }));
+  if (!workflowSnapshot) {
+    return rejectedWorkflowTestPreview({
+      message: `Workflow ${input.workflowId} could not resolve a permission snapshot for service identity ${workflowIdentity.principalId}.`,
+      reason: "workflow_permission_snapshot_unresolved",
+      workflowId: input.workflowId,
+      workflowStatus: workflowStatus(definition),
+      workflowVersionId: version.workflow_version_id
+    });
+  }
+
+  const runtime = createRuntimeWithSnapshot(env, workflowSnapshot);
+  const workflow = {
+    ...definition,
+    principal: {
+      policyRevision: workflowSnapshot.policyRevision,
+      principalId: workflowSnapshot.principalId,
+      schemaEpoch: workflowSnapshot.schemaEpoch,
+      scopeHash: workflowSnapshot.scopeHash
+    }
+  } satisfies WorkflowDefinition;
+  const triggerOperator = runtime.workflowOperatorRegistry.require(workflow.trigger.operatorId);
+  if (triggerOperator.kind !== "trigger") {
+    return rejectedWorkflowTestPreview({
+      message: `Workflow ${input.workflowId} trigger ${workflow.trigger.operatorId} is invalid.`,
+      reason: "workflow_trigger_invalid",
+      workflowId: input.workflowId,
+      workflowStatus: workflowStatus(definition),
+      workflowVersionId: version.workflow_version_id
+    });
+  }
+
+  const triggerTableId =
+    typeof workflow.trigger.match?.tableId === "string" ? workflow.trigger.match.tableId : null;
+  if (!triggerTableId) {
+    return rejectedWorkflowTestPreview({
+      message: `Workflow ${input.workflowId} does not define a trigger table for selected-record preview.`,
+      reason: "workflow_trigger_table_missing",
+      workflowId: input.workflowId,
+      workflowStatus: workflowStatus(definition),
+      workflowVersionId: version.workflow_version_id
+    });
+  }
+
+  const triggerFieldIds = resolvePreviewTriggerFieldIds(workflow);
+  if (
+    input.selectedFieldId &&
+    triggerFieldIds.length > 0 &&
+    !triggerFieldIds.includes(input.selectedFieldId)
+  ) {
+    return rejectedWorkflowTestPreview({
+      message: `Field ${input.selectedFieldId} is not part of workflow ${input.workflowId}'s reactive trigger set.`,
+      reason: "selected_field_not_triggerable",
+      trigger: {
+        selectedFieldId: input.selectedFieldId,
+        triggerFieldIds
+      },
+      workflowId: input.workflowId,
+      workflowStatus: workflowStatus(definition),
+      workflowVersionId: version.workflow_version_id
+    });
+  }
+
+  const row = await loadRecordContext(
+    env.DB,
+    runtime.fieldTypeRegistry,
+    input.workspaceId,
+    triggerTableId,
+    input.recordId
+  );
+  if (!row) {
+    return rejectedWorkflowTestPreview({
+      message: `Record ${input.recordId} was not found on trigger table ${triggerTableId}.`,
+      reason: "record_not_found",
+      trigger: {
+        recordId: input.recordId,
+        tableId: triggerTableId
+      },
+      workflowId: input.workflowId,
+      workflowStatus: workflowStatus(definition),
+      workflowVersionId: version.workflow_version_id
+    });
+  }
+
+  const selectedFieldId = input.selectedFieldId ?? triggerFieldIds[0] ?? null;
+  const selectedField = selectedFieldId
+    ? Object.values(row.fields).find((field) => field.fieldId === selectedFieldId)
+    : undefined;
+  const eventType = triggerOperator.triggerEventTypes[0] ?? "workflow.preview";
+  const previewEvent: EventLedgerRecord = {
+    commandId: `cmd:workflow-test-preview:${version.workflow_version_id}:${input.recordId}`,
+    commandType: "workflow.preview",
+    createdAt: new Date(0).toISOString(),
+    eventId: `evt:workflow-test-preview:${version.workflow_version_id}:${input.recordId}`,
+    eventType,
+    metadata: {
+      actor: {
+        mode: "workflow",
+        principalId: workflowSnapshot.principalId
+      },
+      permissionScopeHash: workflowSnapshot.scopeHash,
+      permissionsVersion: workflowSnapshot.policyRevision,
+      schemaEpoch: workflowSnapshot.schemaEpoch,
+      selectedRecordPreview: true,
+      scope: "workflow"
+    },
+    payload: {
+      changedFieldIds: triggerFieldIds,
+      ...(selectedFieldId ? { fieldId: selectedFieldId } : {}),
+      ...(selectedField?.fieldType ? { fieldType: selectedField.fieldType } : {}),
+      recordId: input.recordId
+    },
+    tableId: triggerTableId,
+    workspaceId: input.workspaceId
+  };
+
+  const scope = await buildExecutionScope(
+    env.DB,
+    runtime.fieldTypeRegistry,
+    workflow,
+    `preview:${version.workflow_version_id}:${input.recordId}`,
+    previewEvent
+  );
+  const execution = await executeWorkflowDefinition(
+    workflow,
+    scope,
+    runtime.workflowOperatorRegistry,
+    {
+      execute(command) {
+        return runtime.commandBus.dryRun(command);
+      }
+    }
+  );
+
+  const conditions = workflow.conditions.map((condition, index) => {
+    const evaluated =
+      execution.matchedTrigger && index < execution.conditionResults.length
+        ? execution.conditionResults[index]
+        : null;
+    return {
+      operatorId: condition.operatorId,
+      passed: evaluated?.passed ?? false,
+      resolvedInput:
+        (evaluated?.resolvedInput as Record<string, unknown> | undefined) ??
+        resolveWorkflowInput(condition.input, scope)
+    };
+  });
+
+  const shouldRunActions =
+    execution.matchedTrigger &&
+    !("skippedReason" in execution && execution.skippedReason === "conditions_failed");
+  const actions = workflow.actions.map((action, index) => {
+    const resolvedInput = resolveWorkflowInput(action.input, scope);
+    const executed =
+      execution.matchedTrigger && index < execution.executedActions.length
+        ? execution.executedActions[index]
+        : null;
+
+    return {
+      ...(executed
+        ? {
+            command: executed.command as unknown as Record<string, unknown>,
+            result: executed.result as unknown as Record<string, unknown>,
+            ...(executed.skipped ? { skipped: executed.skipped } : {})
+          }
+        : {}),
+      diagnostics: executed?.result.diagnostics ?? [],
+      operatorId: action.operatorId,
+      plan: summarizeWorkflowActionPlan(definition, action, resolvedInput, scope),
+      resolvedInput,
+      wouldRun: shouldRunActions && executed?.skipped !== "loop_guard"
+    };
+  });
+
+  const rowContext = serializeWorkflowFieldContext(runtime, scope.row, workflowSnapshot);
+  const relatedTables = Object.fromEntries(
+    Object.entries(scope.relatedTables ?? {}).map(([alias, related]) => [
+      alias,
+      {
+        recordIds: related.recordIds ?? [],
+        row: serializeWorkflowFieldContext(runtime, related.row, workflowSnapshot),
+        tableId: related.tableId
+      }
+    ])
+  );
+  const diagnostics = Array.from(
+    new Set([
+      ...(rowContext?.diagnostics as string[] | undefined ?? []),
+      ...Object.values(relatedTables).flatMap((entry) =>
+        Array.isArray((entry as { row?: { diagnostics?: string[] } }).row?.diagnostics)
+          ? (entry as { row?: { diagnostics?: string[] } }).row?.diagnostics ?? []
+          : []
+      ),
+      ...conditions.flatMap((condition) => (condition.passed ? [] : [`condition_failed:${condition.operatorId}`])),
+      ...actions.flatMap((action) => action.diagnostics)
+    ])
+  );
+
+  return {
+    actions,
+    conditions,
+    diagnostics,
+    scope: {
+      relatedTables,
+      row: rowContext
+    },
+    status: "ready",
+    trigger: {
+      eventType,
+      matched: execution.matchedTrigger,
+      recordId: input.recordId,
+      selectedFieldId,
+      tableId: triggerTableId,
+      triggerFieldIds
+    },
+    workflowId: input.workflowId,
+    workflowStatus: workflowStatus(definition),
+    workflowVersionId: version.workflow_version_id
+  };
 }
 
 async function nextWorkspaceSequence(
@@ -2135,6 +2877,7 @@ async function routeAggregateMaintenanceFromEvent(
   if (event.eventType === "workflow.published") {
     await enqueueAggregateBackfillForPublishedWorkflow(env, event);
     await enqueueLookupBackfillForPublishedWorkflow(env, event);
+    await enqueueSyncBackfillForPublishedWorkflow(env, event);
     return;
   }
 
@@ -2264,6 +3007,47 @@ async function enqueueLookupBackfillForPublishedWorkflow(
     await enqueueLookupMaintenanceMessage(env, {
       eventId: event.eventId,
       lookup,
+      trigger: {
+        kind: "backfill",
+        reason: "workflow_published"
+      },
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: event.workspaceId
+    });
+  }
+}
+
+async function enqueueSyncBackfillForPublishedWorkflow(
+  env: CloudTableEnv,
+  event: EventLedgerRecord
+): Promise<void> {
+  const workflowId =
+    typeof event.payload.workflowId === "string" ? event.payload.workflowId : null;
+  if (!workflowId) {
+    return;
+  }
+
+  const version = await loadPublishedWorkflowVersion(env.DB, event.workspaceId, workflowId);
+  if (!version) {
+    return;
+  }
+
+  const definition = parseWorkflowDefinition(version.definition_json);
+  if (workflowStatus(definition) !== "published") {
+    return;
+  }
+
+  const syncDefinitions = deriveSyncDefinitions(definition);
+  if (syncDefinitions.length === 0) {
+    return;
+  }
+  assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
+
+  for (const sync of syncDefinitions) {
+    await enqueueSyncMaintenanceMessage(env, {
+      eventId: event.eventId,
+      sync,
       trigger: {
         kind: "backfill",
         reason: "workflow_published"

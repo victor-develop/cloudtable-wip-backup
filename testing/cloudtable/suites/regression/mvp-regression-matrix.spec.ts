@@ -747,6 +747,103 @@ function insertRuntimeCellCurrent(
     );
 }
 
+function insertRuntimeView(
+  db: SqliteD1Database,
+  input: {
+    filterFieldIds?: string[];
+    filters?: Array<{
+      comparator?: string;
+      fieldId: string;
+      operatorId: string;
+      value?: unknown;
+    }>;
+    groupByFieldId?: string | null;
+    showEmptyGroups?: boolean;
+    sortFieldIds?: string[];
+    sorts?: Array<{
+      fieldId: string;
+      mode?: string;
+    }>;
+    tableId: string;
+    viewId: string;
+    viewKey: string;
+    viewName: string;
+    visibleFieldIds: string[];
+    workspaceId?: string;
+  }
+): void {
+  const workspaceId = input.workspaceId ?? "ws_1";
+  db.inner
+    .prepare(
+      `INSERT INTO views (
+         id,
+         workspace_id,
+         table_id,
+         view_key,
+         name,
+         current_schema_version,
+         created_at,
+         updated_at,
+         archived_at,
+         last_event_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.viewId,
+      workspaceId,
+      input.tableId,
+      input.viewKey,
+      input.viewName,
+      1,
+      logicalTime,
+      logicalTime,
+      null,
+      null
+    );
+  db.inner
+    .prepare(
+      `INSERT INTO view_schema_versions (
+         id,
+         workspace_id,
+         view_id,
+         schema_version,
+         schema_json,
+         created_at,
+         created_by_principal_id,
+         last_event_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      `${input.viewId}:v1`,
+      workspaceId,
+      input.viewId,
+      1,
+      JSON.stringify({
+        filterFieldIds:
+          input.filters?.map((filter) => filter.fieldId) ?? input.filterFieldIds ?? [],
+        filters:
+          input.filters ??
+          (input.filterFieldIds ?? []).map((fieldId) => ({
+            fieldId,
+            operatorId: "is_not_empty"
+          })),
+        groupByFieldId: input.groupByFieldId ?? null,
+        showEmptyGroups: input.showEmptyGroups ?? false,
+        sortFieldIds: input.sorts?.map((sort) => sort.fieldId) ?? input.sortFieldIds ?? [],
+        sorts:
+          input.sorts ??
+          (input.sortFieldIds ?? []).map((fieldId) => ({
+            fieldId,
+            mode: "ascending"
+          })),
+        visibleFieldIds: input.visibleFieldIds
+      }),
+      logicalTime,
+      "usr_owner",
+      null
+    );
+}
+
 function readRuntimeCellRawValue(
   db: SqliteD1Database,
   input: {
@@ -6146,6 +6243,297 @@ describe("cloudtable MVP regression matrix", () => {
     });
   });
 
+  it("keeps direct workflow test-preview ingress aligned with the previewWorkflowTest tool for direct sync workflows", async () => {
+    const { db, env } = createRuntimeEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_status",
+      fieldKey: "status",
+      fieldType: "text.single_line",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_status",
+      fieldKey: "account_status",
+      fieldType: "text.single_line",
+      label: "Account Status",
+      tableId: "tbl_accounts"
+    });
+
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    db.inner
+      .prepare(
+        `INSERT INTO record_projection (
+           workspace_id,
+           table_id,
+           record_id,
+           projection_json,
+           search_document,
+           projection_version,
+           last_event_id,
+           updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "ws_1",
+        "tbl_accounts",
+        "rec_account_1",
+        JSON.stringify({
+          fields: {
+            account_status: "open"
+          }
+        }),
+        "",
+        1,
+        "evt_seed_account_projection",
+        logicalTime
+      );
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_status",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "qualified"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account_status",
+      fieldType: "text.single_line",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts",
+      value: "open"
+    });
+
+    insertRuntimeWorkflowDefinition(db, {
+      actions: [
+        {
+          input: {
+            resolverAlias: "sync_fld_account_status",
+            sourceFieldId: "fld_ticket_status",
+            targetFieldId: "fld_account_status"
+          },
+          operatorId: "sync_related_field"
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "sync_fld_account_status",
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      principal: {
+        policyRevision: 33,
+        principalId: "wf_sync_preview",
+        schemaEpoch: 0,
+        scopeHash: "scope:table:tbl_1"
+      },
+      trigger: {
+        match: {
+          fieldIds: ["fld_ticket_account", "fld_ticket_status"],
+          tableId: "tbl_1"
+        },
+        operatorId: "field_changed"
+      },
+      workflowId: "wf_sync_preview",
+      workflowKey: "sync-preview",
+      workflowName: "Sync Preview",
+      workflowVersionId: "wf_sync_preview:v1"
+    });
+    insertRuntimePermissionSnapshot(db, {
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_ticket_account: {
+          agent: false,
+          fieldId: "fld_ticket_account",
+          fieldType: "relation.record",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_ticket_status: {
+          agent: false,
+          fieldId: "fld_ticket_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_account_status: {
+          agent: false,
+          fieldId: "fld_account_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      policyRevision: 33,
+      principalId: "wf_sync_preview",
+      scopeHash: "scope:table:tbl_1",
+      snapshotId: "snap_wf_sync_preview"
+    });
+    insertRuntimePermissionSnapshot(db, {
+      commandTypes: ["workflow.manual"],
+      fields: {
+        fld_ticket_account: {
+          agent: true,
+          fieldId: "fld_ticket_account",
+          fieldType: "relation.record",
+          read: "visible",
+          workflow: true,
+          write: false
+        },
+        fld_ticket_status: {
+          agent: true,
+          fieldId: "fld_ticket_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: false
+        }
+      },
+      policyRevision: 14,
+      principalId: "agt_sync_preview",
+      scopeHash: "scope:table:tbl_1",
+      snapshotId: "snap_agt_sync_preview"
+    });
+
+    const directResponse = await handleFetch(
+      new Request("https://example.test/v1/workflows/wf_sync_preview/test-preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 14,
+          principalId: "agt_sync_preview",
+          recordId: "rec_ticket_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(directResponse.status).toBe(200);
+
+    const toolResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            recordId: "rec_ticket_1",
+            workflowId: "wf_sync_preview"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 14,
+          principalId: "agt_sync_preview",
+          toolId: "previewWorkflowTest",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(toolResponse.status).toBe(200);
+
+    const directBody = (await directResponse.json()) as {
+      actions: Array<{
+        plan: {
+          alias: string | null;
+          kind: string;
+          targetRecordIds: string[];
+        };
+        wouldRun: boolean;
+      }>;
+      status: string;
+    };
+    const toolBody = (await toolResponse.json()) as {
+      output: {
+        preview: Record<string, unknown>;
+      };
+    };
+
+    expect(directBody.status).toBe("ready");
+    expect(directBody.actions[0]).toMatchObject({
+      plan: {
+        alias: "sync_fld_account_status:fld_ticket_status:fld_account_status",
+        kind: "sync_related_field",
+        targetRecordIds: ["rec_account_1"]
+      },
+      wouldRun: true
+    });
+    expect(toolBody.output.preview).toMatchObject({
+      status: directBody.status
+    });
+    expect(
+      ((toolBody.output.preview as { actions: Array<Record<string, unknown>> }).actions[0] as Record<
+        string,
+        unknown
+      >).plan
+    ).toEqual((directBody.actions[0] as { plan: Record<string, unknown> }).plan);
+    expect(
+      (toolBody.output.preview as { actions: Array<{ wouldRun: boolean }> }).actions[0]?.wouldRun
+    ).toBe(directBody.actions[0]?.wouldRun);
+  });
+
   it("scenario: invitation_backed_reactive_sync_contract lets an invited member trigger downstream sync through the normal queue path", async () => {
     const { db, env, eventFanoutQueue, workflowDispatchQueue, workflowStepQueue } = createRuntimeEnv();
 
@@ -6846,7 +7234,7 @@ describe("cloudtable MVP regression matrix", () => {
     });
   });
 
-  it("scenario: invitation_backed_grouped_sum_rollup_contract backfills and recomputes grouped rollups through invited-member session ingress", async () => {
+  it("scenario: invited_member_reactive_read_parity_contract preserves saved-view and persona-preview parity for reactive rollups", async () => {
     const {
       aggregateQueue,
       db,
@@ -6895,6 +7283,13 @@ describe("cloudtable MVP regression matrix", () => {
       tableId: "tbl_1"
     });
     insertField(db, {
+      fieldId: "fld_account_name",
+      fieldKey: "account_name",
+      fieldType: "text.single_line",
+      label: "Account Name",
+      tableId: "tbl_accounts"
+    });
+    insertField(db, {
       fieldId: "fld_account_revenue_rollup",
       fieldKey: "ticket_revenue_rollup",
       fieldType: "computed.readonly",
@@ -6923,6 +7318,41 @@ describe("cloudtable MVP regression matrix", () => {
       recordId: "rec_account_1",
       recordKey: "account-1",
       tableId: "tbl_accounts"
+    });
+    db.inner
+      .prepare(
+        `INSERT INTO record_projection (
+           workspace_id,
+           table_id,
+           record_id,
+           projection_json,
+           search_document,
+           projection_version,
+           last_event_id,
+           updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "ws_1",
+        "tbl_accounts",
+        "rec_account_1",
+        JSON.stringify({
+          fields: {
+            account_name: "Acme Corp",
+            ticket_revenue_rollup: null
+          }
+        }),
+        "",
+        1,
+        "evt_seed_account_projection",
+        logicalTime
+      );
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account_name",
+      fieldType: "text.single_line",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts",
+      value: "Acme Corp"
     });
     insertRuntimeCellCurrent(db, {
       fieldId: "fld_ticket_account",
@@ -6973,6 +7403,12 @@ describe("cloudtable MVP regression matrix", () => {
         status: "published",
         tableId: "tbl_1"
       },
+      principal: {
+        policyRevision: 7,
+        principalId: "wf_invitation_grouped_sum",
+        schemaEpoch: 0,
+        scopeHash: "scope:wf:invitation-grouped-sum"
+      },
       trigger: {
         operatorId: "field_changed",
         match: {
@@ -6982,6 +7418,30 @@ describe("cloudtable MVP regression matrix", () => {
         }
       },
       workflowId: "wf_invitation_grouped_sum"
+    });
+    insertRuntimePermissionSnapshot(db, {
+      snapshotId: "snap_invitation_grouped_sum_workflow",
+      principalId: "wf_invitation_grouped_sum",
+      policyRevision: 7,
+      scopeHash: "scope:wf:invitation-grouped-sum",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_account_revenue_rollup: {
+          agent: false,
+          fieldId: "fld_account_revenue_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+    insertRuntimeView(db, {
+      tableId: "tbl_accounts",
+      viewId: "view_account_rollups",
+      viewKey: "account-rollups",
+      viewName: "Account Rollups",
+      visibleFieldIds: ["fld_account_name", "fld_account_revenue_rollup"]
     });
 
     insertActivityEvent(db, {
@@ -7164,6 +7624,31 @@ describe("cloudtable MVP regression matrix", () => {
         }
       }
     });
+    insertRuntimePermissionSnapshot(db, {
+      snapshotId: "snap_invited_member_grouped_sum_view_read",
+      principalId: sessionBody.workspaceMembership.principalId,
+      policyRevision: 64,
+      scopeHash: "scope:view:view_account_rollups",
+      commandTypes: [],
+      fields: {
+        fld_account_name: {
+          agent: true,
+          fieldId: "fld_account_name",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: false,
+          write: false
+        },
+        fld_account_revenue_rollup: {
+          agent: true,
+          fieldId: "fld_account_revenue_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: false,
+          write: false
+        }
+      }
+    });
 
     const commandResponse = await handleFetch(
       new Request("https://example.test/v1/commands/execute", {
@@ -7250,6 +7735,112 @@ describe("cloudtable MVP regression matrix", () => {
       })
     ).toBe(35);
 
+    const savedViewResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/tables/tbl_accounts/views/view_account_rollups?workspaceId=ws_1&principalId=${sessionBody.workspaceMembership.principalId}&permissionScopeHash=scope:view:view_account_rollups&policyRevision=64`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(savedViewResponse.status).toBe(200);
+    const savedViewBody = (await savedViewResponse.json()) as {
+      rows: Array<{
+        cells: Record<string, unknown>;
+        redactedFieldIds: string[];
+      }>;
+      view: {
+        redactedFieldIds: string[];
+        visibleFieldIds: string[];
+      };
+    };
+    expect(savedViewBody).toMatchObject({
+      rows: [
+        {
+          cells: {
+            fld_account_name: "Acme Corp",
+            fld_account_revenue_rollup: 35
+          },
+          redactedFieldIds: []
+        }
+      ],
+      view: {
+        redactedFieldIds: [],
+        visibleFieldIds: ["fld_account_name", "fld_account_revenue_rollup"]
+      }
+    });
+
+    const personaPreviewResponse = await handleFetch(
+      new Request("https://example.test/v1/permissions/persona-preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          permissionScopeHash: "scope:view:view_account_rollups",
+          policyRevision: 64,
+          principalId: sessionBody.workspaceMembership.principalId,
+          tableId: "tbl_accounts",
+          viewId: "view_account_rollups",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(personaPreviewResponse.status).toBe(200);
+    const personaPreviewBody = (await personaPreviewResponse.json()) as {
+      preview: {
+        fields: Array<{
+          fieldId: string;
+          surfaces: {
+            viewQuery: {
+              readState: string;
+              writeAllowed: boolean;
+            };
+          };
+        }>;
+        rows: Array<{
+          cells: Record<string, unknown>;
+          redactedFieldIds: string[];
+        }>;
+        view: {
+          viewQuery: {
+            redactedFieldIds: string[];
+            visibleFieldIds: string[];
+          };
+        };
+      } | null;
+    };
+    expect(personaPreviewBody.preview).toMatchObject({
+      rows: [
+        {
+          cells: {
+            fld_account_name: "Acme Corp",
+            fld_account_revenue_rollup: 35
+          },
+          redactedFieldIds: []
+        }
+      ],
+      view: {
+        viewQuery: {
+          redactedFieldIds: [],
+          visibleFieldIds: ["fld_account_name", "fld_account_revenue_rollup"]
+        }
+      }
+    });
+    expect(
+      personaPreviewBody.preview?.fields.find((field) => field.fieldId === "fld_account_revenue_rollup")
+    ).toMatchObject({
+      fieldId: "fld_account_revenue_rollup",
+      surfaces: {
+        viewQuery: {
+          readState: "visible",
+          writeAllowed: false
+        }
+      }
+    });
+    expect(JSON.stringify(personaPreviewBody.preview)).not.toContain("fld_ticket_amount");
+
     const invitationRow = db.inner
       .prepare(
         `SELECT accepted_by_user_id, status
@@ -7264,6 +7855,60 @@ describe("cloudtable MVP regression matrix", () => {
       accepted_by_user_id: sessionBody.session.userId,
       status: "accepted"
     });
+
+    const maintenanceEvents = db.inner
+      .prepare(
+        `SELECT command_id, metadata_json
+         FROM event_ledger
+         WHERE workspace_id = ? AND table_id = ? AND command_id LIKE ?
+         ORDER BY workspace_sequence ASC`
+      )
+      .all("ws_1", "tbl_accounts", "cmd:aggregate-maintenance:%") as Array<{
+      command_id: string;
+      metadata_json: string;
+    }>;
+    expect(
+      maintenanceEvents.map((row) => ({
+        commandId: row.command_id,
+        metadata: JSON.parse(row.metadata_json) as Record<string, unknown>
+      }))
+    ).toMatchObject([
+      {
+        commandId:
+          "cmd:aggregate-maintenance:wf_invitation_grouped_sum:v1:account_revenue_sum:rec_account_1:backfill:workflow_published",
+        metadata: {
+          aggregateType: "cell",
+          actor: {
+            mode: "workflow",
+            principalId: "wf_invitation_grouped_sum"
+          },
+          commandType: "cell.set",
+          coordinatorOwnedMutation: true,
+          permissionScopeHash: "scope:wf:invitation-grouped-sum",
+          permissionsVersion: 7,
+          schemaEpoch: 0,
+          scope: "table"
+        }
+      },
+      {
+        commandId: expect.stringMatching(
+          /^cmd:aggregate-maintenance:wf_invitation_grouped_sum:v1:account_revenue_sum:rec_account_1:recompute:/
+        ),
+        metadata: {
+          aggregateType: "cell",
+          actor: {
+            mode: "workflow",
+            principalId: "wf_invitation_grouped_sum"
+          },
+          commandType: "cell.set",
+          coordinatorOwnedMutation: true,
+          permissionScopeHash: "scope:wf:invitation-grouped-sum",
+          permissionsVersion: 7,
+          schemaEpoch: 0,
+          scope: "table"
+        }
+      }
+    ]);
   });
 
   it("scenario: workflow_service_identity_reactive_maintenance_writes preserve workflow principal metadata on coordinator-owned rollups", async () => {

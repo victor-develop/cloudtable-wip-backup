@@ -95,7 +95,10 @@ function createRegistry(overrides?: {
   dryRunResult?: CommandResult;
   executeResult?: CommandResult;
   inspectedWorkspace?: WorkspaceInspection;
-  tableSchemaInspectionResult?: Record<string, unknown> | null;
+  tableSchemaInspectionResult?:
+    | Record<string, unknown>
+    | null
+    | ((input: { tableId: string; workspaceId: string }) => Record<string, unknown> | null);
   viewDefinitionInspectionResult?: Record<string, unknown> | null;
   workflowDefinitionInspectionResult?: Record<string, unknown> | null;
   permissionPersonaPreviewResult?: Record<string, unknown> | null;
@@ -104,6 +107,7 @@ function createRegistry(overrides?: {
   viewQueryResult?: Record<string, unknown> | null;
   workflowHistoryResult?: Record<string, unknown>;
   workflowRunResult?: Record<string, unknown> | null;
+  workflowTestPreviewResult?: Record<string, unknown>;
   workflowDeadLetterReplayResult?:
     | {
         deadLetterId: string;
@@ -285,8 +289,13 @@ function createRegistry(overrides?: {
       }
     },
     tableSchemaInspector: {
-      read() {
-        return (overrides?.tableSchemaInspectionResult ??
+      read(input) {
+        const tableSchemaInspectionResult =
+          typeof overrides?.tableSchemaInspectionResult === "function"
+            ? overrides.tableSchemaInspectionResult(input)
+            : overrides?.tableSchemaInspectionResult;
+
+        return (tableSchemaInspectionResult ??
           {
             appId: "app_crm",
             fields: [
@@ -591,6 +600,23 @@ function createRegistry(overrides?: {
           }) as never;
       }
     },
+    workflowTestPreviewReader: {
+      read() {
+        return (overrides?.workflowTestPreviewResult ??
+          {
+            actions: [],
+            conditions: [],
+            diagnostics: [],
+            status: "ready",
+            trigger: {
+              matched: true,
+              recordId: "rec_demo"
+            },
+            workflowId: "wf_demo",
+            workflowVersionId: "wf_demo:v2"
+          }) as never;
+      }
+    },
     workflowOperatorRegistry,
     workspaceInspector: {
       inspect() {
@@ -821,6 +847,7 @@ describe("cloudtable agent tool registry", () => {
       "inspectTableSchema",
       "inspectViewDefinition",
       "inspectWorkflowDefinition",
+      "previewWorkflowTest",
       "explainPermissions",
       "previewPermissionPersona",
       "inspectRecord",
@@ -1251,6 +1278,79 @@ describe("cloudtable agent tool registry", () => {
         id: "wfr_demo_1",
         status: "dead_lettered",
         workflowId: "wf_demo"
+      }
+    });
+  });
+
+  it("routes selected-record workflow test previews through the dedicated preview reader", async () => {
+    const registry = createRegistry({
+      workflowTestPreviewResult: {
+        actions: [
+          {
+            diagnostics: [],
+            operatorId: "set_cell",
+            plan: {
+              aggregateAlias: "fld_revenue_sum",
+              kind: "reactive_rollup"
+            },
+            resolvedInput: {
+              fieldId: "fld_revenue_sum",
+              recordId: "rec_account_1"
+            },
+            wouldRun: true
+          }
+        ],
+        conditions: [],
+        diagnostics: [],
+        status: "ready",
+        trigger: {
+          matched: true,
+          recordId: "rec_ticket_1",
+          selectedFieldId: "fld_ticket_amount"
+        },
+        workflowId: "wf_demo",
+        workflowVersionId: "wf_demo:v2"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "previewWorkflowTest",
+      input: {
+        recordId: "rec_ticket_1",
+        selectedFieldId: "fld_ticket_amount",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(result).toEqual({
+      kind: "workflow-test-preview",
+      preview: {
+        actions: [
+          {
+            diagnostics: [],
+            operatorId: "set_cell",
+            plan: {
+              aggregateAlias: "fld_revenue_sum",
+              kind: "reactive_rollup"
+            },
+            resolvedInput: {
+              fieldId: "fld_revenue_sum",
+              recordId: "rec_account_1"
+            },
+            wouldRun: true
+          }
+        ],
+        conditions: [],
+        diagnostics: [],
+        status: "ready",
+        trigger: {
+          matched: true,
+          recordId: "rec_ticket_1",
+          selectedFieldId: "fld_ticket_amount"
+        },
+        workflowId: "wf_demo",
+        workflowVersionId: "wf_demo:v2"
       }
     });
   });
@@ -3258,6 +3358,481 @@ describe("cloudtable agent tool registry", () => {
               }
             ]
           }
+        }
+      }
+    });
+  });
+
+  it("drafts reactive rollup workflow proposal metadata and set_cell bindings", async () => {
+    const registry = createRegistry({
+      inspectedWorkspace: {
+        apps: [],
+        tables: [
+          {
+            fieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+            name: "Tickets",
+            tableId: "tbl_tickets",
+            view: {
+              fieldIds: [],
+              fields: {},
+              filterableFieldIds: [],
+              groupableFieldIds: [],
+              sortableFieldIds: []
+            },
+            viewIds: [],
+            workflow: { bindings: {} }
+          },
+          {
+            fieldIds: ["fld_revenue_sum"],
+            name: "Accounts",
+            tableId: "tbl_accounts",
+            view: {
+              fieldIds: [],
+              fields: {},
+              filterableFieldIds: [],
+              groupableFieldIds: [],
+              sortableFieldIds: []
+            },
+            viewIds: [],
+            workflow: { bindings: {} }
+          }
+        ],
+        views: [],
+        workflows: [],
+        workspaceId: "ws_demo"
+      },
+      tableSchemaInspectionResult(input) {
+        if (input.tableId === "tbl_accounts") {
+          return {
+            appId: "app_crm",
+            fields: [
+              {
+                config: {
+                  dependsOnFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+                  resultValueType: "number",
+                  rollup: {
+                    grouping: {
+                      sourceFieldId: "fld_ticket_account",
+                      strategy: "single_relation"
+                    },
+                    operandFieldId: "fld_ticket_amount",
+                    operationId: "sum_numbers",
+                    sourceTableId: "tbl_tickets"
+                  }
+                },
+                fieldId: "fld_revenue_sum",
+                fieldKey: "revenue_sum",
+                fieldType: "computed.readonly",
+                fieldTypeVersion: 1,
+                label: "Revenue Sum"
+              }
+            ],
+            schemaEpoch: 3,
+            tableId: "tbl_accounts",
+            tableName: "Accounts",
+            tableSchemaVersion: 2,
+            tableSlug: "accounts",
+            workflow: { bindings: {} },
+            workspaceId: "ws_demo"
+          };
+        }
+
+        return {
+          appId: "app_crm",
+          fields: [
+            {
+              config: {
+                allowMultiple: false,
+                targetTableId: "tbl_accounts"
+              },
+              fieldId: "fld_ticket_account",
+              fieldKey: "account",
+              fieldType: "relation.record",
+              fieldTypeVersion: 1,
+              label: "Account"
+            },
+            {
+              config: {},
+              fieldId: "fld_ticket_amount",
+              fieldKey: "amount",
+              fieldType: "number.decimal",
+              fieldTypeVersion: 1,
+              label: "Amount"
+            }
+          ],
+          schemaEpoch: 3,
+          tableId: "tbl_tickets",
+          tableName: "Tickets",
+          tableSchemaVersion: 2,
+          tableSlug: "tickets",
+          workflow: { bindings: {} },
+          workspaceId: "ws_demo"
+        };
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["set_cell"],
+        businessRule: "Roll ticket amount into account revenue.",
+        name: "Ticket revenue rollup",
+        rollupFieldIds: ["fld_revenue_sum"],
+        tableId: "tbl_tickets",
+        triggerId: "field_changed",
+        workflowId: "wf_ticket_revenue_rollup"
+      }
+    });
+
+    expect(result).toMatchObject({
+      diagnostics: [],
+      kind: "workflow-proposal",
+      proposal: {
+        actions: [
+          {
+            id: "set_cell",
+            proposalTemplate: {
+              fieldId: {
+                path: "relatedTables.rollup_fld_revenue_sum.row.fields.revenue_sum.fieldId"
+              },
+              fieldType: {
+                path: "relatedTables.rollup_fld_revenue_sum.row.fields.revenue_sum.fieldType"
+              },
+              recordId: {
+                path: "relatedTables.rollup_fld_revenue_sum.row.recordId"
+              },
+              tableId: {
+                path: "relatedTables.rollup_fld_revenue_sum.tableId"
+              },
+              value: {
+                path: "cell.value"
+              }
+            }
+          }
+        ],
+        metadata: {
+          aggregateDefinitions: [
+            {
+              alias: "fld_revenue_sum",
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "rollup_fld_revenue_sum"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "sum_numbers",
+              sourceRelationPath: "relatedTables.rollup_fld_revenue_sum",
+              targetFieldId: "fld_revenue_sum"
+            }
+          ],
+          relatedTableResolvers: [
+            {
+              alias: "rollup_fld_revenue_sum",
+              sourceFieldId: "fld_ticket_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            }
+          ],
+          rollupFieldIds: ["fld_revenue_sum"],
+          status: "draft",
+          tableId: "tbl_tickets"
+        }
+      },
+      command: {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "relatedTables.rollup_fld_revenue_sum.row.fields.revenue_sum.fieldId"
+                  },
+                  fieldType: {
+                    path: "relatedTables.rollup_fld_revenue_sum.row.fields.revenue_sum.fieldType"
+                  },
+                  recordId: {
+                    path: "relatedTables.rollup_fld_revenue_sum.row.recordId"
+                  },
+                  tableId: {
+                    path: "relatedTables.rollup_fld_revenue_sum.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            metadata: {
+              aggregateDefinitions: [
+                {
+                  alias: "fld_revenue_sum",
+                  groupingSource: {
+                    kind: "related_record",
+                    resolverAlias: "rollup_fld_revenue_sum"
+                  },
+                  operationId: "sum_numbers",
+                  sourceRelationPath: "relatedTables.rollup_fld_revenue_sum",
+                  targetFieldId: "fld_revenue_sum"
+                }
+              ],
+              relatedTableResolvers: [
+                {
+                  alias: "rollup_fld_revenue_sum",
+                  sourceFieldId: "fld_ticket_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ]
+            },
+            trigger: {
+              match: {
+                fieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            }
+          }
+        }
+      }
+    });
+  });
+
+  it("drafts cross-table sync workflow proposal metadata and sync_related_field bindings", async () => {
+    const registry = createRegistry({
+      inspectedWorkspace: {
+        apps: [],
+        tables: [
+          {
+            fieldIds: ["fld_ticket_account", "fld_ticket_status"],
+            name: "Tickets",
+            tableId: "tbl_tickets",
+            view: {
+              fieldIds: [],
+              fields: {},
+              filterableFieldIds: [],
+              groupableFieldIds: [],
+              sortableFieldIds: []
+            },
+            viewIds: [],
+            workflow: { bindings: {} }
+          },
+          {
+            fieldIds: ["fld_account_status"],
+            name: "Accounts",
+            tableId: "tbl_accounts",
+            view: {
+              fieldIds: [],
+              fields: {},
+              filterableFieldIds: [],
+              groupableFieldIds: [],
+              sortableFieldIds: []
+            },
+            viewIds: [],
+            workflow: { bindings: {} }
+          }
+        ],
+        views: [],
+        workflows: [],
+        workspaceId: "ws_demo"
+      },
+      tableSchemaInspectionResult(input) {
+        if (input.tableId === "tbl_accounts") {
+          return {
+            appId: "app_crm",
+            fields: [
+              {
+                config: {},
+                fieldId: "fld_account_status",
+                fieldKey: "account_status",
+                fieldType: "text.single_line",
+                fieldTypeVersion: 1,
+                label: "Account Status"
+              }
+            ],
+            schemaEpoch: 3,
+            tableId: "tbl_accounts",
+            tableName: "Accounts",
+            tableSchemaVersion: 2,
+            tableSlug: "accounts",
+            workflow: { bindings: {} },
+            workspaceId: "ws_demo"
+          };
+        }
+
+        return {
+          appId: "app_crm",
+          fields: [
+            {
+              config: {
+                allowMultiple: false,
+                targetTableId: "tbl_accounts"
+              },
+              fieldId: "fld_ticket_account",
+              fieldKey: "account",
+              fieldType: "relation.record",
+              fieldTypeVersion: 1,
+              label: "Account"
+            },
+            {
+              config: {},
+              fieldId: "fld_ticket_status",
+              fieldKey: "status",
+              fieldType: "text.single_line",
+              fieldTypeVersion: 1,
+              label: "Status"
+            }
+          ],
+          schemaEpoch: 3,
+          tableId: "tbl_tickets",
+          tableName: "Tickets",
+          tableSchemaVersion: 2,
+          tableSlug: "tickets",
+          workflow: { bindings: {} },
+          workspaceId: "ws_demo"
+        };
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["sync_related_field"],
+        businessRule: "Sync ticket status into the linked account status.",
+        name: "Ticket status sync",
+        relatedSourceFieldId: "fld_ticket_account",
+        syncSourceFieldId: "fld_ticket_status",
+        syncTargetFieldId: "fld_account_status",
+        tableId: "tbl_tickets",
+        triggerId: "field_changed",
+        workflowId: "wf_ticket_status_sync"
+      }
+    });
+
+    expect(result).toMatchObject({
+      diagnostics: [],
+      kind: "workflow-proposal",
+      proposal: {
+        actions: [
+          {
+            id: "sync_related_field",
+            proposalTemplate: {
+              resolverAlias: "sync_fld_account_status",
+              sourceFieldId: "fld_ticket_status",
+              targetFieldId: "fld_account_status"
+            }
+          }
+        ],
+        metadata: {
+          relatedTableResolvers: [
+            {
+              alias: "sync_fld_account_status",
+              sourceFieldId: "fld_ticket_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            }
+          ],
+          status: "draft",
+          tableId: "tbl_tickets"
+        }
+      },
+      command: {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  resolverAlias: "sync_fld_account_status",
+                  sourceFieldId: "fld_ticket_status",
+                  targetFieldId: "fld_account_status"
+                },
+                operatorId: "sync_related_field"
+              }
+            ],
+            metadata: {
+              relatedTableResolvers: [
+                {
+                  alias: "sync_fld_account_status",
+                  sourceFieldId: "fld_ticket_account",
+                  strategy: "single_relation",
+                  targetTableId: "tbl_accounts"
+                }
+              ]
+            },
+            trigger: {
+              match: {
+                fieldIds: ["fld_ticket_status", "fld_ticket_account"],
+                tableId: "tbl_tickets"
+              },
+              operatorId: "field_changed"
+            }
+          }
+        }
+      }
+    });
+  });
+
+  it("returns explicit diagnostics for invalid cross-table sync authoring inputs", async () => {
+    const registry = createRegistry({
+      tableSchemaInspectionResult: {
+        appId: "app_crm",
+        fields: [
+          {
+            config: {},
+            fieldId: "fld_ticket_region",
+            fieldKey: "region",
+            fieldType: "text.single_line",
+            fieldTypeVersion: 1,
+            label: "Region"
+          },
+          {
+            config: {},
+            fieldId: "fld_ticket_status",
+            fieldKey: "status",
+            fieldType: "text.single_line",
+            fieldTypeVersion: 1,
+            label: "Status"
+          }
+        ],
+        schemaEpoch: 3,
+        tableId: "tbl_tickets",
+        tableName: "Tickets",
+        tableSchemaVersion: 2,
+        tableSlug: "tickets",
+        workflow: { bindings: {} },
+        workspaceId: "ws_demo"
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["sync_related_field"],
+        businessRule: "Sync ticket status into accounts.",
+        name: "Ticket status sync invalid",
+        relatedSourceFieldId: "fld_ticket_region",
+        syncSourceFieldId: "fld_ticket_status",
+        syncTargetFieldId: "fld_account_status",
+        tableId: "tbl_tickets",
+        triggerId: "field_changed",
+        workflowId: "wf_ticket_status_sync_invalid"
+      }
+    });
+
+    expect(result).toMatchObject({
+      diagnostics: ["workflow_sync_authoring_relationship_missing:fld_ticket_region"],
+      kind: "workflow-proposal",
+      proposal: {
+        actions: [],
+        metadata: {
+          status: "draft",
+          tableId: "tbl_tickets"
         }
       }
     });

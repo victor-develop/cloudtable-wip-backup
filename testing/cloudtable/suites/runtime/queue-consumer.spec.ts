@@ -1928,6 +1928,468 @@ describe("workflow queue consumer", () => {
     expect(workflowMutationEvents.results).toHaveLength(1);
   });
 
+  it("executes single-relation sync maintenance backfill and recompute through the coordinator-owned cell writer", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_dest",
+        "ws_1",
+        "app_1",
+        "table-dest",
+        "Destination Table",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_dest"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_owner_status",
+      fieldKey: "owner_status",
+      fieldType: "text.single_line",
+      label: "Owner Status",
+      tableId: "tbl_dest"
+    });
+    insertRecord(db, {
+      recordId: "rec_1",
+      recordKey: "record-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_1",
+      recordKey: "dest-1",
+      tableId: "tbl_dest"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: ["rec_dest_1"]
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_source",
+      fieldType: "text.single_line",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "pending"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "draft"
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "sync_related_field",
+          input: {
+            resolverAlias: "destination",
+            sourceFieldId: "fld_source",
+            targetFieldId: "fld_owner_status"
+          }
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destination",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_dest"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      workflowId: "wf_sync_single",
+      workflowVersionId: "wf_sync_single:v1"
+    });
+
+    const syncMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        sync: {
+          alias: "destination:fld_source:fld_owner_status",
+          dependencyFieldIds: ["fld_account", "fld_source"],
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_dest"
+          },
+          sourceFieldId: "fld_source",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_owner_status",
+          targetTableId: "tbl_dest"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_sync_single",
+        workflowVersionId: "wf_sync_single:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([syncMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_owner_status",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest"
+    })).toBe("pending");
+    expect(
+      readEventMetadata(db, {
+        commandIdLike: "cmd:sync-maintenance:%",
+        tableId: "tbl_dest"
+      })
+    ).toMatchObject({
+      actor: {
+        mode: "workflow",
+        principalId: "wf_service"
+      },
+      coordinatorOwnedMutation: true,
+      permissionScopeHash: "scope:wf:status-sync",
+      permissionsVersion: 7,
+      schemaEpoch: 0,
+      scope: "table"
+    });
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: "approved",
+          valueType: "text.single_line",
+          version: 1
+        }),
+        "approved",
+        "approved",
+        JSON.stringify("approved"),
+        "evt_seed_sync_source_update",
+        "ws_1",
+        "tbl_1",
+        "rec_1",
+        "fld_source"
+      );
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...syncMessage,
+          eventId: "evt_sync_single_recompute",
+          payload: {
+            ...syncMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_source"],
+              eventId: "evt_sync_single_recompute",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_1"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_owner_status",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest"
+    })).toBe("approved");
+  });
+
+  it("executes value-matched sync maintenance backfill and recompute for matched target rows", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_dest",
+        "ws_1",
+        "app_1",
+        "table-dest",
+        "Destination Table",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_region",
+      fieldKey: "region",
+      fieldType: "text.single_line",
+      label: "Region",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_source",
+      fieldKey: "source",
+      fieldType: "text.single_line",
+      label: "Source",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_region_key",
+      fieldKey: "region_key",
+      fieldType: "text.single_line",
+      label: "Region Key",
+      tableId: "tbl_dest"
+    });
+    insertField(db, {
+      fieldId: "fld_owner_status",
+      fieldKey: "owner_status",
+      fieldType: "text.single_line",
+      label: "Owner Status",
+      tableId: "tbl_dest"
+    });
+    insertRecord(db, {
+      recordId: "rec_1",
+      recordKey: "record-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_1",
+      recordKey: "dest-1",
+      tableId: "tbl_dest"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_2",
+      recordKey: "dest-2",
+      tableId: "tbl_dest"
+    });
+    insertRecord(db, {
+      recordId: "rec_dest_3",
+      recordKey: "dest-3",
+      tableId: "tbl_dest"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_source",
+      fieldType: "text.single_line",
+      recordId: "rec_1",
+      tableId: "tbl_1",
+      value: "pending"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_2",
+      tableId: "tbl_dest",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_3",
+      tableId: "tbl_dest",
+      value: "emea"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_1",
+      tableId: "tbl_dest",
+      value: "draft"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_2",
+      tableId: "tbl_dest",
+      value: "draft"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_owner_status",
+      fieldType: "text.single_line",
+      recordId: "rec_dest_3",
+      tableId: "tbl_dest",
+      value: "draft"
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "sync_related_field",
+          input: {
+            resolverAlias: "destinations_by_region",
+            sourceFieldId: "fld_source",
+            targetFieldId: "fld_owner_status"
+          }
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destinations_by_region",
+            sourceFieldId: "fld_region",
+            strategy: "value_match",
+            targetFieldId: "fld_region_key",
+            targetTableId: "tbl_dest"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      workflowId: "wf_sync_region",
+      workflowVersionId: "wf_sync_region:v1"
+    });
+
+    const syncMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        sync: {
+          alias: "destinations_by_region:fld_source:fld_owner_status",
+          dependencyFieldIds: ["fld_region", "fld_source"],
+          resolver: {
+            sourceFieldId: "fld_region",
+            strategy: "value_match",
+            targetFieldId: "fld_region_key",
+            targetTableId: "tbl_dest"
+          },
+          sourceFieldId: "fld_source",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_owner_status",
+          targetTableId: "tbl_dest"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_sync_region",
+        workflowVersionId: "wf_sync_region:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([syncMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect((["rec_dest_1", "rec_dest_2", "rec_dest_3"] as const).map((recordId) => ({
+      recordId,
+      value: readCellRawValue(db, {
+        fieldId: "fld_owner_status",
+        recordId,
+        tableId: "tbl_dest"
+      })
+    }))).toEqual([
+      { recordId: "rec_dest_1", value: "pending" },
+      { recordId: "rec_dest_2", value: "pending" },
+      { recordId: "rec_dest_3", value: "draft" }
+    ]);
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: "approved",
+          valueType: "text.single_line",
+          version: 1
+        }),
+        "approved",
+        "approved",
+        JSON.stringify("approved"),
+        "evt_seed_sync_region_update",
+        "ws_1",
+        "tbl_1",
+        "rec_1",
+        "fld_source"
+      );
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...syncMessage,
+          eventId: "evt_sync_region_recompute",
+          payload: {
+            ...syncMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_source"],
+              eventId: "evt_sync_region_recompute",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_1"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect((["rec_dest_1", "rec_dest_2", "rec_dest_3"] as const).map((recordId) => ({
+      recordId,
+      value: readCellRawValue(db, {
+        fieldId: "fld_owner_status",
+        recordId,
+        tableId: "tbl_dest"
+      })
+    }))).toEqual([
+      { recordId: "rec_dest_1", value: "approved" },
+      { recordId: "rec_dest_2", value: "approved" },
+      { recordId: "rec_dest_3", value: "draft" }
+    ]);
+  });
+
   it("creates one workflow run and one workflow mutation across duplicate delivery", async () => {
     const { db, env, eventFanoutQueue, projectionQueue, workflowDispatchQueue, workflowStepQueue } =
       createEnv();
@@ -3651,6 +4113,149 @@ describe("workflow queue consumer", () => {
         },
         workflowId: "wf_status_sync",
         workflowVersionId: "wf_status_sync:v1"
+      }
+    });
+  });
+
+  it("routes sync backfill envelopes when sync-enabled workflows publish", async () => {
+    const { aggregateQueue, db, env, workflowDispatchQueue } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_source_status",
+      fieldKey: "source_status",
+      fieldType: "text.single_line",
+      label: "Source Status",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_status",
+      fieldKey: "account_status",
+      fieldType: "text.single_line",
+      label: "Account Status",
+      tableId: "tbl_accounts"
+    });
+    insertWorkflowDefinition(db, {
+      actions: [
+        {
+          operatorId: "sync_related_field",
+          input: {
+            resolverAlias: "destination",
+            sourceFieldId: "fld_source_status",
+            targetFieldId: "fld_account_status"
+          }
+        }
+      ],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destination",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      workflowId: "wf_sync_publish",
+      workflowVersionId: "wf_sync_publish:v1"
+    });
+    insertEventLedgerEntry(db, {
+      aggregateId: "wf_sync_publish",
+      commandId: "cmd_workflow_publish_sync",
+      eventId: "evt_workflow_publish_sync",
+      eventType: "workflow.published",
+      metadata: {
+        aggregateType: "workflow",
+        commandType: "workflow.publish"
+      },
+      payload: {
+        workflowId: "wf_sync_publish"
+      },
+      workspaceSequence: 1
+    });
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          kind: "event-fanout",
+          eventId: "evt_workflow_publish_sync",
+          payload: {
+            eventId: "evt_workflow_publish_sync"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(workflowDispatchQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent[0]).toMatchObject({
+      kind: "aggregate-maintenance",
+      eventId: "evt_workflow_publish_sync",
+      workspaceId: "ws_1",
+      payload: {
+        sync: {
+          alias: "destination:fld_source_status:fld_account_status",
+          dependencyFieldIds: ["fld_account", "fld_source_status"],
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceFieldId: "fld_source_status",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_account_status",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_sync_publish",
+        workflowVersionId: "wf_sync_publish:v1"
       }
     });
   });

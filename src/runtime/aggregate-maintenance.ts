@@ -59,6 +59,27 @@ type RoutedLookupDefinition = {
   valueFieldId: string;
 };
 
+type RoutedSyncDefinition = {
+  alias: string;
+  dependencyFieldIds: string[];
+  resolver:
+    | {
+        sourceFieldId: string;
+        strategy: "single_relation";
+        targetTableId: string;
+      }
+    | {
+        sourceFieldId: string;
+        strategy: "value_match";
+        targetFieldId: string;
+        targetTableId: string;
+      };
+  sourceFieldId: string;
+  sourceTableId: string;
+  targetFieldId: string;
+  targetTableId: string;
+};
+
 type AggregateTrigger =
   | {
       kind: "backfill";
@@ -81,6 +102,12 @@ type ParsedMaintenanceMessage =
     }
   | {
       lookup: RoutedLookupDefinition;
+      trigger: AggregateTrigger;
+      workflowId: string;
+      workflowVersionId: string;
+    }
+  | {
+      sync: RoutedSyncDefinition;
       trigger: AggregateTrigger;
       workflowId: string;
       workflowVersionId: string;
@@ -123,12 +150,14 @@ function parseAggregateMessage(message: CloudTableQueueMessage): ParsedMaintenan
   const payload = isRecord(message.payload) ? message.payload : null;
   const aggregate = payload && isRecord(payload.aggregate) ? payload.aggregate : null;
   const lookup = payload && isRecord(payload.lookup) ? payload.lookup : null;
+  const sync = payload && isRecord(payload.sync) ? payload.sync : null;
   const groupingSource = aggregate && isRecord(aggregate.groupingSource)
     ? aggregate.groupingSource
     : null;
   const lookupSource = lookup && isRecord(lookup.lookupSource) ? lookup.lookupSource : null;
   const resolver = aggregate && isRecord(aggregate.resolver) ? aggregate.resolver : null;
   const lookupResolver = lookup && isRecord(lookup.resolver) ? lookup.resolver : null;
+  const syncResolver = sync && isRecord(sync.resolver) ? sync.resolver : null;
   const operand = aggregate && isRecord(aggregate.operand) ? aggregate.operand : null;
   const trigger = payload && isRecord(payload.trigger) ? payload.trigger : null;
   const workflowId = readString(payload?.workflowId);
@@ -228,44 +257,92 @@ function parseAggregateMessage(message: CloudTableQueueMessage): ParsedMaintenan
   }
 
   if (!lookup || !lookupSource || !lookupResolver) {
-    return null;
+    if (!sync || !syncResolver) {
+      return null;
+    }
+  }
+  if (lookup && lookupSource && lookupResolver) {
+    const parsedLookup: RoutedLookupDefinition = {
+      alias: readString(lookup.alias) ?? "",
+      dependencyFieldIds: readStringArray(lookup.dependencyFieldIds),
+      lookupSource: {
+        kind: lookupSource.kind === "related_record" ? "related_record" : "related_record",
+        resolverAlias: readString(lookupSource.resolverAlias) ?? "",
+        sourceFieldId: readString(lookupSource.sourceFieldId) ?? ""
+      },
+      resolver: {
+        sourceFieldId: readString(lookupResolver.sourceFieldId) ?? "",
+        strategy: "single_relation",
+        targetTableId: readString(lookupResolver.targetTableId) ?? ""
+      },
+      sourceRelationPath: readString(lookup.sourceRelationPath) ?? "",
+      sourceTableId: readString(lookup.sourceTableId) ?? "",
+      targetFieldId: readString(lookup.targetFieldId) ?? "",
+      valueFieldId: readString(lookup.valueFieldId) ?? ""
+    };
+
+    if (
+      parsedLookup.alias.length === 0 ||
+      parsedLookup.lookupSource.resolverAlias.length === 0 ||
+      parsedLookup.lookupSource.sourceFieldId.length === 0 ||
+      parsedLookup.resolver.sourceFieldId.length === 0 ||
+      parsedLookup.resolver.targetTableId.length === 0 ||
+      parsedLookup.sourceRelationPath.length === 0 ||
+      parsedLookup.sourceTableId.length === 0 ||
+      parsedLookup.targetFieldId.length === 0 ||
+      parsedLookup.valueFieldId.length === 0
+    ) {
+      return null;
+    }
+
+    return {
+      lookup: parsedLookup,
+      trigger: parsedTrigger,
+      workflowId,
+      workflowVersionId
+    };
   }
 
-  const parsedLookup: RoutedLookupDefinition = {
-    alias: readString(lookup.alias) ?? "",
-    dependencyFieldIds: readStringArray(lookup.dependencyFieldIds),
-    lookupSource: {
-      kind: lookupSource.kind === "related_record" ? "related_record" : "related_record",
-      resolverAlias: readString(lookupSource.resolverAlias) ?? "",
-      sourceFieldId: readString(lookupSource.sourceFieldId) ?? ""
-    },
-    resolver: {
-      sourceFieldId: readString(lookupResolver.sourceFieldId) ?? "",
-      strategy: "single_relation",
-      targetTableId: readString(lookupResolver.targetTableId) ?? ""
-    },
-    sourceRelationPath: readString(lookup.sourceRelationPath) ?? "",
-    sourceTableId: readString(lookup.sourceTableId) ?? "",
-    targetFieldId: readString(lookup.targetFieldId) ?? "",
-    valueFieldId: readString(lookup.valueFieldId) ?? ""
+  const parsedSync: RoutedSyncDefinition = {
+    alias: readString(sync?.alias) ?? "",
+    dependencyFieldIds: readStringArray(sync?.dependencyFieldIds),
+    resolver:
+      syncResolver?.strategy === "value_match"
+        ? {
+            sourceFieldId: readString(syncResolver.sourceFieldId) ?? "",
+            strategy: "value_match",
+            targetFieldId: readString(syncResolver.targetFieldId) ?? "",
+            targetTableId: readString(syncResolver.targetTableId) ?? ""
+          }
+        : {
+            sourceFieldId: readString(syncResolver?.sourceFieldId) ?? "",
+            strategy: "single_relation",
+            targetTableId: readString(syncResolver?.targetTableId) ?? ""
+          },
+    sourceFieldId: readString(sync?.sourceFieldId) ?? "",
+    sourceTableId: readString(sync?.sourceTableId) ?? "",
+    targetFieldId: readString(sync?.targetFieldId) ?? "",
+    targetTableId: readString(sync?.targetTableId) ?? ""
   };
-
   if (
-    parsedLookup.alias.length === 0 ||
-    parsedLookup.lookupSource.resolverAlias.length === 0 ||
-    parsedLookup.lookupSource.sourceFieldId.length === 0 ||
-    parsedLookup.resolver.sourceFieldId.length === 0 ||
-    parsedLookup.resolver.targetTableId.length === 0 ||
-    parsedLookup.sourceRelationPath.length === 0 ||
-    parsedLookup.sourceTableId.length === 0 ||
-    parsedLookup.targetFieldId.length === 0 ||
-    parsedLookup.valueFieldId.length === 0
+    parsedSync.alias.length === 0 ||
+    parsedSync.resolver.sourceFieldId.length === 0 ||
+    parsedSync.sourceFieldId.length === 0 ||
+    parsedSync.sourceTableId.length === 0 ||
+    parsedSync.targetFieldId.length === 0 ||
+    parsedSync.targetTableId.length === 0
+  ) {
+    return null;
+  }
+  if (
+    parsedSync.resolver.strategy === "value_match" &&
+    parsedSync.resolver.targetFieldId.length === 0
   ) {
     return null;
   }
 
   return {
-    lookup: parsedLookup,
+    sync: parsedSync,
     trigger: parsedTrigger,
     workflowId,
     workflowVersionId
@@ -565,6 +642,148 @@ async function loadLookupNextValue(
   return parseRawCellValue(relatedValue?.value_json ?? null);
 }
 
+type SyncSourceRow = {
+  match_value_json?: string | null;
+  record_id: string;
+  source_value_json?: string | null;
+};
+
+async function loadSyncTargetFieldValues(
+  db: D1Database,
+  workspaceId: string,
+  sync: RoutedSyncDefinition
+): Promise<Map<string, JsonValue | null>> {
+  const rows = await db
+    .prepare(
+      `SELECT record_id, value_json
+       FROM cell_current
+       WHERE workspace_id = ? AND table_id = ? AND field_id = ?`
+    )
+    .bind(workspaceId, sync.targetTableId, sync.targetFieldId)
+    .all<CurrentTargetCellRow>();
+
+  return new Map(
+    (rows.results ?? []).map((row) => [row.record_id, parseRawCellValue(row.value_json)] as const)
+  );
+}
+
+async function loadSyncTargetRecordIdsByMatchKey(
+  db: D1Database,
+  workspaceId: string,
+  sync: RoutedSyncDefinition & {
+    resolver: {
+      sourceFieldId: string;
+      strategy: "value_match";
+      targetFieldId: string;
+      targetTableId: string;
+    };
+  }
+): Promise<Map<string, string[]>> {
+  const targetRows = await db
+    .prepare(
+      `SELECT
+         records.id AS record_id,
+         cell_current.value_json AS value_json
+       FROM records
+       LEFT JOIN cell_current
+         ON cell_current.workspace_id = records.workspace_id
+        AND cell_current.table_id = records.table_id
+        AND cell_current.record_id = records.id
+        AND cell_current.field_id = ?
+       WHERE records.workspace_id = ?
+         AND records.table_id = ?
+         AND records.archived_at IS NULL
+       ORDER BY records.id ASC`
+    )
+    .bind(sync.resolver.targetFieldId, workspaceId, sync.targetTableId)
+    .all<{ record_id: string; value_json: string | null }>();
+
+  const targetRecordIdsByKey = new Map<string, string[]>();
+  for (const row of targetRows.results ?? []) {
+    const key = scalarMatchKey(parseScalarCellValue(row.value_json));
+    if (!key) {
+      continue;
+    }
+
+    const recordIds = targetRecordIdsByKey.get(key) ?? [];
+    recordIds.push(row.record_id);
+    targetRecordIdsByKey.set(key, recordIds);
+  }
+
+  return targetRecordIdsByKey;
+}
+
+async function loadSyncSourceRows(
+  db: D1Database,
+  workspaceId: string,
+  sync: RoutedSyncDefinition,
+  sourceRecordIds?: readonly string[]
+): Promise<SyncSourceRow[]> {
+  const sourceRecordFilter =
+    sourceRecordIds && sourceRecordIds.length > 0
+      ? {
+          clause: ` AND records.id IN (${sourceRecordIds.map(() => "?").join(", ")})`,
+          values: [...sourceRecordIds]
+        }
+      : { clause: "", values: [] as string[] };
+
+  const matchFieldId = sync.resolver.sourceFieldId;
+  const rows = await db
+    .prepare(
+      `SELECT
+         records.id AS record_id,
+         source_cell.value_json AS source_value_json,
+         match_cell.value_json AS match_value_json
+       FROM records
+       LEFT JOIN cell_current AS source_cell
+         ON source_cell.workspace_id = records.workspace_id
+        AND source_cell.table_id = records.table_id
+        AND source_cell.record_id = records.id
+        AND source_cell.field_id = ?
+       LEFT JOIN cell_current AS match_cell
+         ON match_cell.workspace_id = records.workspace_id
+        AND match_cell.table_id = records.table_id
+        AND match_cell.record_id = records.id
+        AND match_cell.field_id = ?
+       WHERE records.workspace_id = ?
+         AND records.table_id = ?
+         AND records.archived_at IS NULL${sourceRecordFilter.clause}
+       ORDER BY records.id ASC`
+    )
+    .bind(
+      sync.sourceFieldId,
+      matchFieldId,
+      workspaceId,
+      sync.sourceTableId,
+      ...sourceRecordFilter.values
+    )
+    .all<SyncSourceRow>();
+
+  return rows.results ?? [];
+}
+
+async function loadFieldType(
+  db: D1Database,
+  input: { fieldId: string; tableId: string; workspaceId: string }
+): Promise<string> {
+  const row = await db
+    .prepare(
+      `SELECT field_type
+       FROM fields
+       WHERE workspace_id = ? AND table_id = ? AND id = ? AND archived_at IS NULL`
+    )
+    .bind(input.workspaceId, input.tableId, input.fieldId)
+    .first<{ field_type: string }>();
+
+  if (!row?.field_type) {
+    throw new Error(
+      `Field ${input.fieldId} was not found on table ${input.tableId} for maintenance dispatch.`
+    );
+  }
+
+  return row.field_type;
+}
+
 async function dispatchCoordinatorOwnedCellSet(
   env: CloudTableEnv,
   command: CommandEnvelope
@@ -682,6 +901,34 @@ function commandIdentityForLookupTarget(
   };
 }
 
+function commandIdentityForSyncTarget(
+  input: {
+    sourceRecordId: string;
+    sync: RoutedSyncDefinition;
+    targetRecordId: string;
+    trigger: AggregateTrigger;
+    workflowVersionId: string;
+  }
+): { commandId: string; idempotencyKey: string } {
+  const triggerIdentity =
+    input.trigger.kind === "backfill"
+      ? `backfill:${input.trigger.reason}`
+      : `recompute:${input.trigger.eventId ?? "manual"}`;
+  const baseKey = [
+    "sync-maintenance",
+    input.workflowVersionId,
+    input.sync.alias,
+    input.sourceRecordId,
+    input.targetRecordId,
+    triggerIdentity
+  ].join(":");
+
+  return {
+    commandId: `cmd:${baseKey}`,
+    idempotencyKey: `idem:${baseKey}`
+  };
+}
+
 export async function processAggregateMaintenanceMessage(
   env: CloudTableEnv,
   message: CloudTableQueueMessage
@@ -745,6 +992,89 @@ export async function processAggregateMaintenanceMessage(
         tableId: parsed.lookup.sourceTableId,
         workspaceId: message.workspaceId
       });
+    }
+
+    return;
+  }
+
+  if ("sync" in parsed) {
+    const targetFieldType = await loadFieldType(env.DB, {
+      fieldId: parsed.sync.targetFieldId,
+      tableId: parsed.sync.targetTableId,
+      workspaceId: message.workspaceId
+    });
+    const scopedSourceRecordIds =
+      parsed.trigger.kind === "recompute" && parsed.trigger.recordId
+        ? [parsed.trigger.recordId]
+        : undefined;
+    const [currentValues, sourceRows] = await Promise.all([
+      loadSyncTargetFieldValues(env.DB, message.workspaceId, parsed.sync),
+      loadSyncSourceRows(env.DB, message.workspaceId, parsed.sync, scopedSourceRecordIds)
+    ]);
+    const targetRecordIdsByMatchKey =
+      parsed.sync.resolver.strategy === "value_match"
+        ? await loadSyncTargetRecordIdsByMatchKey(
+            env.DB,
+            message.workspaceId,
+            parsed.sync as RoutedSyncDefinition & {
+              resolver: {
+                sourceFieldId: string;
+                strategy: "value_match";
+                targetFieldId: string;
+                targetTableId: string;
+              };
+            }
+          )
+        : null;
+
+    for (const row of sourceRows) {
+      const sourceValue = parseRawCellValue(row.source_value_json ?? null);
+      const targetRecordIds =
+        parsed.sync.resolver.strategy === "single_relation"
+          ? Array.from(
+              new Set(
+                (Array.isArray(parseRawCellValue(row.match_value_json ?? null))
+                  ? (parseRawCellValue(row.match_value_json ?? null) as JsonValue[])
+                  : [parseRawCellValue(row.match_value_json ?? null)]
+                ).filter(
+                  (recordId): recordId is string =>
+                    typeof recordId === "string" && recordId.length > 0
+                )
+              )
+            ).sort()
+          : (targetRecordIdsByMatchKey?.get(
+              scalarMatchKey(parseScalarCellValue(row.match_value_json ?? null)) ?? "__missing__"
+            ) ?? []);
+
+      for (const targetRecordId of targetRecordIds) {
+        const currentValue = currentValues.get(targetRecordId) ?? null;
+        if (JSON.stringify(currentValue) === JSON.stringify(sourceValue)) {
+          continue;
+        }
+
+        const identity = commandIdentityForSyncTarget({
+          sourceRecordId: row.record_id,
+          sync: parsed.sync,
+          targetRecordId,
+          trigger: parsed.trigger,
+          workflowVersionId: parsed.workflowVersionId
+        });
+        await dispatchCoordinatorOwnedCellSet(env, {
+          ...applyWorkflowServiceIdentity(workflowServiceIdentity),
+          commandId: identity.commandId,
+          commandType: "cell.set",
+          idempotencyKey: identity.idempotencyKey,
+          payload: {
+            fieldId: parsed.sync.targetFieldId,
+            fieldType: targetFieldType,
+            recordId: targetRecordId,
+            value: sourceValue
+          },
+          scope: "table",
+          tableId: parsed.sync.targetTableId,
+          workspaceId: message.workspaceId
+        });
+      }
     }
 
     return;

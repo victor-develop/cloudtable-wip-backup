@@ -23,6 +23,7 @@ import {
   requestWorkflowDeadLetterReplay
 } from "./workflow-operations";
 import { readWorkflowDefinitionMetadata } from "./workflow-definition";
+import { previewWorkflowTestRun } from "./workflow-runtime";
 import { createAppInspector } from "./app-inspector";
 import {
   readTableSchemaMetadata,
@@ -641,6 +642,11 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
       return readWorkflowHistoryForRun(env.DB, input.workspaceId, input.workflowRunId);
     }
   };
+  const workflowTestPreviewReader = {
+    read(input: { recordId: string; selectedFieldId?: string; workflowId: string; workspaceId: string }) {
+      return previewWorkflowTestRun(env, input);
+    }
+  };
   const workflowDeadLetterReplayRequester = {
     requestReplay(input: {
       actor: {
@@ -737,6 +743,7 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
     appInspector,
     activityHistoryReader,
     commandBus,
+    workflowTestPreviewReader,
     permissionPersonaPreviewReader,
     permissionEngine,
     tableSchemaInspector,
@@ -804,6 +811,11 @@ export function createRuntimeWithSnapshot(
   const workflowRunReader = {
     read(input: { workflowRunId: string; workspaceId: string }) {
       return readWorkflowHistoryForRun(env.DB, input.workspaceId, input.workflowRunId);
+    }
+  };
+  const workflowTestPreviewReader = {
+    read(input: { recordId: string; selectedFieldId?: string; workflowId: string; workspaceId: string }) {
+      return previewWorkflowTestRun(env, input);
     }
   };
   const workflowDeadLetterReplayRequester = {
@@ -905,6 +917,7 @@ export function createRuntimeWithSnapshot(
     appInspector,
     activityHistoryReader,
     commandBus,
+    workflowTestPreviewReader,
     permissionPersonaPreviewReader,
     permissionEngine,
     tableSchemaInspector,

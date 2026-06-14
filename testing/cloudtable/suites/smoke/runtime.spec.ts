@@ -1584,6 +1584,404 @@ describe("cloudtable runtime smoke", () => {
     });
   });
 
+  it("proves reactive rollup workflow proposal preview through the smoke runtime path", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+
+    insertPermissionSnapshot(db, {
+      commandTypes: ["field.create", "workflow.create"],
+      fields: {
+        fld_ticket_account: {
+          agent: true,
+          fieldId: "fld_ticket_account",
+          fieldType: "relation.record",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_ticket_amount: {
+          agent: true,
+          fieldId: "fld_ticket_amount",
+          fieldType: "number.decimal",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_account_revenue_rollup: {
+          agent: true,
+          fieldId: "fld_account_revenue_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: false
+        }
+      },
+      policyRevision: 46,
+      principalId: "usr_owner",
+      scopeHash: "scope:table:tbl_1"
+    });
+
+    insertField(db, {
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      },
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      config: {
+        dependsOnFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_ticket_amount",
+          operationId: "sum_numbers",
+          sourceTableId: "tbl_1"
+        }
+      },
+      fieldId: "fld_account_revenue_rollup",
+      fieldKey: "revenue_sum",
+      fieldType: "computed.readonly",
+      label: "Revenue Sum",
+      tableId: "tbl_accounts"
+    });
+
+    const previewResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["set_cell"],
+            businessRule: "Roll ticket amount into account revenue.",
+            name: "Ticket revenue rollup smoke",
+            rollupFieldIds: ["fld_account_revenue_rollup"],
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_ticket_revenue_rollup_smoke"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 46,
+          principalId: "usr_owner",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(previewResponse.status).toBe(200);
+    expect(
+      (await previewResponse.json()) as {
+        output: {
+          command: {
+            payload: {
+              definition: {
+                actions: unknown[];
+                metadata: Record<string, unknown>;
+                trigger: {
+                  match: {
+                    fieldIds: string[];
+                  };
+                };
+              };
+            };
+          };
+          proposal: {
+            metadata: Record<string, unknown>;
+          };
+        };
+      }
+    ).toMatchObject({
+      output: {
+        proposal: {
+          metadata: {
+            aggregateDefinitions: [
+              {
+                alias: "fld_account_revenue_rollup",
+                operationId: "sum_numbers",
+                targetFieldId: "fld_account_revenue_rollup"
+              }
+            ],
+            relatedTableResolvers: [
+              {
+                alias: "rollup_fld_account_revenue_rollup",
+                sourceFieldId: "fld_ticket_account",
+                strategy: "single_relation",
+                targetTableId: "tbl_accounts"
+              }
+            ],
+            rollupFieldIds: ["fld_account_revenue_rollup"]
+          }
+        },
+        command: {
+          payload: {
+            definition: {
+              actions: [
+                {
+                  input: {
+                    fieldId: {
+                      path:
+                        "relatedTables.rollup_fld_account_revenue_rollup.row.fields.revenue_sum.fieldId"
+                    },
+                    fieldType: {
+                      path:
+                        "relatedTables.rollup_fld_account_revenue_rollup.row.fields.revenue_sum.fieldType"
+                    },
+                    recordId: {
+                      path: "relatedTables.rollup_fld_account_revenue_rollup.row.recordId"
+                    },
+                    tableId: {
+                      path: "relatedTables.rollup_fld_account_revenue_rollup.tableId"
+                    },
+                    value: {
+                      path: "cell.value"
+                    }
+                  },
+                  operatorId: "set_cell"
+                }
+              ],
+              metadata: {
+                aggregateDefinitions: [
+                  {
+                    alias: "fld_account_revenue_rollup",
+                    operationId: "sum_numbers",
+                    targetFieldId: "fld_account_revenue_rollup"
+                  }
+                ]
+              },
+              trigger: {
+                match: {
+                  fieldIds: ["fld_ticket_account", "fld_ticket_amount"]
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+  });
+
+  it("proves direct cross-table sync workflow proposal preview through the smoke runtime path", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+
+    insertPermissionSnapshot(db, {
+      commandTypes: ["workflow.create"],
+      fields: {
+        fld_ticket_account: {
+          agent: true,
+          fieldId: "fld_ticket_account",
+          fieldType: "relation.record",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_ticket_status: {
+          agent: true,
+          fieldId: "fld_ticket_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_account_status: {
+          agent: true,
+          fieldId: "fld_account_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      policyRevision: 54,
+      principalId: "usr_owner",
+      scopeHash: "scope:table:tbl_1"
+    });
+
+    insertField(db, {
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      },
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_status",
+      fieldKey: "status",
+      fieldType: "text.single_line",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_status",
+      fieldKey: "account_status",
+      fieldType: "text.single_line",
+      label: "Account Status",
+      tableId: "tbl_accounts"
+    });
+
+    const previewResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["sync_related_field"],
+            businessRule: "Sync ticket status into the linked account status.",
+            name: "Ticket status sync smoke",
+            relatedSourceFieldId: "fld_ticket_account",
+            syncSourceFieldId: "fld_ticket_status",
+            syncTargetFieldId: "fld_account_status",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_ticket_status_sync_smoke"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 54,
+          principalId: "usr_owner",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(previewResponse.status).toBe(200);
+    expect(
+      (await previewResponse.json()) as {
+        output: {
+          command: {
+            payload: {
+              definition: {
+                actions: unknown[];
+                metadata: Record<string, unknown>;
+                trigger: {
+                  match: {
+                    fieldIds: string[];
+                  };
+                };
+              };
+            };
+          };
+          proposal: {
+            metadata: Record<string, unknown>;
+          };
+        };
+      }
+    ).toMatchObject({
+      output: {
+        proposal: {
+          metadata: {
+            relatedTableResolvers: [
+              {
+                alias: "sync_fld_account_status",
+                sourceFieldId: "fld_ticket_account",
+                strategy: "single_relation",
+                targetTableId: "tbl_accounts"
+              }
+            ]
+          }
+        },
+        command: {
+          payload: {
+            definition: {
+              actions: [
+                {
+                  input: {
+                    resolverAlias: "sync_fld_account_status",
+                    sourceFieldId: "fld_ticket_status",
+                    targetFieldId: "fld_account_status"
+                  },
+                  operatorId: "sync_related_field"
+                }
+              ],
+              metadata: {
+                relatedTableResolvers: [
+                  {
+                    alias: "sync_fld_account_status",
+                    sourceFieldId: "fld_ticket_account",
+                    strategy: "single_relation",
+                    targetTableId: "tbl_accounts"
+                  }
+                ]
+              },
+              trigger: {
+                match: {
+                  fieldIds: ["fld_ticket_status", "fld_ticket_account"]
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+  });
+
   it("proves owner-filtered saved-view query parity through the smoke runtime path", async () => {
     const { db, env } = createEnv();
 

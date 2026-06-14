@@ -1,5 +1,6 @@
 import type { CommandBus } from "../commands/command-bus";
 import type { CommandEnvelope } from "../commands/types";
+import { readComputedFieldConfig } from "../field-types/computed";
 import type {
   EffectivePermissionSnapshot,
   PermissionEngine,
@@ -12,8 +13,11 @@ import { serializeWorkflowOperatorManifest } from "../workflows/manifest";
 import type {
   WorkflowActionDefinition,
   WorkflowActionManifest,
+  WorkflowAggregateDefinition,
   WorkflowAuthoringMetadata,
+  WorkflowDefinitionMetadata,
   WorkflowOperatorRegistry,
+  WorkflowRelatedTableResolver,
   WorkflowTriggerDefinition,
   WorkflowTriggerManifest
 } from "../workflows/types";
@@ -36,6 +40,7 @@ import type {
   WorkflowDefinitionInspector,
   WorkflowHistoryReader,
   WorkflowRunReader,
+  WorkflowTestPreviewReader,
   WorkspaceInspector
 } from "./types";
 
@@ -48,6 +53,7 @@ type CreateAgentToolRegistryDeps = {
   tableSchemaInspector: TableSchemaInspector;
   viewDefinitionInspector: ViewDefinitionInspector;
   workflowDefinitionInspector: WorkflowDefinitionInspector;
+  workflowTestPreviewReader?: WorkflowTestPreviewReader;
   permissionPersonaPreviewReader: PermissionPersonaPreviewReader;
   recordInspector: RecordInspector;
   viewQueryReader: ViewQueryReader;
@@ -359,6 +365,38 @@ const tools: AgentToolDefinition[] = [
       type: "object"
     },
     phase: "draft",
+    requiresConfirmation: false,
+    scope: "workflow"
+  },
+  {
+    binding: {
+      kind: "query-service",
+      service: "workflowTestPreviewReader"
+    },
+    description:
+      "Preview a selected-record reactive workflow run without committing mutations, including trigger, condition, action, and permission diagnostics.",
+    fieldBinding: "none",
+    id: "previewWorkflowTest",
+    inputSchema: {
+      properties: {
+        recordId: jsonStringSchema,
+        selectedFieldId: jsonStringSchema,
+        workflowId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        preview: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
     requiresConfirmation: false,
     scope: "workflow"
   },
@@ -1491,7 +1529,15 @@ const tools: AgentToolDefinition[] = [
           items: jsonStringSchema,
           type: "array"
         },
+        relatedSourceFieldId: jsonStringSchema,
+        relatedTargetFieldId: jsonStringSchema,
+        rollupFieldIds: {
+          items: jsonStringSchema,
+          type: "array"
+        },
         name: jsonStringSchema,
+        syncSourceFieldId: jsonStringSchema,
+        syncTargetFieldId: jsonStringSchema,
         tableId: jsonStringSchema,
         triggerId: jsonStringSchema,
         workflowId: jsonStringSchema
@@ -1800,6 +1846,7 @@ export function createAgentToolRegistry({
   tableSchemaInspector,
   viewDefinitionInspector,
   workflowDefinitionInspector,
+  workflowTestPreviewReader,
   permissionPersonaPreviewReader,
   recordInspector,
   viewQueryReader,
@@ -1852,6 +1899,21 @@ export function createAgentToolRegistry({
           return {
             kind: "workflow-definition-inspection",
             workflow: await Promise.resolve(workflowDefinitionInspector.read(invocation.input))
+          };
+        case "previewWorkflowTest":
+          return {
+            kind: "workflow-test-preview",
+            preview: await Promise.resolve(
+              workflowTestPreviewReader?.read(invocation.input) ?? {
+                diagnostics: ["workflow_test_preview_unavailable"],
+                message: "Workflow test preview reader is not configured.",
+                reason: "workflow_test_preview_unavailable",
+                status: "rejected",
+                trigger: {},
+                workflowId: invocation.input.workflowId,
+                workflowVersionId: null
+              }
+            )
           };
         case "explainPermissions": {
           const fieldType = invocation.input.fieldType;
@@ -2174,6 +2236,32 @@ export function createAgentToolRegistry({
             })
           );
           const authoringMetadata = readWorkflowAuthoringMetadata(tableSchema);
+          const setCellAction = workflowOperatorRegistry.get("set_cell");
+          const syncRelatedFieldAction = workflowOperatorRegistry.get("sync_related_field");
+          const crossTableSync = await buildCrossTableSyncProposalTemplate({
+            diagnostics,
+            relatedSourceFieldId: invocation.input.relatedSourceFieldId,
+            relatedTargetFieldId: invocation.input.relatedTargetFieldId,
+            sourceTableId: invocation.input.tableId,
+            syncRelatedFieldAction:
+              syncRelatedFieldAction && syncRelatedFieldAction.kind === "action"
+                ? syncRelatedFieldAction
+                : null,
+            syncSourceFieldId: invocation.input.syncSourceFieldId,
+            syncTargetFieldId: invocation.input.syncTargetFieldId,
+            tableSchemaInspector,
+            workspaceId: invocation.input.workspaceId,
+            workspaceInspector
+          });
+          const reactiveRollup = await buildReactiveRollupProposalTemplate({
+            diagnostics,
+            rollupFieldIds: invocation.input.rollupFieldIds ?? [],
+            setCellAction: setCellAction && setCellAction.kind === "action" ? setCellAction : null,
+            sourceTableId: invocation.input.tableId,
+            tableSchemaInspector,
+            workspaceId: invocation.input.workspaceId,
+            workspaceInspector
+          });
           const trigger = workflowOperatorRegistry.get(invocation.input.triggerId);
           const triggerManifest =
             trigger && trigger.kind === "trigger"
@@ -2195,18 +2283,77 @@ export function createAgentToolRegistry({
 
             return [action];
           });
-          const draftedActionBindings = actions.map((action) => ({
-            input: cloneWorkflowActionInput(action.proposalTemplate),
-            operatorId: action.id
-          }));
+          const hasCrossTableSyncInputs =
+            invocation.input.syncSourceFieldId !== undefined ||
+            invocation.input.syncTargetFieldId !== undefined ||
+            invocation.input.relatedSourceFieldId !== undefined ||
+            invocation.input.relatedTargetFieldId !== undefined;
+          const draftedActionBindings = [
+            ...(crossTableSync.action ? [crossTableSync.action] : []),
+            ...reactiveRollup.actions,
+            ...actions
+              .filter(
+                (action) =>
+                  action.id !== "set_cell" &&
+                  !(
+                    (crossTableSync.action !== null || hasCrossTableSyncInputs) &&
+                    action.id === "sync_related_field"
+                  )
+              )
+              .map((action) => ({
+                input: cloneWorkflowActionInput(action.proposalTemplate),
+                operatorId: action.id
+              }))
+          ];
+          const proposalActions = [
+            ...(crossTableSync.actionProposal ? [crossTableSync.actionProposal] : []),
+            ...reactiveRollup.actionProposals,
+            ...actions
+              .filter(
+                (action) =>
+                  action.id !== "set_cell" &&
+                  !(
+                    (crossTableSync.actionProposal !== null || hasCrossTableSyncInputs) &&
+                    action.id === "sync_related_field"
+                  )
+              )
+              .map(toWorkflowActionProposal)
+          ];
+          const proposalMetadataEntries = [
+            crossTableSync.metadata,
+            reactiveRollup.metadata
+          ].filter((entry): entry is WorkflowDefinitionMetadata => entry !== null);
+          const proposalMetadata: WorkflowDefinitionMetadata = {
+            businessRule: invocation.input.businessRule,
+            name: invocation.input.name,
+            ...mergeWorkflowDefinitionMetadata(proposalMetadataEntries),
+            status: "draft",
+            tableId: invocation.input.tableId
+          };
+          const triggerFieldIds =
+            invocation.input.fieldIds && invocation.input.fieldIds.length > 0
+              ? invocation.input.fieldIds
+              : [
+                  ...new Set([
+                    ...crossTableSync.triggerFieldIds,
+                    ...reactiveRollup.triggerFieldIds
+                  ])
+                ];
+          const conditionFieldIds =
+            invocation.input.fieldIds && invocation.input.fieldIds.length > 0
+              ? invocation.input.fieldIds
+              : crossTableSync.triggerFieldIds.length > 0
+                ? [crossTableSync.triggerFieldIds[0]!]
+                : reactiveRollup.triggerFieldIds;
 
           const proposal = {
-            actions: actions.map(toWorkflowActionProposal),
+            actions: proposalActions,
             businessRule: invocation.input.businessRule,
             conditions: draftWorkflowConditionsFromMetadata(authoringMetadata, {
               businessRule: invocation.input.businessRule,
-              fieldIds: invocation.input.fieldIds
+              fieldIds: conditionFieldIds
             }),
+            metadata: proposalMetadata,
             name: invocation.input.name,
             tableId: invocation.input.tableId,
             trigger: triggerManifest,
@@ -2216,12 +2363,7 @@ export function createAgentToolRegistry({
             definition: {
               actions: draftedActionBindings,
               conditions: proposal.conditions,
-              metadata: {
-                businessRule: invocation.input.businessRule,
-                name: invocation.input.name,
-                status: "draft",
-                tableId: invocation.input.tableId
-              },
+              metadata: proposalMetadata,
               principal: {
                 policyRevision: invocation.input.permissionsVersion,
                 principalId: invocation.input.actor.principalId,
@@ -2230,7 +2372,7 @@ export function createAgentToolRegistry({
               },
               trigger: {
                 match: {
-                  fieldIds: invocation.input.fieldIds ?? [],
+                  fieldIds: triggerFieldIds ?? [],
                   tableId: invocation.input.tableId
                 },
                 operatorId: invocation.input.triggerId
@@ -2333,7 +2475,11 @@ export function createAgentToolRegistry({
     },
     sanitizeInput(toolId, payload, fields, snapshot) {
       const tool = this.require(toolId);
-      if (toolId === "explainPermissions" || toolId === "previewPermissionPersona") {
+      if (
+        toolId === "explainPermissions" ||
+        toolId === "previewPermissionPersona" ||
+        toolId === "previewWorkflowTest"
+      ) {
         return {
           diagnostics: [],
           hiddenFieldIds: [],
@@ -2344,7 +2490,11 @@ export function createAgentToolRegistry({
     },
     sanitizeOutput(toolId, payload, fields, snapshot) {
       const tool = this.require(toolId);
-      if (toolId === "explainPermissions" || toolId === "previewPermissionPersona") {
+      if (
+        toolId === "explainPermissions" ||
+        toolId === "previewPermissionPersona" ||
+        toolId === "previewWorkflowTest"
+      ) {
         return {
           diagnostics: [],
           hiddenFieldIds: [],
@@ -2534,8 +2684,54 @@ function toWorkflowActionProposal(action: WorkflowActionDefinition): WorkflowAct
   return serializeWorkflowOperatorManifest(action) as WorkflowActionManifest;
 }
 
+function cloneWorkflowActionManifest(
+  action: WorkflowActionDefinition,
+  proposalTemplate: Record<string, unknown>
+): WorkflowActionManifest {
+  return {
+    ...(serializeWorkflowOperatorManifest(action) as WorkflowActionManifest),
+    proposalTemplate: cloneWorkflowActionInput(proposalTemplate)
+  };
+}
+
 function cloneWorkflowActionInput(input: Record<string, unknown>): Record<string, unknown> {
   return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
+}
+
+function mergeWorkflowDefinitionMetadata(
+  entries: readonly WorkflowDefinitionMetadata[]
+): WorkflowDefinitionMetadata {
+  const merged: WorkflowDefinitionMetadata = {};
+  for (const entry of entries) {
+    Object.assign(merged, entry);
+  }
+
+  const aggregateDefinitions = entries.flatMap((entry) => entry.aggregateDefinitions ?? []);
+  if (aggregateDefinitions.length > 0) {
+    merged.aggregateDefinitions = aggregateDefinitions;
+  }
+
+  const lookupDefinitions = entries.flatMap((entry) => entry.lookupDefinitions ?? []);
+  if (lookupDefinitions.length > 0) {
+    merged.lookupDefinitions = lookupDefinitions;
+  }
+
+  const relatedTableResolvers = entries.flatMap((entry) => entry.relatedTableResolvers ?? []);
+  if (relatedTableResolvers.length > 0) {
+    merged.relatedTableResolvers = relatedTableResolvers;
+  }
+
+  const lookupFieldIds = entries.flatMap((entry) => entry.lookupFieldIds ?? []);
+  if (lookupFieldIds.length > 0) {
+    merged.lookupFieldIds = Array.from(new Set(lookupFieldIds));
+  }
+
+  const rollupFieldIds = entries.flatMap((entry) => entry.rollupFieldIds ?? []);
+  if (rollupFieldIds.length > 0) {
+    merged.rollupFieldIds = Array.from(new Set(rollupFieldIds));
+  }
+
+  return merged;
 }
 
 function readWorkflowAuthoringMetadata(value: unknown): WorkflowAuthoringMetadata {
@@ -2686,4 +2882,594 @@ function sanitizeUnknown(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type ResolvedReactiveRollupProposal = {
+  actionProposals: WorkflowActionManifest[];
+  actions: Array<{
+    input: Record<string, unknown>;
+    operatorId: string;
+  }>;
+  metadata: WorkflowDefinitionMetadata | null;
+  triggerFieldIds: string[];
+};
+
+type ParsedProposalField = {
+  config: unknown;
+  fieldId: string;
+  fieldKey: string;
+  fieldType: string;
+};
+
+type ResolvedCrossTableSyncProposal = {
+  actionProposal: WorkflowActionManifest | null;
+  action: {
+    input: Record<string, unknown>;
+    operatorId: string;
+  } | null;
+  metadata: WorkflowDefinitionMetadata | null;
+  triggerFieldIds: string[];
+};
+
+async function buildReactiveRollupProposalTemplate(input: {
+  diagnostics: string[];
+  rollupFieldIds: readonly string[];
+  setCellAction: WorkflowActionDefinition | null;
+  sourceTableId: string;
+  tableSchemaInspector: TableSchemaInspector;
+  workspaceId: string;
+  workspaceInspector: WorkspaceInspector;
+}): Promise<ResolvedReactiveRollupProposal> {
+  if (input.rollupFieldIds.length === 0) {
+    return {
+      actionProposals: [],
+      actions: [],
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  const workspace = await Promise.resolve(
+    input.workspaceInspector.inspect({
+      include: ["tables"],
+      workspaceId: input.workspaceId
+    })
+  );
+  const tableIdByFieldId = new Map<string, string>();
+  for (const table of workspace.tables) {
+    for (const fieldId of table.fieldIds) {
+      tableIdByFieldId.set(fieldId, table.tableId);
+    }
+  }
+
+  if (input.setCellAction === null) {
+    input.diagnostics.push("missing_rollup_set_cell_action");
+    return {
+      actionProposals: [],
+      actions: [],
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  const relatedTableResolvers: WorkflowRelatedTableResolver[] = [];
+  const aggregateDefinitions: WorkflowAggregateDefinition[] = [];
+  const actionBindings: Array<{
+    input: Record<string, unknown>;
+    operatorId: string;
+  }> = [];
+  const actionProposals: WorkflowActionManifest[] = [];
+  const triggerFieldIds = new Set<string>();
+
+  for (const rollupFieldId of input.rollupFieldIds) {
+    const owningTableId = tableIdByFieldId.get(rollupFieldId);
+    if (!owningTableId) {
+      input.diagnostics.push(`unknown_rollup_field:${rollupFieldId}`);
+      continue;
+    }
+
+    const schema = await Promise.resolve(
+      input.tableSchemaInspector.read({
+        tableId: owningTableId,
+        workspaceId: input.workspaceId
+      })
+    );
+    const parsedSchema = parseTableSchemaForProposal(schema);
+    const field = parsedSchema.fields.find((entry) => entry.fieldId === rollupFieldId);
+    if (!field) {
+      input.diagnostics.push(`unknown_rollup_field:${rollupFieldId}`);
+      continue;
+    }
+    if (field.fieldType !== "computed.readonly") {
+      input.diagnostics.push(`rollup_field_type_invalid:${rollupFieldId}:${field.fieldType}`);
+      continue;
+    }
+
+    const rollup = readComputedFieldConfig(field.config)?.rollup;
+    if (!rollup) {
+      input.diagnostics.push(`rollup_field_config_missing:${rollupFieldId}`);
+      continue;
+    }
+    if (rollup.sourceTableId !== input.sourceTableId) {
+      input.diagnostics.push(
+        `rollup_field_source_table_mismatch:${rollupFieldId}:${rollup.sourceTableId}:${input.sourceTableId}`
+      );
+      continue;
+    }
+
+    const resolverAlias = `rollup_${rollupFieldId}`;
+    const resolver =
+      rollup.grouping.strategy === "value_match"
+        ? ({
+            alias: resolverAlias,
+            sourceFieldId: rollup.grouping.sourceFieldId,
+            strategy: "value_match",
+            targetFieldId: rollup.grouping.targetFieldId,
+            targetTableId: parsedSchema.tableId
+          } satisfies WorkflowRelatedTableResolver)
+        : ({
+            alias: resolverAlias,
+            sourceFieldId: rollup.grouping.sourceFieldId,
+            strategy: "single_relation",
+            targetTableId: parsedSchema.tableId
+          } satisfies WorkflowRelatedTableResolver);
+    relatedTableResolvers.push(resolver);
+    triggerFieldIds.add(rollup.grouping.sourceFieldId);
+    if (rollup.operandFieldId) {
+      triggerFieldIds.add(rollup.operandFieldId);
+    }
+    const extraDependencyFieldIds = readDependencyFieldIds(field.config).filter(
+      (dependencyFieldId) =>
+        dependencyFieldId !== rollup.grouping.sourceFieldId &&
+        dependencyFieldId !== rollup.operandFieldId
+    );
+    for (const dependencyFieldId of extraDependencyFieldIds) {
+      triggerFieldIds.add(dependencyFieldId);
+    }
+
+    aggregateDefinitions.push({
+      alias: rollupFieldId,
+      ...(extraDependencyFieldIds.length > 0
+        ? {
+            dependencyFieldIds: extraDependencyFieldIds
+          }
+        : {}),
+      groupingSource: {
+        kind: "related_record",
+        resolverAlias
+      },
+      ...(rollup.operandFieldId
+        ? {
+            operand: {
+              fieldId: rollup.operandFieldId,
+              kind: "source_field" as const,
+              valueType: "number" as const
+            }
+          }
+        : {}),
+      ...(rollup.operationConfig ? { operationConfig: rollup.operationConfig } : {}),
+      operationId: rollup.operationId,
+      sourceRelationPath: `relatedTables.${resolverAlias}`,
+      targetFieldId: rollupFieldId
+    });
+
+    const actionInput = {
+      fieldId: {
+        path: `relatedTables.${resolverAlias}.row.fields.${field.fieldKey}.fieldId`
+      },
+      fieldType: {
+        path: `relatedTables.${resolverAlias}.row.fields.${field.fieldKey}.fieldType`
+      },
+      recordId: {
+        path: `relatedTables.${resolverAlias}.row.recordId`
+      },
+      tableId: {
+        path: `relatedTables.${resolverAlias}.tableId`
+      },
+      value: {
+        path: "cell.value"
+      }
+    };
+    actionBindings.push({
+      input: actionInput,
+      operatorId: "set_cell"
+    });
+    actionProposals.push(cloneWorkflowActionManifest(input.setCellAction, actionInput));
+  }
+
+  if (aggregateDefinitions.length === 0 || relatedTableResolvers.length === 0) {
+    return {
+      actionProposals,
+      actions: actionBindings,
+      metadata: null,
+      triggerFieldIds: [...triggerFieldIds]
+    };
+  }
+
+  return {
+    actionProposals,
+    actions: actionBindings,
+    metadata: {
+      aggregateDefinitions,
+      relatedTableResolvers,
+      rollupFieldIds: [...input.rollupFieldIds]
+    },
+    triggerFieldIds: [...triggerFieldIds]
+  };
+}
+
+function parseTableSchemaForProposal(value: unknown): {
+  fields: ParsedProposalField[];
+  tableId: string;
+} {
+  if (!isRecord(value) || typeof value.tableId !== "string" || !Array.isArray(value.fields)) {
+    return {
+      fields: [],
+      tableId: ""
+    };
+  }
+
+  return {
+    fields: value.fields.flatMap((entry) => {
+      if (
+        !isRecord(entry) ||
+        typeof entry.fieldId !== "string" ||
+        typeof entry.fieldKey !== "string" ||
+        typeof entry.fieldType !== "string"
+      ) {
+        return [];
+      }
+
+      return [
+        {
+          config: entry.config,
+          fieldId: entry.fieldId,
+          fieldKey: entry.fieldKey,
+          fieldType: entry.fieldType
+        }
+      ];
+    }),
+    tableId: value.tableId
+  };
+}
+
+function readDependencyFieldIds(config: unknown): string[] {
+  if (!isRecord(config) || !Array.isArray(config.dependsOnFieldIds)) {
+    return [];
+  }
+
+  return config.dependsOnFieldIds.filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0
+  );
+}
+
+async function buildCrossTableSyncProposalTemplate(input: {
+  diagnostics: string[];
+  relatedSourceFieldId?: string;
+  relatedTargetFieldId?: string;
+  sourceTableId: string;
+  syncRelatedFieldAction: WorkflowActionDefinition | null;
+  syncSourceFieldId?: string;
+  syncTargetFieldId?: string;
+  tableSchemaInspector: TableSchemaInspector;
+  workspaceId: string;
+  workspaceInspector: WorkspaceInspector;
+}): Promise<ResolvedCrossTableSyncProposal> {
+  const hasAnySyncInput =
+    input.syncSourceFieldId !== undefined ||
+    input.syncTargetFieldId !== undefined ||
+    input.relatedSourceFieldId !== undefined ||
+    input.relatedTargetFieldId !== undefined;
+  if (!hasAnySyncInput) {
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  if (!input.syncSourceFieldId || !input.syncTargetFieldId || !input.relatedSourceFieldId) {
+    if (!input.syncSourceFieldId) {
+      input.diagnostics.push("workflow_sync_authoring_source_field_missing");
+    }
+    if (!input.syncTargetFieldId) {
+      input.diagnostics.push("workflow_sync_authoring_target_field_missing");
+    }
+    if (!input.relatedSourceFieldId) {
+      input.diagnostics.push("workflow_sync_authoring_related_source_field_missing");
+    }
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  if (input.syncRelatedFieldAction === null) {
+    input.diagnostics.push("missing_sync_related_field_action");
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  const workspace = await Promise.resolve(
+    input.workspaceInspector.inspect({
+      include: ["tables"],
+      workspaceId: input.workspaceId
+    })
+  );
+  const tableIdByFieldId = new Map<string, string>();
+  for (const table of workspace.tables) {
+    for (const fieldId of table.fieldIds) {
+      tableIdByFieldId.set(fieldId, table.tableId);
+    }
+  }
+
+  const sourceSchema = parseTableSchemaForProposal(
+    await Promise.resolve(
+      input.tableSchemaInspector.read({
+        tableId: input.sourceTableId,
+        workspaceId: input.workspaceId
+      })
+    )
+  );
+  const sourceField = sourceSchema.fields.find(
+    (field) => field.fieldId === input.syncSourceFieldId
+  );
+  if (!sourceField) {
+    input.diagnostics.push(`workflow_sync_authoring_source_field_missing:${input.syncSourceFieldId}`);
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  const relatedSourceField = sourceSchema.fields.find(
+    (field) => field.fieldId === input.relatedSourceFieldId
+  );
+  if (!relatedSourceField) {
+    input.diagnostics.push(
+      `workflow_sync_authoring_related_source_field_missing:${input.relatedSourceFieldId}`
+    );
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  const targetTableId = resolveSyncTargetTableId({
+    diagnostics: input.diagnostics,
+    relatedSourceField,
+    relatedTargetFieldId: input.relatedTargetFieldId,
+    tableIdByFieldId
+  });
+  if (!targetTableId) {
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  const targetSchema = parseTableSchemaForProposal(
+    await Promise.resolve(
+      input.tableSchemaInspector.read({
+        tableId: targetTableId,
+        workspaceId: input.workspaceId
+      })
+    )
+  );
+  const targetField = targetSchema.fields.find(
+    (field) => field.fieldId === input.syncTargetFieldId
+  );
+  if (!targetField) {
+    input.diagnostics.push(`workflow_sync_authoring_target_field_missing:${input.syncTargetFieldId}`);
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  let resolver: WorkflowRelatedTableResolver;
+  if (input.relatedTargetFieldId) {
+    const relatedTargetTableId = tableIdByFieldId.get(input.relatedTargetFieldId);
+    if (!relatedTargetTableId) {
+      input.diagnostics.push(
+        `workflow_sync_authoring_related_target_field_missing:${input.relatedTargetFieldId}`
+      );
+      return {
+        action: null,
+        actionProposal: null,
+        metadata: null,
+        triggerFieldIds: []
+      };
+    }
+    if (relatedTargetTableId !== targetTableId) {
+      input.diagnostics.push(
+        `workflow_sync_authoring_related_target_table_mismatch:${input.relatedTargetFieldId}:${relatedTargetTableId}:${targetTableId}`
+      );
+      return {
+        action: null,
+        actionProposal: null,
+        metadata: null,
+        triggerFieldIds: []
+      };
+    }
+
+    const relatedTargetField = targetSchema.fields.find(
+      (field) => field.fieldId === input.relatedTargetFieldId
+    );
+    if (!relatedTargetField) {
+      input.diagnostics.push(
+        `workflow_sync_authoring_related_target_field_missing:${input.relatedTargetFieldId}`
+      );
+      return {
+        action: null,
+        actionProposal: null,
+        metadata: null,
+        triggerFieldIds: []
+      };
+    }
+    if (relatedSourceField.fieldType !== relatedTargetField.fieldType) {
+      input.diagnostics.push(
+        `workflow_sync_authoring_related_field_type_mismatch:${relatedSourceField.fieldType}:${relatedTargetField.fieldType}`
+      );
+      return {
+        action: null,
+        actionProposal: null,
+        metadata: null,
+        triggerFieldIds: []
+      };
+    }
+    resolver = {
+      alias: `sync_${input.syncTargetFieldId}`,
+      sourceFieldId: input.relatedSourceFieldId,
+      strategy: "value_match",
+      targetFieldId: input.relatedTargetFieldId,
+      targetTableId
+    };
+  } else {
+    if (relatedSourceField.fieldType !== "relation.record") {
+      input.diagnostics.push(
+        `workflow_sync_authoring_relationship_missing:${input.relatedSourceFieldId}`
+      );
+      return {
+        action: null,
+        actionProposal: null,
+        metadata: null,
+        triggerFieldIds: []
+      };
+    }
+    resolver = {
+      alias: `sync_${input.syncTargetFieldId}`,
+      sourceFieldId: input.relatedSourceFieldId,
+      strategy: "single_relation",
+      targetTableId
+    };
+  }
+
+  if (targetTableId === input.sourceTableId) {
+    input.diagnostics.push(`workflow_sync_authoring_requires_cross_table_target:${targetTableId}`);
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  if (!isSupportedWorkflowSyncProposalFieldType(sourceField.fieldType)) {
+    input.diagnostics.push(
+      `workflow_sync_authoring_source_field_type_invalid:${sourceField.fieldType}`
+    );
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+  if (!isSupportedWorkflowSyncProposalFieldType(targetField.fieldType)) {
+    input.diagnostics.push(
+      `workflow_sync_authoring_target_field_type_invalid:${targetField.fieldType}`
+    );
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+  if (sourceField.fieldType !== targetField.fieldType) {
+    input.diagnostics.push(
+      `workflow_sync_authoring_field_type_mismatch:${sourceField.fieldType}:${targetField.fieldType}`
+    );
+    return {
+      action: null,
+      actionProposal: null,
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  const actionInput = {
+    resolverAlias: resolver.alias,
+    sourceFieldId: input.syncSourceFieldId,
+    targetFieldId: input.syncTargetFieldId
+  };
+
+  return {
+    action: {
+      input: actionInput,
+      operatorId: "sync_related_field"
+    },
+    actionProposal: cloneWorkflowActionManifest(input.syncRelatedFieldAction, actionInput),
+    metadata: {
+      relatedTableResolvers: [resolver]
+    },
+    triggerFieldIds: [
+      input.syncSourceFieldId,
+      ...(input.relatedSourceFieldId === input.syncSourceFieldId ? [] : [input.relatedSourceFieldId])
+    ]
+  };
+}
+
+function resolveSyncTargetTableId(input: {
+  diagnostics: string[];
+  relatedSourceField: ParsedProposalField;
+  relatedTargetFieldId?: string;
+  tableIdByFieldId: ReadonlyMap<string, string>;
+}): string | null {
+  if (input.relatedTargetFieldId) {
+    const config = isRecord(input.relatedSourceField.config) ? input.relatedSourceField.config : null;
+    if (input.relatedSourceField.fieldType === "relation.record" && config?.allowMultiple === false) {
+      input.diagnostics.push(
+        `workflow_sync_authoring_strategy_ambiguous:${input.relatedSourceField.fieldId}:${input.relatedTargetFieldId}`
+      );
+      return null;
+    }
+
+    const targetTableId = input.tableIdByFieldId.get(input.relatedTargetFieldId);
+    if (!targetTableId) {
+      input.diagnostics.push(
+        `workflow_sync_authoring_related_target_field_missing:${input.relatedTargetFieldId}`
+      );
+      return null;
+    }
+
+    return targetTableId;
+  }
+
+  if (input.relatedSourceField.fieldType !== "relation.record") {
+    input.diagnostics.push(
+      `workflow_sync_authoring_relationship_missing:${input.relatedSourceField.fieldId}`
+    );
+    return null;
+  }
+
+  const config = isRecord(input.relatedSourceField.config) ? input.relatedSourceField.config : null;
+  if (config?.allowMultiple !== false || typeof config?.targetTableId !== "string") {
+    input.diagnostics.push(
+      `workflow_sync_authoring_relationship_missing:${input.relatedSourceField.fieldId}`
+    );
+    return null;
+  }
+
+  return config.targetTableId;
+}
+
+function isSupportedWorkflowSyncProposalFieldType(fieldType: string): boolean {
+  return fieldType !== "computed.readonly" && fieldType !== "relation.record";
 }

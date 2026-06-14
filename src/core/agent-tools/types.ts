@@ -7,6 +7,7 @@ import type {
 import type {
   WorkflowActionManifest,
   WorkflowAuthoringMetadata,
+  WorkflowDefinitionMetadata,
   WorkflowOperatorManifest,
   WorkflowTriggerManifest
 } from "../workflows/types";
@@ -33,6 +34,7 @@ export type AgentToolId =
   | "inspectTableSchema"
   | "inspectViewDefinition"
   | "inspectWorkflowDefinition"
+  | "previewWorkflowTest"
   | "explainPermissions"
   | "previewPermissionPersona"
   | "inspectRecord"
@@ -76,6 +78,7 @@ export type AgentToolBinding =
         | "tableSchemaInspector"
         | "viewDefinitionInspector"
         | "workflowDefinitionInspector"
+        | "workflowTestPreviewReader"
         | "permissionEngine"
         | "permissionPersonaPreviewReader"
         | "recordInspector"
@@ -219,6 +222,13 @@ export type DeleteViewToolInput = AgentToolCommandBase & {
   viewId: string;
 };
 
+export type PreviewWorkflowTestToolInput = {
+  recordId: string;
+  selectedFieldId?: string;
+  workflowId: string;
+  workspaceId: string;
+};
+
 export type ConfigureFieldPermissionToolInput = AgentToolCommandBase & {
   tableId: string;
   fieldId: string;
@@ -358,6 +368,11 @@ export type ProposeWorkflowToolInput = AgentToolCommandBase & {
   tableId: string;
   businessRule: string;
   fieldIds?: string[];
+  relatedSourceFieldId?: string;
+  relatedTargetFieldId?: string;
+  rollupFieldIds?: string[];
+  syncSourceFieldId?: string;
+  syncTargetFieldId?: string;
   triggerId: string;
   actionIds: string[];
 };
@@ -480,6 +495,12 @@ export type WorkflowDefinitionInspector = {
   ): Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
 };
 
+export type WorkflowTestPreviewReader = {
+  read(
+    input: PreviewWorkflowTestToolInput
+  ): Promise<Record<string, unknown>> | Record<string, unknown>;
+};
+
 export type WorkflowHistoryReader = {
   read(
     input: ReadWorkflowHistoryToolInput
@@ -562,6 +583,7 @@ export type AgentToolWorkflowProposal = {
   name: string;
   tableId: string;
   businessRule: string;
+  metadata?: WorkflowDefinitionMetadata;
   trigger:
     | WorkflowTriggerManifest
     | {
@@ -591,6 +613,10 @@ export type AgentToolInvocation =
   | {
       toolId: "inspectWorkflowDefinition";
       input: InspectWorkflowDefinitionToolInput;
+    }
+  | {
+      toolId: "previewWorkflowTest";
+      input: PreviewWorkflowTestToolInput;
     }
   | {
       toolId: "explainPermissions";
@@ -745,6 +771,10 @@ export type AgentToolInvocationResult =
   | {
       kind: "workflow-definition-inspection";
       workflow: Record<string, unknown> | null;
+    }
+  | {
+      kind: "workflow-test-preview";
+      preview: Record<string, unknown>;
     }
   | {
       kind: "permission-explanation";

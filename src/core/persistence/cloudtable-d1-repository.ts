@@ -736,11 +736,16 @@ async function materializeWorkflowComputedFieldMetadata(
             targetTableId: field.table_id
           }
     );
+    const extraDependencyFieldIds = (computedConfig?.dependsOnFieldIds ?? []).filter(
+      (dependencyFieldId) =>
+        dependencyFieldId !== rollup.grouping.sourceFieldId &&
+        dependencyFieldId !== rollup.operandFieldId
+    );
     aggregateDefinitions.push({
       alias: field.id,
-      ...(computedConfig?.dependsOnFieldIds && computedConfig.dependsOnFieldIds.length > 0
+      ...(extraDependencyFieldIds.length > 0
         ? {
-            dependencyFieldIds: [...computedConfig.dependsOnFieldIds]
+            dependencyFieldIds: extraDependencyFieldIds
           }
         : {}),
       groupingSource: {
@@ -815,11 +820,14 @@ async function materializeWorkflowComputedFieldMetadata(
       strategy: "single_relation",
       targetTableId: resolverTargetTableId
     });
+    const extraDependencyFieldIds = (computedConfig?.dependsOnFieldIds ?? []).filter(
+      (dependencyFieldId) => dependencyFieldId !== lookup.sourceFieldId
+    );
     lookupDefinitions.push({
       alias: field.id,
-      ...(computedConfig?.dependsOnFieldIds && computedConfig.dependsOnFieldIds.length > 0
+      ...(extraDependencyFieldIds.length > 0
         ? {
-            dependencyFieldIds: [...computedConfig.dependsOnFieldIds]
+            dependencyFieldIds: extraDependencyFieldIds
           }
         : {}),
       lookupSource: {
