@@ -1799,6 +1799,214 @@ describe("cloudtable runtime smoke", () => {
     });
   });
 
+  it("proves lookup workflow proposal preview through the smoke runtime path", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+
+    insertPermissionSnapshot(db, {
+      commandTypes: ["field.create", "workflow.create"],
+      fields: {
+        fld_ticket_account: {
+          agent: true,
+          fieldId: "fld_ticket_account",
+          fieldType: "relation.record",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_ticket_account_name: {
+          agent: true,
+          fieldId: "fld_ticket_account_name",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: false
+        },
+        fld_account_name: {
+          agent: true,
+          fieldId: "fld_account_name",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      policyRevision: 46,
+      principalId: "usr_owner",
+      scopeHash: "scope:table:tbl_1"
+    });
+
+    insertField(db, {
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      },
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      config: {
+        dependsOnFieldIds: ["fld_ticket_account"],
+        lookup: {
+          sourceFieldId: "fld_ticket_account",
+          targetFieldId: "fld_account_name"
+        }
+      },
+      fieldId: "fld_ticket_account_name",
+      fieldKey: "ticket_account_name",
+      fieldType: "computed.readonly",
+      label: "Ticket Account Name",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      config: {},
+      fieldId: "fld_account_name",
+      fieldKey: "account_name",
+      fieldType: "text.single_line",
+      label: "Account Name",
+      tableId: "tbl_accounts"
+    });
+
+    const previewResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            actionIds: ["set_cell"],
+            businessRule: "Keep ticket account name aligned with the linked account.",
+            lookupFieldIds: ["fld_ticket_account_name"],
+            name: "Ticket account lookup smoke",
+            tableId: "tbl_1",
+            triggerId: "field_changed",
+            workflowId: "wf_ticket_account_lookup_smoke"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 46,
+          principalId: "usr_owner",
+          toolId: "proposeWorkflow",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(previewResponse.status).toBe(200);
+    expect(
+      (await previewResponse.json()) as {
+        output: {
+          command: {
+            payload: {
+              definition: {
+                actions: unknown[];
+                metadata: Record<string, unknown>;
+                trigger: {
+                  match: {
+                    fieldIds: string[];
+                  };
+                };
+              };
+            };
+          };
+          proposal: {
+            metadata: Record<string, unknown>;
+          };
+        };
+      }
+    ).toMatchObject({
+      output: {
+        proposal: {
+          metadata: {
+            lookupDefinitions: [
+              {
+                alias: "fld_ticket_account_name",
+                targetFieldId: "fld_ticket_account_name",
+                valueFieldId: "fld_account_name"
+              }
+            ],
+            lookupFieldIds: ["fld_ticket_account_name"],
+            relatedTableResolvers: [
+              {
+                alias: "lookup_fld_ticket_account_name",
+                sourceFieldId: "fld_ticket_account",
+                strategy: "single_relation",
+                targetTableId: "tbl_accounts"
+              }
+            ]
+          }
+        },
+        command: {
+          payload: {
+            definition: {
+              actions: [
+                {
+                  input: {
+                    fieldId: {
+                      path: "row.fields.ticket_account_name.fieldId"
+                    },
+                    fieldType: {
+                      path: "row.fields.ticket_account_name.fieldType"
+                    },
+                    recordId: {
+                      path: "row.recordId"
+                    },
+                    tableId: {
+                      path: "table.tableId"
+                    },
+                    value: {
+                      path: "cell.value"
+                    }
+                  },
+                  operatorId: "set_cell"
+                }
+              ],
+              metadata: {
+                lookupDefinitions: [
+                  {
+                    alias: "fld_ticket_account_name",
+                    targetFieldId: "fld_ticket_account_name",
+                    valueFieldId: "fld_account_name"
+                  }
+                ]
+              },
+              trigger: {
+                match: {
+                  fieldIds: ["fld_ticket_account"]
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+  });
+
   it("proves direct cross-table sync workflow proposal preview through the smoke runtime path", async () => {
     const { db, env } = createEnv();
 

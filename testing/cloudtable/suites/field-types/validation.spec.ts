@@ -125,6 +125,48 @@ describe("cloudtable field-type validation", () => {
     expect(
       registry.require("computed.readonly").validateConfig(
         {
+          resultValueType: "number",
+          rollup: {
+            grouping: {
+              sourceFieldId: "fld_account",
+              strategy: "single_relation"
+            },
+            operandFieldId: "fld_amount",
+            operationId: "max_number",
+            sourceTableId: "tbl_tickets"
+          }
+        },
+        { fieldType: "computed.readonly" }
+      )
+    ).toEqual({
+      valid: true,
+      errors: []
+    });
+
+    expect(
+      registry.require("computed.readonly").validateConfig(
+        {
+          resultValueType: "number",
+          rollup: {
+            grouping: {
+              sourceFieldId: "fld_account",
+              strategy: "single_relation"
+            },
+            operandFieldId: "fld_amount",
+            operationId: "average_numbers",
+            sourceTableId: "tbl_tickets"
+          }
+        },
+        { fieldType: "computed.readonly" }
+      )
+    ).toEqual({
+      valid: true,
+      errors: []
+    });
+
+    expect(
+      registry.require("computed.readonly").validateConfig(
+        {
           lookup: {
             sourceFieldId: "fld_account",
             targetFieldId: "fld_name"
@@ -140,13 +182,12 @@ describe("cloudtable field-type validation", () => {
     expect(
       registry.require("computed.readonly").validateConfig(
         {
-          expression: "source.value",
           rollup: {
             grouping: {
               sourceFieldId: "fld_account",
               strategy: "single_relation"
             },
-            operationId: "count_records",
+            operationId: "unknown_operation",
             sourceTableId: "tbl_tickets"
           }
         },
@@ -154,7 +195,9 @@ describe("cloudtable field-type validation", () => {
       )
     ).toEqual({
       valid: false,
-      errors: ["Field configuration must not mix expression, lookup, and rollup on computed.readonly."]
+      errors: [
+        "Field configuration rollup.operationId must be one of: count_records, sum_numbers, max_number, average_numbers."
+      ]
     });
 
     expect(

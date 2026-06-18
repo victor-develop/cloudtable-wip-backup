@@ -6235,6 +6235,478 @@ describe("workflow queue consumer", () => {
     });
   });
 
+  it("executes max_number aggregate backfill and recompute for single-relation groups", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_max_amount",
+      fieldKey: "max_amount",
+      fieldType: "computed.readonly",
+      label: "Max Amount",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account", "fld_amount"],
+        expression: "aggregate.account_max_amount",
+        resultValueType: "number"
+      }
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_2",
+      recordKey: "account-2",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: 4
+    });
+    insertWorkflowDefinition(db, {
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "max_amount",
+            dependencyFieldIds: ["fld_account", "fld_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account"
+            },
+            operand: {
+              fieldId: "fld_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationId: "max_number",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_max_amount"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      workflowId: "wf_max_amount_rollup",
+      workflowVersionId: "wf_max_amount_rollup:v1"
+    });
+
+    const aggregateMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "max_amount",
+          dependencyFieldIds: ["fld_account", "fld_amount"],
+          groupingSource: {
+            kind: "related_record",
+            resolverAlias: "account",
+            sourceFieldId: "fld_account"
+          },
+          operand: {
+            fieldId: "fld_amount",
+            kind: "source_field",
+            valueType: "number"
+          },
+          operationId: "max_number",
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.account",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_max_amount",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_max_amount_rollup",
+        workflowVersionId: "wf_max_amount_rollup:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([aggregateMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_max_amount",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts"
+    })).toBe(10);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_max_amount",
+      recordId: "rec_account_2",
+      tableId: "tbl_accounts"
+    })).toBe(null);
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, number_value = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: 25,
+          valueType: "number.decimal",
+          version: 1
+        }),
+        25,
+        "25",
+        "25",
+        JSON.stringify(25),
+        "evt_seed_rec_ticket_2_fld_amount_max_update",
+        "ws_1",
+        "tbl_1",
+        "rec_ticket_2",
+        "fld_amount"
+      );
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...aggregateMessage,
+          eventId: "evt_ticket_2_max_amount_changed",
+          payload: {
+            ...aggregateMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_amount"],
+              eventId: "evt_ticket_2_max_amount_changed",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_max_amount",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts"
+    })).toBe(25);
+  });
+
+  it("executes average_numbers aggregate backfill and recompute for single-relation groups", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_avg_amount",
+      fieldKey: "avg_amount",
+      fieldType: "computed.readonly",
+      label: "Average Amount",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_account", "fld_amount"],
+        expression: "aggregate.account_avg_amount",
+        resultValueType: "number"
+      }
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_2",
+      recordKey: "account-2",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: 4
+    });
+    insertWorkflowDefinition(db, {
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "avg_amount",
+            dependencyFieldIds: ["fld_account", "fld_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account"
+            },
+            operand: {
+              fieldId: "fld_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationId: "average_numbers",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_avg_amount"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      workflowId: "wf_avg_amount_rollup",
+      workflowVersionId: "wf_avg_amount_rollup:v1"
+    });
+
+    const aggregateMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "avg_amount",
+          dependencyFieldIds: ["fld_account", "fld_amount"],
+          groupingSource: {
+            kind: "related_record",
+            resolverAlias: "account",
+            sourceFieldId: "fld_account"
+          },
+          operand: {
+            fieldId: "fld_amount",
+            kind: "source_field",
+            valueType: "number"
+          },
+          operationId: "average_numbers",
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.account",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_avg_amount",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_avg_amount_rollup",
+        workflowVersionId: "wf_avg_amount_rollup:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([aggregateMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_avg_amount",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts"
+    })).toBe(7);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_avg_amount",
+      recordId: "rec_account_2",
+      tableId: "tbl_accounts"
+    })).toBe(null);
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, number_value = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: 26,
+          valueType: "number.decimal",
+          version: 1
+        }),
+        26,
+        "26",
+        "26",
+        JSON.stringify(26),
+        "evt_seed_rec_ticket_2_fld_amount_avg_update",
+        "ws_1",
+        "tbl_1",
+        "rec_ticket_2",
+        "fld_amount"
+      );
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...aggregateMessage,
+          eventId: "evt_ticket_2_avg_amount_changed",
+          payload: {
+            ...aggregateMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_amount"],
+              eventId: "evt_ticket_2_avg_amount_changed",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_avg_amount",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts"
+    })).toBe(18);
+  });
+
   it("executes numeric aggregate backfill and recompute for value-matched groups", async () => {
     const { db, env } = createEnv();
 
@@ -6457,6 +6929,464 @@ describe("workflow queue consumer", () => {
       recordId: "rec_account_emea",
       tableId: "tbl_accounts"
     })).toBe(3);
+  });
+
+  it("executes average_numbers aggregate backfill and recompute for value-matched groups", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_region",
+      fieldKey: "region",
+      fieldType: "text.single_line",
+      label: "Region",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_region_key",
+      fieldKey: "region_key",
+      fieldType: "text.single_line",
+      label: "Region Key",
+      tableId: "tbl_accounts"
+    });
+    insertField(db, {
+      fieldId: "fld_region_average",
+      fieldKey: "region_average",
+      fieldType: "computed.readonly",
+      label: "Region Average",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_region", "fld_amount"],
+        expression: "aggregate.region_average",
+        resultValueType: "number"
+      }
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_1",
+      recordKey: "account-apac-1",
+      tableId: "tbl_accounts"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_2",
+      recordKey: "account-apac-2",
+      tableId: "tbl_accounts"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_emea",
+      recordKey: "account-emea",
+      tableId: "tbl_accounts"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts",
+      value: "emea"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 7
+    });
+    insertWorkflowDefinition(db, {
+      workflowId: "wf_region_average_rollup",
+      workflowKey: "region-average-rollup",
+      workflowName: "Region Average Rollup"
+    });
+
+    const aggregateMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "region_average",
+          dependencyFieldIds: ["fld_region", "fld_amount"],
+          groupingSource: {
+            kind: "related_record",
+            resolverAlias: "accounts_by_region",
+            sourceFieldId: "fld_region"
+          },
+          operand: {
+            fieldId: "fld_amount",
+            kind: "source_field",
+            valueType: "number"
+          },
+          operationId: "average_numbers",
+          resolver: {
+            sourceFieldId: "fld_region",
+            strategy: "value_match",
+            targetFieldId: "fld_region_key",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.accounts_by_region",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_region_average",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_region_average_rollup",
+        workflowVersionId: "wf_region_average_rollup:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([aggregateMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_average",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts"
+    })).toBe(7);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_average",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts"
+    })).toBe(7);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_average",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts"
+    })).toBe(null);
+
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: 5
+    });
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...aggregateMessage,
+          eventId: "evt_ticket_2_region_average_created",
+          payload: {
+            ...aggregateMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_region", "fld_amount"],
+              eventId: "evt_ticket_2_region_average_created",
+              eventType: "record.created",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_average",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts"
+    })).toBe(6);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_average",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts"
+    })).toBe(6);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_average",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts"
+    })).toBe(null);
+  });
+
+  it("executes max_number aggregate backfill and recompute for value-matched groups", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_region",
+      fieldKey: "region",
+      fieldType: "text.single_line",
+      label: "Region",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_region_key",
+      fieldKey: "region_key",
+      fieldType: "text.single_line",
+      label: "Region Key",
+      tableId: "tbl_accounts"
+    });
+    insertField(db, {
+      fieldId: "fld_region_max",
+      fieldKey: "region_max",
+      fieldType: "computed.readonly",
+      label: "Region Max",
+      tableId: "tbl_accounts",
+      config: {
+        dependsOnFieldIds: ["fld_region", "fld_amount"],
+        expression: "aggregate.region_max",
+        resultValueType: "number"
+      }
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_1",
+      recordKey: "account-apac-1",
+      tableId: "tbl_accounts"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_2",
+      recordKey: "account-apac-2",
+      tableId: "tbl_accounts"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_emea",
+      recordKey: "account-emea",
+      tableId: "tbl_accounts"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts",
+      value: "emea"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 7
+    });
+    insertWorkflowDefinition(db, {
+      workflowId: "wf_region_max_rollup",
+      workflowKey: "region-max-rollup",
+      workflowName: "Region Max Rollup"
+    });
+
+    const aggregateMessage: CloudTableQueueMessage = {
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "region_max",
+          dependencyFieldIds: ["fld_region", "fld_amount"],
+          groupingSource: {
+            kind: "related_record",
+            resolverAlias: "accounts_by_region",
+            sourceFieldId: "fld_region"
+          },
+          operand: {
+            fieldId: "fld_amount",
+            kind: "source_field",
+            valueType: "number"
+          },
+          operationId: "max_number",
+          resolver: {
+            sourceFieldId: "fld_region",
+            strategy: "value_match",
+            targetFieldId: "fld_region_key",
+            targetTableId: "tbl_accounts"
+          },
+          sourceRelationPath: "relatedTables.accounts_by_region",
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_region_max",
+          targetTableId: "tbl_accounts"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "workflow_published"
+        },
+        workflowId: "wf_region_max_rollup",
+        workflowVersionId: "wf_region_max_rollup:v1"
+      },
+      workspaceId: "ws_1"
+    };
+
+    await handleQueueBatch(createBatch([aggregateMessage]).batch as never, env, {} as ExecutionContext);
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_max",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts"
+    })).toBe(7);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_max",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts"
+    })).toBe(7);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_max",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts"
+    })).toBe(null);
+
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: 12
+    });
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          ...aggregateMessage,
+          eventId: "evt_ticket_2_region_max_created",
+          payload: {
+            ...aggregateMessage.payload,
+            trigger: {
+              changedFieldIds: ["fld_region", "fld_amount"],
+              eventId: "evt_ticket_2_region_max_created",
+              eventType: "record.created",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            }
+          }
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_max",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts"
+    })).toBe(12);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_max",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts"
+    })).toBe(12);
+    expect(readCellRawValue(db, {
+      fieldId: "fld_region_max",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts"
+    })).toBe(null);
   });
 
   it("retries aggregate maintenance and preserves product state when workflow service identity metadata is malformed", async () => {

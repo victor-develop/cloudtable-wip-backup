@@ -9,7 +9,7 @@
     {
       "binding": "DB",
       "database_name": "cloudtable",
-      "database_id": "replace-in-cloudflare"
+      "database_id": "9043bb50-b65a-4faf-aa0e-84cbaf9b0be2"
     }
   ],
   "durable_objects": {

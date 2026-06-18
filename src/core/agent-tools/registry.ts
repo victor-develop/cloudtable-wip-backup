@@ -16,6 +16,7 @@ import type {
   WorkflowAggregateDefinition,
   WorkflowAuthoringMetadata,
   WorkflowDefinitionMetadata,
+  WorkflowLookupDefinition,
   WorkflowOperatorRegistry,
   WorkflowRelatedTableResolver,
   WorkflowTriggerDefinition,
@@ -215,6 +216,9 @@ const tools: AgentToolDefinition[] = [
         },
         catalog: {
           properties: {
+            aggregateOperations: {
+              type: "array"
+            },
             agentTools: {
               items: agentToolManifestSchema,
               type: "array"
@@ -1529,6 +1533,10 @@ const tools: AgentToolDefinition[] = [
           items: jsonStringSchema,
           type: "array"
         },
+        lookupFieldIds: {
+          items: jsonStringSchema,
+          type: "array"
+        },
         relatedSourceFieldId: jsonStringSchema,
         relatedTargetFieldId: jsonStringSchema,
         rollupFieldIds: {
@@ -2253,6 +2261,15 @@ export function createAgentToolRegistry({
             workspaceId: invocation.input.workspaceId,
             workspaceInspector
           });
+          const reactiveLookup = await buildReactiveLookupProposalTemplate({
+            diagnostics,
+            lookupFieldIds: invocation.input.lookupFieldIds ?? [],
+            setCellAction: setCellAction && setCellAction.kind === "action" ? setCellAction : null,
+            sourceTableId: invocation.input.tableId,
+            tableSchemaInspector,
+            workspaceId: invocation.input.workspaceId,
+            workspaceInspector
+          });
           const reactiveRollup = await buildReactiveRollupProposalTemplate({
             diagnostics,
             rollupFieldIds: invocation.input.rollupFieldIds ?? [],
@@ -2288,13 +2305,16 @@ export function createAgentToolRegistry({
             invocation.input.syncTargetFieldId !== undefined ||
             invocation.input.relatedSourceFieldId !== undefined ||
             invocation.input.relatedTargetFieldId !== undefined;
+          const hasComputedSetCellActions =
+            reactiveLookup.actions.length > 0 || reactiveRollup.actions.length > 0;
           const draftedActionBindings = [
             ...(crossTableSync.action ? [crossTableSync.action] : []),
+            ...reactiveLookup.actions,
             ...reactiveRollup.actions,
             ...actions
               .filter(
                 (action) =>
-                  action.id !== "set_cell" &&
+                  !(action.id === "set_cell" && hasComputedSetCellActions) &&
                   !(
                     (crossTableSync.action !== null || hasCrossTableSyncInputs) &&
                     action.id === "sync_related_field"
@@ -2307,11 +2327,12 @@ export function createAgentToolRegistry({
           ];
           const proposalActions = [
             ...(crossTableSync.actionProposal ? [crossTableSync.actionProposal] : []),
+            ...reactiveLookup.actionProposals,
             ...reactiveRollup.actionProposals,
             ...actions
               .filter(
                 (action) =>
-                  action.id !== "set_cell" &&
+                  !(action.id === "set_cell" && hasComputedSetCellActions) &&
                   !(
                     (crossTableSync.actionProposal !== null || hasCrossTableSyncInputs) &&
                     action.id === "sync_related_field"
@@ -2321,6 +2342,7 @@ export function createAgentToolRegistry({
           ];
           const proposalMetadataEntries = [
             crossTableSync.metadata,
+            reactiveLookup.metadata,
             reactiveRollup.metadata
           ].filter((entry): entry is WorkflowDefinitionMetadata => entry !== null);
           const proposalMetadata: WorkflowDefinitionMetadata = {
@@ -2336,6 +2358,7 @@ export function createAgentToolRegistry({
               : [
                   ...new Set([
                     ...crossTableSync.triggerFieldIds,
+                    ...reactiveLookup.triggerFieldIds,
                     ...reactiveRollup.triggerFieldIds
                   ])
                 ];
@@ -2344,7 +2367,9 @@ export function createAgentToolRegistry({
               ? invocation.input.fieldIds
               : crossTableSync.triggerFieldIds.length > 0
                 ? [crossTableSync.triggerFieldIds[0]!]
-                : reactiveRollup.triggerFieldIds;
+                : reactiveLookup.triggerFieldIds.length > 0
+                  ? reactiveLookup.triggerFieldIds
+                  : reactiveRollup.triggerFieldIds;
 
           const proposal = {
             actions: proposalActions,
@@ -2894,6 +2919,16 @@ type ResolvedReactiveRollupProposal = {
   triggerFieldIds: string[];
 };
 
+type ResolvedReactiveLookupProposal = {
+  actionProposals: WorkflowActionManifest[];
+  actions: Array<{
+    input: Record<string, unknown>;
+    operatorId: string;
+  }>;
+  metadata: WorkflowDefinitionMetadata | null;
+  triggerFieldIds: string[];
+};
+
 type ParsedProposalField = {
   config: unknown;
   fieldId: string;
@@ -2910,6 +2945,214 @@ type ResolvedCrossTableSyncProposal = {
   metadata: WorkflowDefinitionMetadata | null;
   triggerFieldIds: string[];
 };
+
+async function buildReactiveLookupProposalTemplate(input: {
+  diagnostics: string[];
+  lookupFieldIds: readonly string[];
+  setCellAction: WorkflowActionDefinition | null;
+  sourceTableId: string;
+  tableSchemaInspector: TableSchemaInspector;
+  workspaceId: string;
+  workspaceInspector: WorkspaceInspector;
+}): Promise<ResolvedReactiveLookupProposal> {
+  if (input.lookupFieldIds.length === 0) {
+    return {
+      actionProposals: [],
+      actions: [],
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  const workspace = await Promise.resolve(
+    input.workspaceInspector.inspect({
+      include: ["tables"],
+      workspaceId: input.workspaceId
+    })
+  );
+  const tableIdByFieldId = new Map<string, string>();
+  for (const table of workspace.tables) {
+    for (const fieldId of table.fieldIds) {
+      tableIdByFieldId.set(fieldId, table.tableId);
+    }
+  }
+
+  if (input.setCellAction === null) {
+    input.diagnostics.push("missing_lookup_set_cell_action");
+    return {
+      actionProposals: [],
+      actions: [],
+      metadata: null,
+      triggerFieldIds: []
+    };
+  }
+
+  const relatedTableResolvers: WorkflowRelatedTableResolver[] = [];
+  const lookupDefinitions: WorkflowLookupDefinition[] = [];
+  const actionBindings: Array<{
+    input: Record<string, unknown>;
+    operatorId: string;
+  }> = [];
+  const actionProposals: WorkflowActionManifest[] = [];
+  const triggerFieldIds = new Set<string>();
+
+  for (const lookupFieldId of input.lookupFieldIds) {
+    const owningTableId = tableIdByFieldId.get(lookupFieldId);
+    if (!owningTableId) {
+      input.diagnostics.push(`unknown_lookup_field:${lookupFieldId}`);
+      continue;
+    }
+
+    const schema = await Promise.resolve(
+      input.tableSchemaInspector.read({
+        tableId: owningTableId,
+        workspaceId: input.workspaceId
+      })
+    );
+    const parsedSchema = parseTableSchemaForProposal(schema);
+    const field = parsedSchema.fields.find((entry) => entry.fieldId === lookupFieldId);
+    if (!field) {
+      input.diagnostics.push(`unknown_lookup_field:${lookupFieldId}`);
+      continue;
+    }
+    if (field.fieldType !== "computed.readonly") {
+      input.diagnostics.push(`lookup_field_type_invalid:${lookupFieldId}:${field.fieldType}`);
+      continue;
+    }
+    if (parsedSchema.tableId !== input.sourceTableId) {
+      input.diagnostics.push(
+        `lookup_field_source_table_mismatch:${lookupFieldId}:${parsedSchema.tableId}:${input.sourceTableId}`
+      );
+      continue;
+    }
+
+    const lookup = readComputedFieldConfig(field.config)?.lookup;
+    if (!lookup) {
+      input.diagnostics.push(`lookup_field_config_missing:${lookupFieldId}`);
+      continue;
+    }
+
+    const sourceField = parsedSchema.fields.find((entry) => entry.fieldId === lookup.sourceFieldId);
+    if (!sourceField) {
+      input.diagnostics.push(
+        `lookup_source_field_missing:${lookupFieldId}:${lookup.sourceFieldId}`
+      );
+      continue;
+    }
+    if (sourceField.fieldType !== "relation.record") {
+      input.diagnostics.push(
+        `lookup_source_field_type_invalid:${lookupFieldId}:${lookup.sourceFieldId}:${sourceField.fieldType}`
+      );
+      continue;
+    }
+
+    const sourceFieldConfig = isRecord(sourceField.config) ? sourceField.config : null;
+    if (sourceFieldConfig?.allowMultiple !== false) {
+      input.diagnostics.push(
+        `lookup_source_field_cardinality_invalid:${lookupFieldId}:${lookup.sourceFieldId}`
+      );
+      continue;
+    }
+
+    const resolverTargetTableId =
+      typeof sourceFieldConfig?.targetTableId === "string" ? sourceFieldConfig.targetTableId : null;
+    if (!resolverTargetTableId) {
+      input.diagnostics.push(
+        `lookup_source_field_target_table_missing:${lookupFieldId}:${lookup.sourceFieldId}`
+      );
+      continue;
+    }
+
+    const targetSchema = parseTableSchemaForProposal(
+      await Promise.resolve(
+        input.tableSchemaInspector.read({
+          tableId: resolverTargetTableId,
+          workspaceId: input.workspaceId
+        })
+      )
+    );
+    const targetField = targetSchema.fields.find((entry) => entry.fieldId === lookup.targetFieldId);
+    if (!targetField) {
+      input.diagnostics.push(
+        `lookup_target_field_missing:${lookupFieldId}:${lookup.targetFieldId}`
+      );
+      continue;
+    }
+
+    const resolverAlias = `lookup_${lookupFieldId}`;
+    relatedTableResolvers.push({
+      alias: resolverAlias,
+      sourceFieldId: lookup.sourceFieldId,
+      strategy: "single_relation",
+      targetTableId: resolverTargetTableId
+    });
+    const extraDependencyFieldIds = readDependencyFieldIds(field.config).filter(
+      (dependencyFieldId) => dependencyFieldId !== lookup.sourceFieldId
+    );
+    lookupDefinitions.push({
+      alias: lookupFieldId,
+      ...(extraDependencyFieldIds.length > 0
+        ? {
+            dependencyFieldIds: extraDependencyFieldIds
+          }
+        : {}),
+      lookupSource: {
+        kind: "related_record",
+        resolverAlias
+      },
+      sourceRelationPath: `relatedTables.${resolverAlias}`,
+      targetFieldId: lookupFieldId,
+      valueFieldId: targetField.fieldId
+    });
+    triggerFieldIds.add(lookup.sourceFieldId);
+    for (const dependencyFieldId of extraDependencyFieldIds) {
+      triggerFieldIds.add(dependencyFieldId);
+    }
+
+    const actionInput = {
+      fieldId: {
+        path: `row.fields.${field.fieldKey}.fieldId`
+      },
+      fieldType: {
+        path: `row.fields.${field.fieldKey}.fieldType`
+      },
+      recordId: {
+        path: "row.recordId"
+      },
+      tableId: {
+        path: "table.tableId"
+      },
+      value: {
+        path: "cell.value"
+      }
+    };
+    actionBindings.push({
+      input: actionInput,
+      operatorId: "set_cell"
+    });
+    actionProposals.push(cloneWorkflowActionManifest(input.setCellAction, actionInput));
+  }
+
+  if (lookupDefinitions.length === 0 || relatedTableResolvers.length === 0) {
+    return {
+      actionProposals,
+      actions: actionBindings,
+      metadata: null,
+      triggerFieldIds: [...triggerFieldIds]
+    };
+  }
+
+  return {
+    actionProposals,
+    actions: actionBindings,
+    metadata: {
+      lookupDefinitions,
+      lookupFieldIds: [...input.lookupFieldIds],
+      relatedTableResolvers
+    },
+    triggerFieldIds: [...triggerFieldIds]
+  };
+}
 
 async function buildReactiveRollupProposalTemplate(input: {
   diagnostics: string[];

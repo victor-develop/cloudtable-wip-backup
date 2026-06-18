@@ -6,6 +6,7 @@ import type {
   JsonValue,
   NormalizedCellValue
 } from "../field-types/types";
+import { createAggregateOperationRegistry } from "../aggregates/registry";
 import {
   findCanonicalWorkflowBindingAliasConflicts,
   formatCanonicalWorkflowBindingAliasConflictDiagnostic,
@@ -42,6 +43,8 @@ import type {
   ReceiptRow,
   WorkspaceMembershipIdentityRecord
 } from "./types";
+
+const aggregateOperationRegistry = createAggregateOperationRegistry();
 
 type SequenceRow = {
   nextSequence: number;
@@ -1089,6 +1092,12 @@ async function assertWorkflowAggregateDefinitions(
         `workflow_aggregate_definition_operation_invalid:${aggregate.alias}`
       );
     }
+    const aggregateOperation = aggregateOperationRegistry.get(aggregate.operationId);
+    if (!aggregateOperation) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_operation_unknown:${aggregate.alias}:${aggregate.operationId}`
+      );
+    }
     if (aggregate.operand !== undefined) {
       if (
         !isRecord(aggregate.operand) ||
@@ -1147,14 +1156,21 @@ async function assertWorkflowAggregateDefinitions(
       }
     }
 
-    if (aggregate.operationId === "sum_numbers" && aggregate.operand === undefined) {
+    if (aggregateOperation.operand?.required && aggregate.operand === undefined) {
       throw new CommandCommitError(
         `workflow_aggregate_definition_operand_required:${aggregate.alias}:${aggregate.operationId}`
       );
     }
-    if (aggregate.operationId !== "sum_numbers" && aggregate.operand !== undefined) {
+    if (aggregateOperation.operand === undefined && aggregate.operand !== undefined) {
       throw new CommandCommitError(
         `workflow_aggregate_definition_operand_unsupported:${aggregate.alias}:${aggregate.operationId}`
+      );
+    }
+    const aggregateConfigDiagnostics =
+      aggregateOperation.validateConfig?.(aggregate.operationConfig ?? {}) ?? [];
+    if (aggregateConfigDiagnostics.length > 0) {
+      throw new CommandCommitError(
+        `workflow_aggregate_definition_config_invalid:${aggregate.alias}:${aggregateConfigDiagnostics.join("|")}`
       );
     }
     if (aggregate.operand) {

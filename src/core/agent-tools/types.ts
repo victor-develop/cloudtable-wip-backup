@@ -1,3 +1,4 @@
+import type { AggregateOperationManifest } from "../aggregates/types";
 import type { FieldTypeManifest, JsonSchema } from "../field-types/types";
 import type { CommandActor, CommandEnvelope, CommandResult, CommandScope } from "../commands/types";
 import type {
@@ -368,6 +369,7 @@ export type ProposeWorkflowToolInput = AgentToolCommandBase & {
   tableId: string;
   businessRule: string;
   fieldIds?: string[];
+  lookupFieldIds?: string[];
   relatedSourceFieldId?: string;
   relatedTargetFieldId?: string;
   rollupFieldIds?: string[];
@@ -452,6 +454,7 @@ export type WorkspaceInspection = {
     status: "draft" | "published" | "paused";
   }>;
   catalog?: {
+    aggregateOperations?: AggregateOperationManifest[];
     fieldTypes: FieldTypeManifest[];
     agentTools: AgentToolManifest[];
     workflowOperators: WorkflowOperatorManifest[];

@@ -2572,14 +2572,21 @@ describe("cloudtable runtime ingress", () => {
       }
     });
     insertField(db, {
-      fieldId: "fld_open_ticket_count",
-      fieldKey: "open_ticket_count",
+      fieldId: "fld_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_max_ticket_amount",
+      fieldKey: "max_ticket_amount",
       fieldType: "computed.readonly",
-      label: "Open Ticket Count",
+      label: "Max Ticket Amount",
       tableId: "tbl_accounts",
       config: {
-        dependsOnFieldIds: ["fld_account", "fld_status"],
-        expression: "aggregate.account_open_ticket_count",
+        dependsOnFieldIds: ["fld_account", "fld_amount"],
+        expression: "aggregate.account_max_ticket_amount",
         resultValueType: "number"
       }
     });
@@ -2590,15 +2597,20 @@ describe("cloudtable runtime ingress", () => {
         metadata: {
           aggregateDefinitions: [
             {
-              alias: "open_ticket_count",
-              dependencyFieldIds: ["fld_status"],
+              alias: "max_ticket_amount",
+              dependencyFieldIds: ["fld_amount"],
               groupingSource: {
                 kind: "related_record",
                 resolverAlias: "account"
               },
-              operationId: "count_records",
+              operand: {
+                fieldId: "fld_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "max_number",
               sourceRelationPath: "relatedTables.account",
-              targetFieldId: "fld_open_ticket_count"
+              targetFieldId: "fld_max_ticket_amount"
             }
           ],
           relatedTableResolvers: [
@@ -2650,7 +2662,7 @@ describe("cloudtable runtime ingress", () => {
             "content-type": "application/json"
           },
           body: JSON.stringify({
-            aggregateAliases: ["open_ticket_count"],
+            aggregateAliases: ["max_ticket_amount"],
             kind: "backfill",
             permissionScopeHash: "scope:table:tbl_1",
             policyRevision: 26,
@@ -2673,7 +2685,7 @@ describe("cloudtable runtime ingress", () => {
       workflowId: string;
       workflowVersionId: string;
     }).toMatchObject({
-      aggregateAliases: ["open_ticket_count"],
+      aggregateAliases: ["max_ticket_amount"],
       kind: "backfill",
       requestId: "manual-backfill-1",
       status: "enqueued",
@@ -2686,9 +2698,15 @@ describe("cloudtable runtime ingress", () => {
       kind: "aggregate-maintenance",
       payload: {
         aggregate: {
-          alias: "open_ticket_count",
+          alias: "max_ticket_amount",
+          operand: {
+            fieldId: "fld_amount",
+            kind: "source_field",
+            valueType: "number"
+          },
+          operationId: "max_number",
           sourceTableId: "tbl_1",
-          targetFieldId: "fld_open_ticket_count",
+          targetFieldId: "fld_max_ticket_amount",
           targetTableId: "tbl_accounts"
         },
         trigger: {
@@ -9284,11 +9302,30 @@ describe("cloudtable runtime ingress", () => {
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
+      aggregateOperations: Array<Record<string, unknown>>;
       agentTools: Array<Record<string, unknown>>;
       fieldTypes: Array<Record<string, unknown>>;
       workflowOperators: Array<Record<string, unknown>>;
     };
 
+    expect(body.aggregateOperations).toContainEqual(
+      expect.objectContaining({
+        id: "max_number",
+        operand: expect.objectContaining({
+          required: true,
+          valueType: "number"
+        })
+      })
+    );
+    expect(body.aggregateOperations).toContainEqual(
+      expect.objectContaining({
+        id: "average_numbers",
+        operand: expect.objectContaining({
+          required: true,
+          valueType: "number"
+        })
+      })
+    );
     expect(body.fieldTypes).toContainEqual(
       serializeFieldTypeManifest(fieldTypeRegistry.require("text.single_line"))
     );
@@ -9449,6 +9486,7 @@ describe("cloudtable runtime ingress", () => {
             tableIds: string[];
           }>;
           catalog: {
+            aggregateOperations: Array<Record<string, unknown>>;
             agentTools: Array<Record<string, unknown>>;
             fieldTypes: Array<Record<string, unknown>>;
             workflowOperators: Array<Record<string, unknown>>;
@@ -9517,6 +9555,24 @@ describe("cloudtable runtime ingress", () => {
     });
     expect(body.output.workspace.catalog.fieldTypes).toContainEqual(
       serializeFieldTypeManifest(fieldTypeRegistry.require("text.single_line"))
+    );
+    expect(body.output.workspace.catalog.aggregateOperations).toContainEqual(
+      expect.objectContaining({
+        id: "max_number",
+        operand: expect.objectContaining({
+          required: true,
+          valueType: "number"
+        })
+      })
+    );
+    expect(body.output.workspace.catalog.aggregateOperations).toContainEqual(
+      expect.objectContaining({
+        id: "average_numbers",
+        operand: expect.objectContaining({
+          required: true,
+          valueType: "number"
+        })
+      })
     );
     expect(body.output.workspace.catalog.agentTools).toContainEqual(
       expect.objectContaining({
@@ -9627,6 +9683,7 @@ describe("cloudtable runtime ingress", () => {
         tableIds: string[];
       }>;
       catalog: {
+        aggregateOperations: Array<Record<string, unknown>>;
         agentTools: Array<Record<string, unknown>>;
         fieldTypes: Array<Record<string, unknown>>;
       };
@@ -9686,6 +9743,24 @@ describe("cloudtable runtime ingress", () => {
     });
     expect(body.catalog.fieldTypes).toContainEqual(
       serializeFieldTypeManifest(fieldTypeRegistry.require("text.single_line"))
+    );
+    expect(body.catalog.aggregateOperations).toContainEqual(
+      expect.objectContaining({
+        id: "max_number",
+        operand: expect.objectContaining({
+          required: true,
+          valueType: "number"
+        })
+      })
+    );
+    expect(body.catalog.aggregateOperations).toContainEqual(
+      expect.objectContaining({
+        id: "average_numbers",
+        operand: expect.objectContaining({
+          required: true,
+          valueType: "number"
+        })
+      })
     );
     expect(body.catalog.agentTools).toContainEqual(
       expect.objectContaining({
@@ -10089,6 +10164,560 @@ describe("cloudtable runtime ingress", () => {
       .first<{ accepted_by_user_id: string | null; status: string }>();
     expect(invitationRow).toEqual({
       accepted_by_user_id: "user_cross_org",
+      status: "accepted"
+    });
+  });
+
+  it("keeps invited-member reactive saved-view readback and persona-preview surfaces in parity", async () => {
+    const {
+      aggregateQueue,
+      db,
+      env,
+      eventFanoutQueue,
+      workflowDispatchQueue
+    } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+
+    insertField(db, {
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      },
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_name",
+      fieldKey: "account_name",
+      fieldType: "text.single_line",
+      label: "Account Name",
+      tableId: "tbl_accounts"
+    });
+    insertField(db, {
+      config: {
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_ticket_amount",
+          operationId: "sum_numbers",
+          sourceTableId: "tbl_1"
+        }
+      },
+      fieldId: "fld_account_revenue_rollup",
+      fieldKey: "ticket_revenue_rollup",
+      fieldType: "computed.readonly",
+      label: "Ticket Revenue Rollup",
+      tableId: "tbl_accounts"
+    });
+
+    insertRecordProjection(db, {
+      fields: {
+        amount: 10,
+        account: ["rec_account_1"]
+      },
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertRecordProjection(db, {
+      fields: {
+        account_name: "Acme Corp",
+        ticket_revenue_rollup: null
+      },
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account_name",
+      fieldKey: "account_name",
+      fieldType: "text.single_line",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts",
+      value: "Acme Corp"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        metadata: {
+          aggregateDefinitions: [
+            {
+              alias: "account_revenue_sum",
+              dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account",
+                sourceFieldId: "fld_ticket_account"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationConfig: {},
+              operationId: "sum_numbers",
+              sourceRelationPath: "relatedTables.account",
+              targetFieldId: "fld_account_revenue_rollup"
+            }
+          ],
+          relatedTableResolvers: [
+            {
+              alias: "account",
+              sourceFieldId: "fld_ticket_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            }
+          ],
+          status: "published",
+          tableId: "tbl_1"
+        },
+        principal: {
+          policyRevision: 7,
+          principalId: "wf_invitation_grouped_sum",
+          schemaEpoch: 0,
+          scopeHash: "scope:wf:invitation-grouped-sum"
+        },
+        trigger: {
+          match: {
+            fieldId: "fld_ticket_amount",
+            fromWorkflow: false,
+            tableId: "tbl_1"
+          },
+          operatorId: "field_changed"
+        }
+      },
+      name: "Invitation grouped sum",
+      publishedAt: "2026-06-10T00:05:00.000Z",
+      workflowId: "wf_invitation_grouped_sum",
+      workflowKey: "invitation-grouped-sum"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_invitation_grouped_sum_workflow",
+      principalId: "wf_invitation_grouped_sum",
+      policyRevision: 7,
+      schemaEpoch: 0,
+      scopeHash: "scope:wf:invitation-grouped-sum",
+      workspaceId: "ws_1",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_account_revenue_rollup: {
+          agent: false,
+          fieldId: "fld_account_revenue_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+    insertView(db, {
+      tableId: "tbl_accounts",
+      viewId: "view_account_rollups",
+      viewKey: "account-rollups",
+      viewName: "Account Rollups",
+      visibleFieldIds: ["fld_account_name", "fld_account_revenue_rollup"]
+    });
+    insertEventLedgerEntry(db, {
+      actor: {
+        mode: "workflow",
+        principalId: "wf_invitation_grouped_sum"
+      },
+      aggregateId: "wf_invitation_grouped_sum",
+      aggregateType: "workflow",
+      commandId: "cmd_publish_invitation_grouped_sum",
+      commandType: "workflow.publish",
+      createdAt: "2026-06-10T00:05:00.000Z",
+      eventId: "evt_publish_invitation_grouped_sum",
+      eventType: "workflow.published",
+      payload: {
+        workflowId: "wf_invitation_grouped_sum"
+      },
+      tableId: "tbl_1",
+      tableSequence: 1,
+      workspaceSequence: 1
+    });
+
+    await handleQueueBatch(
+      createBatch([
+        {
+          eventId: "evt_publish_invitation_grouped_sum",
+          kind: "event-fanout",
+          payload: {
+            eventId: "evt_publish_invitation_grouped_sum"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+    expect(aggregateQueue.sent).toHaveLength(1);
+
+    await handleQueueBatch(
+      createBatch([aggregateQueue.sent[0]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      JSON.parse(
+        (
+          db.inner
+            .prepare(
+              `SELECT value_json
+               FROM cell_current
+               WHERE table_id = ? AND record_id = ? AND field_id = ?`
+            )
+            .get("tbl_accounts", "rec_account_1", "fld_account_revenue_rollup") as {
+            value_json: string;
+          }
+        ).value_json
+      )
+    ).toMatchObject({
+      isEmpty: false,
+      raw: 10,
+      valueType: "computed.readonly",
+      version: 1
+    });
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_inviter",
+      userId: "user_inviter"
+    });
+    const inviterCookie = await createAuthenticatedCookie(env, "user_inviter");
+
+    const invitationResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: inviterCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invitationResponse.status).toBe(201);
+    const invitationBody = (await invitationResponse.json()) as {
+      invitation: { acceptUrl: string; id: string };
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "invitee@example.com",
+            name: "Invitee",
+            sub: "google-oauth2|invitee"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const loginResponse = await handleFetch(
+      new Request(invitationBody.invitation.acceptUrl),
+      env,
+      {} as ExecutionContext
+    );
+    expect(loginResponse.status).toBe(302);
+    const state = new URL(loginResponse.headers.get("location") ?? "").searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(302);
+    const inviteeCookie = readCookieHeaderFromSetCookie(callbackResponse.headers.get("set-cookie") ?? "");
+
+    const sessionResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session?workspaceId=ws_1", {
+        headers: {
+          cookie: inviteeCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = (await sessionResponse.json()) as {
+      session: { userEmail: string | null; userId: string };
+      workspaceMembership: { principalId: string; userId: string };
+    };
+    expect(sessionBody.session.userEmail).toBe("invitee@example.com");
+    expect(sessionBody.workspaceMembership.userId).toBe(sessionBody.session.userId);
+    expect(sessionBody.workspaceMembership.principalId).toMatch(/^usr_/);
+
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_invited_member_grouped_sum_command",
+      principalId: sessionBody.workspaceMembership.principalId,
+      policyRevision: 63,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      workspaceId: "ws_1",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_ticket_amount: {
+          agent: true,
+          fieldId: "fld_ticket_amount",
+          fieldType: "number.decimal",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_invited_member_grouped_sum_view_read",
+      principalId: sessionBody.workspaceMembership.principalId,
+      policyRevision: 64,
+      schemaEpoch: 0,
+      scopeHash: "scope:view:view_account_rollups",
+      workspaceId: "ws_1",
+      commandTypes: [],
+      fields: {
+        fld_account_name: {
+          agent: true,
+          fieldId: "fld_account_name",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: false,
+          write: false
+        },
+        fld_account_revenue_rollup: {
+          agent: true,
+          fieldId: "fld_account_revenue_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: false,
+          write: false
+        }
+      }
+    });
+
+    const commandResponse = await handleFetch(
+      new Request("https://example.test/v1/commands/execute", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          actor: {
+            mode: "user"
+          },
+          commandId: "cmd_invited_member_grouped_sum",
+          commandType: "cell.set",
+          idempotencyKey: "idem_invited_member_grouped_sum",
+          payload: {
+            fieldId: "fld_ticket_amount",
+            fieldType: "number.decimal",
+            recordId: "rec_ticket_1",
+            value: 35
+          },
+          scope: "table",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(commandResponse.status).toBe(200);
+    expect(eventFanoutQueue.sent).toHaveLength(2);
+
+    await handleQueueBatch(
+      createBatch([eventFanoutQueue.sent.at(-1)!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(workflowDispatchQueue.sent).toHaveLength(2);
+    expect(aggregateQueue.sent).toHaveLength(2);
+
+    await handleQueueBatch(
+      createBatch([aggregateQueue.sent[1]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    const savedViewResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/tables/tbl_accounts/views/view_account_rollups?workspaceId=ws_1&principalId=${sessionBody.workspaceMembership.principalId}&permissionScopeHash=scope:view:view_account_rollups&policyRevision=64`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(savedViewResponse.status).toBe(200);
+    const savedViewBody = (await savedViewResponse.json()) as {
+      rows: Array<{
+        cells: Record<string, unknown>;
+        redactedFieldIds: string[];
+      }>;
+      view: {
+        redactedFieldIds: string[];
+        visibleFieldIds: string[];
+      };
+    };
+
+    const personaPreviewResponse = await handleFetch(
+      new Request("https://example.test/v1/permissions/persona-preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          permissionScopeHash: "scope:view:view_account_rollups",
+          policyRevision: 64,
+          principalId: sessionBody.workspaceMembership.principalId,
+          tableId: "tbl_accounts",
+          viewId: "view_account_rollups",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(personaPreviewResponse.status).toBe(200);
+    const personaPreviewBody = (await personaPreviewResponse.json()) as {
+      preview: {
+        fields: Array<{
+          fieldId: string;
+          surfaces: {
+            viewQuery: {
+              readState: string;
+              writeAllowed: boolean;
+            };
+          };
+        }>;
+        rows: Array<{
+          cells: Record<string, unknown>;
+          redactedFieldIds: string[];
+        }>;
+        view: {
+          viewQuery: {
+            redactedFieldIds: string[];
+            visibleFieldIds: string[];
+          };
+        };
+      } | null;
+    };
+
+    expect(savedViewBody).toMatchObject({
+      rows: [
+        {
+          cells: {
+            fld_account_name: "Acme Corp",
+            fld_account_revenue_rollup: 35
+          },
+          redactedFieldIds: []
+        }
+      ],
+      view: {
+        redactedFieldIds: [],
+        visibleFieldIds: ["fld_account_name", "fld_account_revenue_rollup"]
+      }
+    });
+    expect(personaPreviewBody.preview).toMatchObject({
+      rows: savedViewBody.rows,
+      view: {
+        viewQuery: savedViewBody.view
+      }
+    });
+    expect(
+      personaPreviewBody.preview?.fields.find((field) => field.fieldId === "fld_account_revenue_rollup")
+    ).toMatchObject({
+      fieldId: "fld_account_revenue_rollup",
+      surfaces: {
+        viewQuery: {
+          readState: "visible",
+          writeAllowed: false
+        }
+      }
+    });
+    expect(JSON.stringify(personaPreviewBody.preview)).not.toContain("fld_ticket_amount");
+
+    const invitationRow = await db
+      .prepare(
+        `SELECT status, accepted_by_user_id
+         FROM invitations
+         WHERE id = ?`
+      )
+      .bind(invitationBody.invitation.id)
+      .first<{ accepted_by_user_id: string | null; status: string }>();
+    expect(invitationRow).toEqual({
+      accepted_by_user_id: sessionBody.session.userId,
       status: "accepted"
     });
   });

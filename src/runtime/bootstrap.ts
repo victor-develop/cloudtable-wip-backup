@@ -1,5 +1,6 @@
 import { createAgentToolRegistry } from "../core/agent-tools/registry";
 import type { AgentToolDefinition, AgentToolRegistry } from "../core/agent-tools/types";
+import { createAggregateOperationRegistry } from "../core/aggregates/registry";
 import { createCommandBus } from "../core/commands/command-bus";
 import { createEventLedger } from "../core/events/event-ledger";
 import { createFieldTypeRegistry } from "../core/field-types/registry";
@@ -596,6 +597,7 @@ function createPermissionPersonaPreviewReader(
 
 export type CloudTableRuntime = {
   appInspector: ReturnType<typeof createAppInspector>;
+  aggregateOperationRegistry: ReturnType<typeof createAggregateOperationRegistry>;
   commandBus: ReturnType<typeof createCommandBus>;
   eventLedger: ReturnType<typeof createEventLedger>;
   fieldTypeRegistry: ReturnType<typeof createFieldTypeRegistry>;
@@ -606,6 +608,7 @@ export type CloudTableRuntime = {
 };
 
 export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
+  const aggregateOperationRegistry = createAggregateOperationRegistry();
   const fieldTypeRegistry = createFieldTypeRegistry();
   const workflowOperatorRegistry = createWorkflowOperatorRegistry();
   const permissionEngine = createPermissionEngine(fieldTypeRegistry);
@@ -621,6 +624,7 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
   let agentToolRegistry: ReturnType<typeof createAgentToolRegistry>;
   const workspaceInspector = createWorkspaceInspector(
     env.DB,
+    aggregateOperationRegistry,
     fieldTypeRegistry,
     viewPlanner,
     workflowOperatorRegistry,
@@ -761,6 +765,7 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
 
   return {
     appInspector,
+    aggregateOperationRegistry,
     agentToolRegistry,
     commandBus,
     eventLedger,
@@ -775,6 +780,7 @@ export function createRuntimeWithSnapshot(
   env: CloudTableEnv,
   snapshot?: EffectivePermissionSnapshot
 ): CloudTableRuntime {
+  const aggregateOperationRegistry = createAggregateOperationRegistry();
   const fieldTypeRegistry = createFieldTypeRegistry();
   const workflowOperatorRegistry = createWorkflowOperatorRegistry();
   const permissionEngine = createPermissionEngine(fieldTypeRegistry, {
@@ -792,6 +798,7 @@ export function createRuntimeWithSnapshot(
   let agentToolRegistry: ReturnType<typeof createAgentToolRegistry>;
   const workspaceInspector = createWorkspaceInspector(
     env.DB,
+    aggregateOperationRegistry,
     fieldTypeRegistry,
     viewPlanner,
     workflowOperatorRegistry,
@@ -935,6 +942,7 @@ export function createRuntimeWithSnapshot(
 
   return {
     appInspector,
+    aggregateOperationRegistry,
     agentToolRegistry,
     commandBus,
     eventLedger,

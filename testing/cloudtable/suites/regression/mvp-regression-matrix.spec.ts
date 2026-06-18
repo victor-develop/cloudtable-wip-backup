@@ -8233,6 +8233,1021 @@ describe("cloudtable MVP regression matrix", () => {
     ]);
   });
 
+  it("scenario: reactive_max_rollup_publish_and_recompute maintains max_number results end-to-end", async () => {
+    const { db, env } = createRuntimeEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_max_rollup",
+      fieldKey: "ticket_max_rollup",
+      fieldType: "computed.readonly",
+      label: "Ticket Max Rollup",
+      tableId: "tbl_accounts",
+      config: {
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_ticket_amount",
+          operationId: "max_number",
+          sourceTableId: "tbl_1"
+        }
+      }
+    });
+
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: 4
+    });
+
+    insertRuntimeWorkflowDefinition(db, {
+      actions: [],
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "account_max_amount",
+            dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account",
+              sourceFieldId: "fld_ticket_account"
+            },
+            operand: {
+              fieldId: "fld_ticket_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationConfig: {},
+            operationId: "max_number",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_account_max_rollup"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      principal: {
+        policyRevision: 7,
+        principalId: "wf_service_max",
+        schemaEpoch: 0,
+        scopeHash: "scope:wf:max-rollup"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_ticket_amount",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      },
+      workflowId: "wf_service_identity_max_rollup"
+    });
+
+    await handleQueueBatch(
+      createRuntimeBatch([
+        {
+          kind: "aggregate-maintenance",
+          payload: {
+            aggregate: {
+              alias: "account_max_amount",
+              dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account",
+                sourceFieldId: "fld_ticket_account"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "max_number",
+              resolver: {
+                sourceFieldId: "fld_ticket_account",
+                strategy: "single_relation",
+                targetTableId: "tbl_accounts"
+              },
+              sourceRelationPath: "relatedTables.account",
+              sourceTableId: "tbl_1",
+              targetFieldId: "fld_account_max_rollup",
+              targetTableId: "tbl_accounts"
+            },
+            trigger: {
+              kind: "backfill",
+              reason: "workflow_published"
+            },
+            workflowId: "wf_service_identity_max_rollup",
+            workflowVersionId: "wf_service_identity_max_rollup:v1"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_max_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(10);
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, number_value = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: 35,
+          valueType: "number.decimal",
+          version: 1
+        }),
+        35,
+        "35",
+        "35",
+        JSON.stringify(35),
+        "evt_ticket_amount_max_updated",
+        "ws_1",
+        "tbl_1",
+        "rec_ticket_2",
+        "fld_ticket_amount"
+      );
+
+    await handleQueueBatch(
+      createRuntimeBatch([
+        {
+          kind: "aggregate-maintenance",
+          payload: {
+            aggregate: {
+              alias: "account_max_amount",
+              dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account",
+                sourceFieldId: "fld_ticket_account"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "max_number",
+              resolver: {
+                sourceFieldId: "fld_ticket_account",
+                strategy: "single_relation",
+                targetTableId: "tbl_accounts"
+              },
+              sourceRelationPath: "relatedTables.account",
+              sourceTableId: "tbl_1",
+              targetFieldId: "fld_account_max_rollup",
+              targetTableId: "tbl_accounts"
+            },
+            trigger: {
+              changedFieldIds: ["fld_ticket_amount"],
+              eventId: "evt_ticket_amount_max_updated",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            },
+            workflowId: "wf_service_identity_max_rollup",
+            workflowVersionId: "wf_service_identity_max_rollup:v1"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_max_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(35);
+  });
+
+  it("scenario: reactive_average_rollup_publish_and_recompute maintains average_numbers results end-to-end", async () => {
+    const { db, env } = createRuntimeEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_average_rollup",
+      fieldKey: "ticket_average_rollup",
+      fieldType: "computed.readonly",
+      label: "Ticket Average Rollup",
+      tableId: "tbl_accounts",
+      config: {
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_ticket_amount",
+          operationId: "average_numbers",
+          sourceTableId: "tbl_1"
+        }
+      }
+    });
+
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: 4
+    });
+
+    insertRuntimeWorkflowDefinition(db, {
+      actions: [],
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "account_average_amount",
+            dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "account",
+              sourceFieldId: "fld_ticket_account"
+            },
+            operand: {
+              fieldId: "fld_ticket_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationConfig: {},
+            operationId: "average_numbers",
+            sourceRelationPath: "relatedTables.account",
+            targetFieldId: "fld_account_average_rollup"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "account",
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      principal: {
+        policyRevision: 7,
+        principalId: "wf_service_average",
+        schemaEpoch: 0,
+        scopeHash: "scope:wf:average-rollup"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_ticket_amount",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      },
+      workflowId: "wf_service_identity_average_rollup"
+    });
+
+    await handleQueueBatch(
+      createRuntimeBatch([
+        {
+          kind: "aggregate-maintenance",
+          payload: {
+            aggregate: {
+              alias: "account_average_amount",
+              dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account",
+                sourceFieldId: "fld_ticket_account"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "average_numbers",
+              resolver: {
+                sourceFieldId: "fld_ticket_account",
+                strategy: "single_relation",
+                targetTableId: "tbl_accounts"
+              },
+              sourceRelationPath: "relatedTables.account",
+              sourceTableId: "tbl_1",
+              targetFieldId: "fld_account_average_rollup",
+              targetTableId: "tbl_accounts"
+            },
+            trigger: {
+              kind: "backfill",
+              reason: "workflow_published"
+            },
+            workflowId: "wf_service_identity_average_rollup",
+            workflowVersionId: "wf_service_identity_average_rollup:v1"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_average_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(7);
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, number_value = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: 26,
+          valueType: "number.decimal",
+          version: 1
+        }),
+        26,
+        "26",
+        "26",
+        JSON.stringify(26),
+        "evt_ticket_amount_average_updated",
+        "ws_1",
+        "tbl_1",
+        "rec_ticket_2",
+        "fld_ticket_amount"
+      );
+
+    await handleQueueBatch(
+      createRuntimeBatch([
+        {
+          kind: "aggregate-maintenance",
+          payload: {
+            aggregate: {
+              alias: "account_average_amount",
+              dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "account",
+                sourceFieldId: "fld_ticket_account"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "average_numbers",
+              resolver: {
+                sourceFieldId: "fld_ticket_account",
+                strategy: "single_relation",
+                targetTableId: "tbl_accounts"
+              },
+              sourceRelationPath: "relatedTables.account",
+              sourceTableId: "tbl_1",
+              targetFieldId: "fld_account_average_rollup",
+              targetTableId: "tbl_accounts"
+            },
+            trigger: {
+              changedFieldIds: ["fld_ticket_amount"],
+              eventId: "evt_ticket_amount_average_updated",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            },
+            workflowId: "wf_service_identity_average_rollup",
+            workflowVersionId: "wf_service_identity_average_rollup:v1"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_average_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(18);
+  });
+
+  it("scenario: reactive_value_match_max_rollup_publish_and_recompute maintains max_number results end-to-end", async () => {
+    const { db, env } = createRuntimeEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      fieldId: "fld_ticket_region",
+      fieldKey: "region",
+      fieldType: "text.single_line",
+      label: "Region",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_region_key",
+      fieldKey: "region_key",
+      fieldType: "text.single_line",
+      label: "Region Key",
+      tableId: "tbl_accounts"
+    });
+    insertField(db, {
+      fieldId: "fld_account_region_max_rollup",
+      fieldKey: "ticket_region_max_rollup",
+      fieldType: "computed.readonly",
+      label: "Ticket Region Max Rollup",
+      tableId: "tbl_accounts",
+      config: {
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_ticket_region",
+            strategy: "value_match",
+            targetFieldId: "fld_account_region_key"
+          },
+          operandFieldId: "fld_ticket_amount",
+          operationId: "max_number",
+          sourceTableId: "tbl_1"
+        }
+      }
+    });
+
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_2",
+      recordKey: "ticket-2",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_1",
+      recordKey: "account-apac-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_apac_2",
+      recordKey: "account-apac-2",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_emea",
+      recordKey: "account-emea",
+      tableId: "tbl_accounts"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_region",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: "apac"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_2",
+      tableId: "tbl_1",
+      value: 4
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_1",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_apac_2",
+      tableId: "tbl_accounts",
+      value: "apac"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account_region_key",
+      fieldType: "text.single_line",
+      recordId: "rec_account_emea",
+      tableId: "tbl_accounts",
+      value: "emea"
+    });
+
+    insertRuntimeWorkflowDefinition(db, {
+      actions: [],
+      metadata: {
+        aggregateDefinitions: [
+          {
+            alias: "region_max_amount",
+            dependencyFieldIds: ["fld_ticket_region", "fld_ticket_amount"],
+            groupingSource: {
+              kind: "related_record",
+              resolverAlias: "accounts_by_region",
+              sourceFieldId: "fld_ticket_region"
+            },
+            operand: {
+              fieldId: "fld_ticket_amount",
+              kind: "source_field",
+              valueType: "number"
+            },
+            operationConfig: {},
+            operationId: "max_number",
+            sourceRelationPath: "relatedTables.accounts_by_region",
+            targetFieldId: "fld_account_region_max_rollup"
+          }
+        ],
+        relatedTableResolvers: [
+          {
+            alias: "accounts_by_region",
+            sourceFieldId: "fld_ticket_region",
+            strategy: "value_match",
+            targetFieldId: "fld_account_region_key",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      principal: {
+        policyRevision: 7,
+        principalId: "wf_service_value_match_max",
+        schemaEpoch: 0,
+        scopeHash: "scope:wf:value-match-max-rollup"
+      },
+      trigger: {
+        operatorId: "field_changed",
+        match: {
+          fieldId: "fld_ticket_amount",
+          fromWorkflow: false,
+          tableId: "tbl_1"
+        }
+      },
+      workflowId: "wf_service_identity_value_match_max_rollup"
+    });
+
+    await handleQueueBatch(
+      createRuntimeBatch([
+        {
+          kind: "aggregate-maintenance",
+          payload: {
+            aggregate: {
+              alias: "region_max_amount",
+              dependencyFieldIds: ["fld_ticket_region", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "accounts_by_region",
+                sourceFieldId: "fld_ticket_region"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "max_number",
+              resolver: {
+                sourceFieldId: "fld_ticket_region",
+                strategy: "value_match",
+                targetFieldId: "fld_account_region_key",
+                targetTableId: "tbl_accounts"
+              },
+              sourceRelationPath: "relatedTables.accounts_by_region",
+              sourceTableId: "tbl_1",
+              targetFieldId: "fld_account_region_max_rollup",
+              targetTableId: "tbl_accounts"
+            },
+            trigger: {
+              kind: "backfill",
+              reason: "workflow_published"
+            },
+            workflowId: "wf_service_identity_value_match_max_rollup",
+            workflowVersionId: "wf_service_identity_value_match_max_rollup:v1"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_region_max_rollup",
+        recordId: "rec_account_apac_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(10);
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_region_max_rollup",
+        recordId: "rec_account_apac_2",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(10);
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_region_max_rollup",
+        recordId: "rec_account_emea",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(null);
+
+    db.inner
+      .prepare(
+        `UPDATE cell_current
+         SET value_json = ?, number_value = ?, display_value = ?, search_text = ?, value_hash = ?, last_event_id = ?
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .run(
+        JSON.stringify({
+          isEmpty: false,
+          raw: 35,
+          valueType: "number.decimal",
+          version: 1
+        }),
+        35,
+        "35",
+        "35",
+        JSON.stringify(35),
+        "evt_ticket_amount_value_match_max_updated",
+        "ws_1",
+        "tbl_1",
+        "rec_ticket_2",
+        "fld_ticket_amount"
+      );
+
+    await handleQueueBatch(
+      createRuntimeBatch([
+        {
+          kind: "aggregate-maintenance",
+          payload: {
+            aggregate: {
+              alias: "region_max_amount",
+              dependencyFieldIds: ["fld_ticket_region", "fld_ticket_amount"],
+              groupingSource: {
+                kind: "related_record",
+                resolverAlias: "accounts_by_region",
+                sourceFieldId: "fld_ticket_region"
+              },
+              operand: {
+                fieldId: "fld_ticket_amount",
+                kind: "source_field",
+                valueType: "number"
+              },
+              operationId: "max_number",
+              resolver: {
+                sourceFieldId: "fld_ticket_region",
+                strategy: "value_match",
+                targetFieldId: "fld_account_region_key",
+                targetTableId: "tbl_accounts"
+              },
+              sourceRelationPath: "relatedTables.accounts_by_region",
+              sourceTableId: "tbl_1",
+              targetFieldId: "fld_account_region_max_rollup",
+              targetTableId: "tbl_accounts"
+            },
+            trigger: {
+              changedFieldIds: ["fld_ticket_amount"],
+              eventId: "evt_ticket_amount_value_match_max_updated",
+              eventType: "cell.updated",
+              kind: "recompute",
+              recordId: "rec_ticket_2"
+            },
+            workflowId: "wf_service_identity_value_match_max_rollup",
+            workflowVersionId: "wf_service_identity_value_match_max_rollup:v1"
+          },
+          workspaceId: "ws_1"
+        }
+      ]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_region_max_rollup",
+        recordId: "rec_account_apac_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(35);
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_region_max_rollup",
+        recordId: "rec_account_apac_2",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(35);
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_region_max_rollup",
+        recordId: "rec_account_emea",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(null);
+
+    const maintenanceEvents = db.inner
+      .prepare(
+        `SELECT command_id, metadata_json
+         FROM event_ledger
+         WHERE workspace_id = ? AND table_id = ? AND command_id LIKE ?
+         ORDER BY workspace_sequence ASC`
+      )
+      .all("ws_1", "tbl_accounts", "cmd:aggregate-maintenance:%") as Array<{
+      command_id: string;
+      metadata_json: string;
+    }>;
+
+    expect(
+      maintenanceEvents.map((row) => ({
+        commandId: row.command_id,
+        metadata: JSON.parse(row.metadata_json) as Record<string, unknown>
+      }))
+    ).toEqual([
+      {
+        commandId:
+          "cmd:aggregate-maintenance:wf_service_identity_value_match_max_rollup:v1:region_max_amount:rec_account_apac_1:backfill:workflow_published",
+        metadata: {
+          aggregateType: "cell",
+          actor: {
+            mode: "workflow",
+            principalId: "wf_service_value_match_max"
+          },
+          commandType: "cell.set",
+          coordinatorOwnedMutation: true,
+          permissionScopeHash: "scope:wf:value-match-max-rollup",
+          permissionsVersion: 7,
+          schemaEpoch: 0,
+          scope: "table"
+        }
+      },
+      {
+        commandId:
+          "cmd:aggregate-maintenance:wf_service_identity_value_match_max_rollup:v1:region_max_amount:rec_account_apac_2:backfill:workflow_published",
+        metadata: {
+          aggregateType: "cell",
+          actor: {
+            mode: "workflow",
+            principalId: "wf_service_value_match_max"
+          },
+          commandType: "cell.set",
+          coordinatorOwnedMutation: true,
+          permissionScopeHash: "scope:wf:value-match-max-rollup",
+          permissionsVersion: 7,
+          schemaEpoch: 0,
+          scope: "table"
+        }
+      },
+      {
+        commandId:
+          "cmd:aggregate-maintenance:wf_service_identity_value_match_max_rollup:v1:region_max_amount:rec_account_apac_1:recompute:evt_ticket_amount_value_match_max_updated",
+        metadata: {
+          aggregateType: "cell",
+          actor: {
+            mode: "workflow",
+            principalId: "wf_service_value_match_max"
+          },
+          commandType: "cell.set",
+          coordinatorOwnedMutation: true,
+          permissionScopeHash: "scope:wf:value-match-max-rollup",
+          permissionsVersion: 7,
+          schemaEpoch: 0,
+          scope: "table"
+        }
+      },
+      {
+        commandId:
+          "cmd:aggregate-maintenance:wf_service_identity_value_match_max_rollup:v1:region_max_amount:rec_account_apac_2:recompute:evt_ticket_amount_value_match_max_updated",
+        metadata: {
+          aggregateType: "cell",
+          actor: {
+            mode: "workflow",
+            principalId: "wf_service_value_match_max"
+          },
+          commandType: "cell.set",
+          coordinatorOwnedMutation: true,
+          permissionScopeHash: "scope:wf:value-match-max-rollup",
+          permissionsVersion: 7,
+          schemaEpoch: 0,
+          scope: "table"
+        }
+      }
+    ]);
+  });
+
   it("scenario: workflow_service_identity_reactive_maintenance_requires_explicit_metadata fails closed when published workflow identity metadata is missing", async () => {
     const { db, env } = createRuntimeEnv();
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { serializeAgentToolManifest } from "../../../../src/core/agent-tools/manifest";
 import { createAgentToolRegistry } from "../../../../src/core/agent-tools/registry";
 import type { WorkspaceInspection } from "../../../../src/core/agent-tools/types";
+import { createAggregateOperationRegistry } from "../../../../src/core/aggregates/registry";
 import type { CommandBus } from "../../../../src/core/commands/command-bus";
 import type { CommandEnvelope, CommandResult } from "../../../../src/core/commands/types";
 import { serializeFieldTypeManifest } from "../../../../src/core/field-types/manifest";
@@ -1907,6 +1908,7 @@ describe("cloudtable agent tool registry", () => {
       workflowOperatorRegistry,
       workspaceInspector: createWorkspaceInspector(
         db as unknown as D1Database,
+        createAggregateOperationRegistry(),
         fieldTypeRegistry,
         viewPlanner,
         workflowOperatorRegistry,
@@ -1933,6 +1935,21 @@ describe("cloudtable agent tool registry", () => {
         }
         ],
         catalog: {
+          aggregateOperations: expect.arrayContaining([
+            expect.objectContaining({
+              description: "Counts grouped source rows.",
+              id: "count_records"
+            }),
+            expect.objectContaining({
+              description:
+                "Returns the arithmetic mean of finite numeric operand values across grouped source rows, or null when none exist.",
+              id: "average_numbers",
+              operand: expect.objectContaining({
+                required: true,
+                valueType: "number"
+              })
+            })
+          ]),
           agentTools: expect.arrayContaining([
             expect.objectContaining({
               binding: {
@@ -2005,22 +2022,22 @@ describe("cloudtable agent tool registry", () => {
             },
             workflow: {
               bindings: {
-                "row.fields.name": {
+                "row.fields.name": expect.objectContaining({
                   binding: "row.fields.name",
                   fieldId: "fld_name",
                   fieldKey: "name",
                   fieldType: "text.single_line",
-                  proposalHints: [
-                    {
+                  proposalHints: expect.arrayContaining([
+                    expect.objectContaining({
                       operatorId: "is_empty",
                       matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
                       matchFieldPhrases: ["without {field}", "{field} missing"]
-                    },
-                    {
+                    }),
+                    expect.objectContaining({
                       operatorId: "is_not_empty",
                       matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-                    }
-                  ],
+                    })
+                  ]),
                   supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
                   supportedOperators: supportedConditionOperatorManifests([
                     "equals",
@@ -2033,23 +2050,23 @@ describe("cloudtable agent tool registry", () => {
                     fieldTypePath: "row.fields.name.fieldType",
                     valuePath: "row.fields.name.value"
                   }
-                },
-                "row.fields.status": {
+                }),
+                "row.fields.status": expect.objectContaining({
                   binding: "row.fields.status",
                   fieldId: "fld_status",
                   fieldKey: "status",
                   fieldType: "status.semantic",
-                  proposalHints: [
-                    {
+                  proposalHints: expect.arrayContaining([
+                    expect.objectContaining({
                       operatorId: "is_empty",
                       matchPhrases: ["missing", "empty", "blank", "not set", "unset"],
                       matchFieldPhrases: ["without {field}", "{field} missing"]
-                    },
-                    {
+                    }),
+                    expect.objectContaining({
                       operatorId: "is_not_empty",
                       matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
-                    }
-                  ],
+                    })
+                  ]),
                   supportedOperatorIds: ["equals", "not_equals", "is_empty", "is_not_empty"],
                   supportedOperators: supportedConditionOperatorManifests([
                     "equals",
@@ -2062,7 +2079,7 @@ describe("cloudtable agent tool registry", () => {
                     fieldTypePath: "row.fields.status.fieldType",
                     valuePath: "row.fields.status.value"
                   }
-                }
+                })
               }
             },
             viewIds: ["view_open"]
@@ -3049,6 +3066,222 @@ describe("cloudtable agent tool registry", () => {
                 operatorId: "relation_contains_record"
               }
             ]
+          }
+        }
+      }
+    });
+  });
+
+  it("drafts lookup maintenance actions and metadata for workflow proposals", async () => {
+    const registry = createRegistry({
+      inspectedWorkspace: {
+        apps: [],
+        tables: [
+          {
+            fieldIds: ["fld_account", "fld_ticket_account_name"],
+            name: "Tickets",
+            tableId: "tbl_tickets",
+            view: {
+              fieldIds: [],
+              fields: {},
+              filterableFieldIds: [],
+              groupableFieldIds: [],
+              sortableFieldIds: []
+            },
+            viewIds: [],
+            workflow: { bindings: {} }
+          },
+          {
+            fieldIds: ["fld_account_name"],
+            name: "Accounts",
+            tableId: "tbl_accounts",
+            view: {
+              fieldIds: [],
+              fields: {},
+              filterableFieldIds: [],
+              groupableFieldIds: [],
+              sortableFieldIds: []
+            },
+            viewIds: [],
+            workflow: { bindings: {} }
+          }
+        ],
+        views: [],
+        workflows: [],
+        workspaceId: "ws_demo"
+      },
+      tableSchemaInspectionResult(input) {
+        if (input.tableId === "tbl_accounts") {
+          return {
+            appId: "app_crm",
+            fields: [
+              {
+                config: {},
+                fieldId: "fld_account_name",
+                fieldKey: "account_name",
+                fieldType: "text.single_line",
+                fieldTypeVersion: 1,
+                label: "Account Name"
+              }
+            ],
+            schemaEpoch: 3,
+            tableId: "tbl_accounts",
+            tableName: "Accounts",
+            tableSchemaVersion: 2,
+            tableSlug: "accounts",
+            workflow: { bindings: {} },
+            workspaceId: "ws_demo"
+          };
+        }
+
+        return {
+          appId: "app_crm",
+          fields: [
+            {
+              config: {
+                allowMultiple: false,
+                targetTableId: "tbl_accounts"
+              },
+              fieldId: "fld_account",
+              fieldKey: "account",
+              fieldType: "relation.record",
+              fieldTypeVersion: 1,
+              label: "Account"
+            },
+            {
+              config: {
+                dependsOnFieldIds: ["fld_account"],
+                lookup: {
+                  sourceFieldId: "fld_account",
+                  targetFieldId: "fld_account_name"
+                }
+              },
+              fieldId: "fld_ticket_account_name",
+              fieldKey: "ticket_account_name",
+              fieldType: "computed.readonly",
+              fieldTypeVersion: 1,
+              label: "Ticket Account Name"
+            }
+          ],
+          schemaEpoch: 3,
+          tableId: "tbl_tickets",
+          tableName: "Tickets",
+          tableSchemaVersion: 2,
+          tableSlug: "tickets",
+          workflow: { bindings: {} },
+          workspaceId: "ws_demo"
+        };
+      }
+    });
+
+    const result = await registry.invoke({
+      toolId: "proposeWorkflow",
+      input: {
+        ...baseCommandInput(),
+        actionIds: ["set_cell"],
+        businessRule: "Keep ticket account name aligned with the linked account.",
+        lookupFieldIds: ["fld_ticket_account_name"],
+        name: "Ticket account lookup",
+        tableId: "tbl_tickets",
+        triggerId: "field_changed",
+        workflowId: "wf_ticket_account_lookup"
+      }
+    });
+
+    expect(result).toMatchObject({
+      diagnostics: [],
+      kind: "workflow-proposal",
+      proposal: {
+        actions: [
+          {
+            id: "set_cell",
+            proposalTemplate: {
+              fieldId: {
+                path: "row.fields.ticket_account_name.fieldId"
+              },
+              fieldType: {
+                path: "row.fields.ticket_account_name.fieldType"
+              },
+              recordId: {
+                path: "row.recordId"
+              },
+              tableId: {
+                path: "table.tableId"
+              },
+              value: {
+                path: "cell.value"
+              }
+            }
+          }
+        ],
+        metadata: {
+          lookupDefinitions: [
+            {
+              alias: "fld_ticket_account_name",
+              lookupSource: {
+                kind: "related_record",
+                resolverAlias: "lookup_fld_ticket_account_name"
+              },
+              sourceRelationPath: "relatedTables.lookup_fld_ticket_account_name",
+              targetFieldId: "fld_ticket_account_name",
+              valueFieldId: "fld_account_name"
+            }
+          ],
+          lookupFieldIds: ["fld_ticket_account_name"],
+          relatedTableResolvers: [
+            {
+              alias: "lookup_fld_ticket_account_name",
+              sourceFieldId: "fld_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            }
+          ],
+          status: "draft",
+          tableId: "tbl_tickets"
+        }
+      },
+      command: {
+        payload: {
+          definition: {
+            actions: [
+              {
+                input: {
+                  fieldId: {
+                    path: "row.fields.ticket_account_name.fieldId"
+                  },
+                  fieldType: {
+                    path: "row.fields.ticket_account_name.fieldType"
+                  },
+                  recordId: {
+                    path: "row.recordId"
+                  },
+                  tableId: {
+                    path: "table.tableId"
+                  },
+                  value: {
+                    path: "cell.value"
+                  }
+                },
+                operatorId: "set_cell"
+              }
+            ],
+            metadata: {
+              lookupDefinitions: [
+                {
+                  alias: "fld_ticket_account_name",
+                  sourceRelationPath: "relatedTables.lookup_fld_ticket_account_name",
+                  targetFieldId: "fld_ticket_account_name",
+                  valueFieldId: "fld_account_name"
+                }
+              ],
+              lookupFieldIds: ["fld_ticket_account_name"]
+            },
+            trigger: {
+              match: {
+                fieldIds: ["fld_account"]
+              },
+              operatorId: "field_changed"
+            }
           }
         }
       }

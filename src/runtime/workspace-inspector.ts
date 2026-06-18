@@ -1,3 +1,5 @@
+import { serializeAggregateOperationManifest } from "../core/aggregates/manifest";
+import type { AggregateOperationRegistry } from "../core/aggregates/types";
 import { serializeAgentToolManifest } from "../core/agent-tools/manifest";
 import type { AgentToolRegistry, WorkspaceInspection, WorkspaceInspector } from "../core/agent-tools/types";
 import { serializeFieldTypeManifest } from "../core/field-types/manifest";
@@ -50,6 +52,7 @@ type WorkflowRow = {
 
 export function createWorkspaceInspector(
   db: D1Database,
+  aggregateOperationRegistry: AggregateOperationRegistry,
   fieldTypeRegistry: FieldTypeRegistry,
   viewPlanner: ViewPlanner,
   workflowOperatorRegistry: WorkflowOperatorRegistry,
@@ -90,6 +93,9 @@ export function createWorkspaceInspector(
           : [],
         catalog: catalogIncluded
           ? {
+              aggregateOperations: aggregateOperationRegistry
+                .list()
+                .map(serializeAggregateOperationManifest),
               agentTools: getAgentToolRegistry().list().map(serializeAgentToolManifest),
               fieldTypes: fieldTypeRegistry.list().map(serializeFieldTypeManifest),
               workflowOperators: workflowOperatorRegistry.list().map(serializeWorkflowOperatorManifest)

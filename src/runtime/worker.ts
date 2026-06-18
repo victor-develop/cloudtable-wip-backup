@@ -41,6 +41,7 @@ import type {
   UpdateWorkflowToolInput,
   UpdateViewToolInput
 } from "../core/agent-tools/types";
+import { serializeAggregateOperationManifest } from "../core/aggregates/manifest";
 import type { CommandEnvelope, CommandResult } from "../core/commands/types";
 import { serializeFieldTypeManifest } from "../core/field-types/manifest";
 import type { FieldTypeRegistry } from "../core/field-types/types";
@@ -146,6 +147,9 @@ export async function handleFetch(
 
   if (request.method === "GET" && url.pathname === "/internal/scaffold") {
     return json({
+      aggregateOperations: runtime.aggregateOperationRegistry
+        .list()
+        .map(serializeAggregateOperationManifest),
       fieldTypes: runtime.fieldTypeRegistry.list().map(serializeFieldTypeManifest),
       workflowOperators: runtime.workflowOperatorRegistry.list().map(serializeWorkflowOperatorManifest),
       agentTools: runtime.agentToolRegistry.list().map(serializeAgentToolManifest)
@@ -469,6 +473,7 @@ export async function handleFetch(
 
     const workspaceInspector = createWorkspaceInspector(
       env.DB,
+      runtime.aggregateOperationRegistry,
       runtime.fieldTypeRegistry,
       runtime.viewPlanner,
       runtime.workflowOperatorRegistry,
@@ -3762,6 +3767,9 @@ function buildAgentToolInvocation(
           businessRule: readRequiredAgentToolString(input.businessRule, "businessRule"),
           fieldIds: Array.isArray(input.fieldIds)
             ? readRequiredAgentToolStringArray(input.fieldIds, "fieldIds")
+            : undefined,
+          lookupFieldIds: Array.isArray(input.lookupFieldIds)
+            ? readRequiredAgentToolStringArray(input.lookupFieldIds, "lookupFieldIds")
             : undefined,
           name: readRequiredAgentToolString(input.name, "name"),
           relatedSourceFieldId:

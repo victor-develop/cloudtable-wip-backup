@@ -15,6 +15,7 @@ import type {
   ValidationResult
 } from "./types";
 import { readComputedFieldConfig } from "./computed";
+import { createAggregateOperationRegistry } from "../aggregates/registry";
 import { listPrincipalUserCanonicalBindings } from "../ownership/row-owner";
 
 const baseCapabilities: FieldTypeCapabilities = {
@@ -52,6 +53,8 @@ const defaultWorkflowProposalHints: readonly FieldWorkflowProposalHint[] = [
     matchPhrases: ["present", "populated", "filled", "has value", "is set", "set"]
   }
 ];
+
+const aggregateOperationRegistry = createAggregateOperationRegistry();
 
 type ModuleFixtureInput = {
   type: string;
@@ -2245,29 +2248,36 @@ function validateComputedConfig(config: unknown): ValidationResult {
           "Field configuration rollup.grouping.targetFieldId must be a non-empty string for value_match rollups."
         );
       }
-      if (
-        parsedRollupConfig.operationId !== "count_records" &&
-        parsedRollupConfig.operationId !== "sum_numbers"
-      ) {
+      const aggregateOperation = aggregateOperationRegistry.get(parsedRollupConfig.operationId);
+      if (!aggregateOperation) {
         errors.push(
-          "Field configuration rollup.operationId must be count_records or sum_numbers."
+          `Field configuration rollup.operationId must be one of: ${aggregateOperationRegistry
+            .list()
+            .map((operation) => operation.id)
+            .join(", ")}.`
         );
       }
       if (
-        parsedRollupConfig.operationId === "sum_numbers" &&
+        aggregateOperation?.operand?.required &&
         (!parsedRollupConfig.operandFieldId || parsedRollupConfig.operandFieldId.length === 0)
       ) {
         errors.push(
-          "Field configuration rollup.operandFieldId is required for sum_numbers rollups."
+          `Field configuration rollup.operandFieldId is required for ${parsedRollupConfig.operationId} rollups.`
         );
       }
       if (
-        parsedRollupConfig.operationId === "count_records" &&
+        aggregateOperation &&
+        aggregateOperation.operand === undefined &&
         parsedRollupConfig.operandFieldId !== undefined
       ) {
         errors.push(
-          "Field configuration rollup.operandFieldId is not supported for count_records rollups."
+          `Field configuration rollup.operandFieldId is not supported for ${parsedRollupConfig.operationId} rollups.`
         );
+      }
+      if (aggregateOperation) {
+        const configDiagnostics =
+          aggregateOperation.validateConfig?.(parsedRollupConfig.operationConfig ?? {}) ?? [];
+        errors.push(...configDiagnostics.map((diagnostic) => `Field configuration ${diagnostic}`));
       }
     }
   }
@@ -2900,7 +2910,7 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
         },
         rollup: {
           type: "object",
-          description: "Optional first-class rollup contract for grouped count/sum aggregates.",
+          description: "Optional first-class rollup contract for registry-backed grouped aggregates.",
           additionalProperties: false,
           properties: {
             sourceTableId: {
@@ -2909,16 +2919,17 @@ export const mvpFieldTypes: FieldTypeDefinition[] = [
             },
             operationId: {
               type: "string",
-              description: "Supported aggregate operation id.",
-              enum: ["count_records", "sum_numbers"]
+              description: "Supported aggregate operation id from the aggregate operation registry.",
+              enum: aggregateOperationRegistry.list().map((operation) => operation.id)
             },
             operandFieldId: {
               type: "string",
-              description: "Required numeric source field for sum_numbers."
+              description:
+                "Operand source field id for operations whose manifest requires a numeric source field."
             },
             operationConfig: {
               type: "object",
-              description: "Optional aggregate-operation config."
+              description: "Optional aggregate-operation config keyed by the selected operation manifest."
             },
             grouping: {
               type: "object",

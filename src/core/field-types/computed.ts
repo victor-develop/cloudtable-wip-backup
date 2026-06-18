@@ -15,7 +15,7 @@ export type ComputedRollupConfig = {
   grouping: ComputedRollupGrouping;
   operandFieldId?: string;
   operationConfig?: Record<string, JsonValue>;
-  operationId: "count_records" | "sum_numbers";
+  operationId: string;
   sourceTableId: string;
 };
 
@@ -94,8 +94,7 @@ export function readComputedFieldConfig(config: unknown): ComputedFieldConfig | 
                 operationConfig: readOperationConfig(rollupValue.operationConfig)
               }
             : {}),
-          operationId:
-            rollupValue.operationId === "sum_numbers" ? "sum_numbers" : "count_records",
+          operationId: readString(rollupValue.operationId) ?? "",
           sourceTableId: readString(rollupValue.sourceTableId) ?? ""
         }
       : undefined;
