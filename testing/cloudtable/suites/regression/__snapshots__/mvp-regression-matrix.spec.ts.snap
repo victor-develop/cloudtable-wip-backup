@@ -2875,6 +2875,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
             "label": "Status"
           }
         ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "limit": 100,
+          "nextCursor": null,
+          "returnedRowCount": 1
+        },
         "rows": [
           {
             "cells": {
@@ -2971,6 +2977,12 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
               "label": "Status"
             }
           ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "limit": 100,
+            "nextCursor": null,
+            "returnedRowCount": 1
+          },
           "rows": [
             {
               "cells": {

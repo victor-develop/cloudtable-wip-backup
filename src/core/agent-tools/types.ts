@@ -355,6 +355,8 @@ export type QueryViewToolInput = {
   workspaceId: string;
   tableId: string;
   viewId: string;
+  cursor?: string;
+  limit?: number;
 };
 
 export type ReadActivityHistoryToolInput = {

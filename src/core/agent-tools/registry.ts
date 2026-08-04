@@ -734,6 +734,10 @@ const tools: AgentToolDefinition[] = [
     id: "queryView",
     inputSchema: {
       properties: {
+        cursor: jsonStringSchema,
+        limit: {
+          type: "number"
+        },
         tableId: jsonStringSchema,
         viewId: jsonStringSchema,
         workspaceId: jsonStringSchema

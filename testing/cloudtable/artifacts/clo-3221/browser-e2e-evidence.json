@@ -1,0 +1,414 @@
+{
+  "baseUrl": "http://127.0.0.1:8877/studio",
+  "generatedAt": "2026-08-04T14:41:14.019Z",
+  "routes": [
+    {
+      "method": "GET",
+      "pathname": "/v1/auth/session",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tenants",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_1/catalog",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_1/field-types",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_1/agent-tools",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_1"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_1"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_1"
+    },
+    {
+      "method": "POST",
+      "pathname": "/v1/auth/session/selection",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_2/catalog",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_2/field-types",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_2/agent-tools",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/records/rec_1",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/records/rec_1/activity",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "POST",
+      "pathname": "/v1/tables/tbl_accounts/records",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_2/memberships",
+      "search": ""
+    },
+    {
+      "method": "POST",
+      "pathname": "/v1/workspaces/ws_2/invitations",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_denied/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_denied",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/auth/session",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tenants",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_1/catalog",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_1/field-types",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_1/agent-tools",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_1"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_1"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_1"
+    },
+    {
+      "method": "POST",
+      "pathname": "/v1/auth/session/selection",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_2/catalog",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_2/field-types",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_2/agent-tools",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/records/rec_1",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/records/rec_1/activity",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "POST",
+      "pathname": "/v1/tables/tbl_accounts/records",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_pipeline",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/workspaces/ws_2/memberships",
+      "search": ""
+    },
+    {
+      "method": "POST",
+      "pathname": "/v1/workspaces/ws_2/invitations",
+      "search": ""
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/schema",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_denied/definition",
+      "search": "?workspaceId=ws_2"
+    },
+    {
+      "method": "GET",
+      "pathname": "/v1/tables/tbl_accounts/views/view_denied",
+      "search": "?workspaceId=ws_2"
+    }
+  ],
+  "viewports": [
+    {
+      "height": 1000,
+      "name": "desktop-unauth",
+      "screenshot": "/Users/victorzhou/.paperclip/instances/default/projects/840ede41-bcc1-45ca-8fb6-229b5430ee7f/e45a9cae-72a7-4dbd-b5f4-c2a20ac5d305/_default/testing/cloudtable/artifacts/clo-3221/cloudtable-studio-desktop-unauth.png",
+      "width": 1440
+    },
+    {
+      "height": 844,
+      "name": "mobile-unauth",
+      "screenshot": "/Users/victorzhou/.paperclip/instances/default/projects/840ede41-bcc1-45ca-8fb6-229b5430ee7f/e45a9cae-72a7-4dbd-b5f4-c2a20ac5d305/_default/testing/cloudtable/artifacts/clo-3221/cloudtable-studio-mobile-unauth.png",
+      "width": 390
+    },
+    {
+      "height": 1000,
+      "name": "desktop-auth-pipeline",
+      "screenshot": "/Users/victorzhou/.paperclip/instances/default/projects/840ede41-bcc1-45ca-8fb6-229b5430ee7f/e45a9cae-72a7-4dbd-b5f4-c2a20ac5d305/_default/testing/cloudtable/artifacts/clo-3221/cloudtable-studio-desktop-auth-pipeline.png",
+      "width": 1440
+    },
+    {
+      "height": 1000,
+      "name": "desktop-auth",
+      "screenshot": "/Users/victorzhou/.paperclip/instances/default/projects/840ede41-bcc1-45ca-8fb6-229b5430ee7f/e45a9cae-72a7-4dbd-b5f4-c2a20ac5d305/_default/testing/cloudtable/artifacts/clo-3221/cloudtable-studio-desktop-auth-denied.png",
+      "width": 1440
+    },
+    {
+      "height": 844,
+      "name": "mobile-auth-pipeline",
+      "screenshot": "/Users/victorzhou/.paperclip/instances/default/projects/840ede41-bcc1-45ca-8fb6-229b5430ee7f/e45a9cae-72a7-4dbd-b5f4-c2a20ac5d305/_default/testing/cloudtable/artifacts/clo-3221/cloudtable-studio-mobile-auth-pipeline.png",
+      "width": 390
+    },
+    {
+      "height": 844,
+      "name": "mobile-auth",
+      "screenshot": "/Users/victorzhou/.paperclip/instances/default/projects/840ede41-bcc1-45ca-8fb6-229b5430ee7f/e45a9cae-72a7-4dbd-b5f4-c2a20ac5d305/_default/testing/cloudtable/artifacts/clo-3221/cloudtable-studio-mobile-auth-denied.png",
+      "width": 390
+    }
+  ],
+  "observations": [
+    {
+      "name": "desktop unauthenticated login",
+      "responses": [
+        {
+          "status": 200,
+          "url": "http://127.0.0.1:8877/studio"
+        },
+        {
+          "status": 401,
+          "url": "http://127.0.0.1:8877/v1/auth/session"
+        }
+      ],
+      "text": "C\nCloudTable Studio\n\nSign in to choose a tenant and open a workspace.\n\nContinue with Google\n\nSession state is read from /v1/auth/session and tenants from /v1/tenants."
+    },
+    {
+      "name": "mobile unauthenticated login",
+      "responses": [
+        {
+          "status": 200,
+          "url": "http://127.0.0.1:8877/studio"
+        },
+        {
+          "status": 401,
+          "url": "http://127.0.0.1:8877/v1/auth/session"
+        }
+      ],
+      "text": "C\nCloudTable Studio\n\nSign in to choose a tenant and open a workspace.\n\nContinue with Google\n\nSession state is read from /v1/auth/session and tenants from /v1/tenants."
+    },
+    {
+      "cellWritesAfterFocusShift": 0,
+      "cellWritesBeforeFocusShift": 0,
+      "name": "desktop no-op inline edit focus shift",
+      "text": "No fld_name cell PUT emitted when opening the editor and moving focus without changing the value."
+    },
+    {
+      "name": "desktop authenticated shell",
+      "text": "C\nCloudTable Studio\n\nBeta Labs / Pilot CRM\n\nAcme Data / Revenue Ops\nBeta Labs / Pilot CRM\nRefresh\nAPPS\nSales\nTABLES AND VIEWS\nAccounts\n2\nPipeline\nview\nDenied view\nview\nContacts\n1\nAll contacts\nview\nACCESS\nMembers\n2\nInvite\nadmin\nDenied view\n\nusr_admin · scope:view:view_denied · 42\n\ndenied\nNew\nAccess denied\nThe backend permission surface denied this view read.\nRecord detail\nrec_1\n\nSelect a row to inspect permission-filtered record data.\n\nActivity\n0\n\nNo activity visible for this record.\n\nInvitations and members\nowner@example.com\nworkspace.admin\nanalyst@example.com\nworkspace.member\nLoad members\nCreate invitation\nBackend manifests\nField types\n3\nActions\n2\nNotice\nInvitation issued for new.user@example.com"
+    },
+    {
+      "cellWritesAfterFocusShift": 0,
+      "cellWritesBeforeFocusShift": 0,
+      "name": "mobile no-op inline edit focus shift",
+      "text": "No fld_name cell PUT emitted when opening the editor and moving focus without changing the value."
+    },
+    {
+      "name": "mobile authenticated shell",
+      "text": "C\nCloudTable Studio\n\nBeta Labs / Pilot CRM\n\nAcme Data / Revenue Ops\nBeta Labs / Pilot CRM\nRefresh\nAPPS\nSales\nTABLES AND VIEWS\nAccounts\n2\nPipeline\nview\nDenied view\nview\nContacts\n1\nAll contacts\nview\nACCESS\nMembers\n2\nInvite\nadmin\nDenied view\n\nusr_admin · scope:view:view_denied · 42\n\ndenied\nNew\nAccess denied\nThe backend permission surface denied this view read.\nRecord detail\nrec_1\n\nSelect a row to inspect permission-filtered record data.\n\nActivity\n0\n\nNo activity visible for this record.\n\nInvitations and members\nowner@example.com\nworkspace.admin\nanalyst@example.com\nworkspace.member\nLoad members\nCreate invitation\nBackend manifests\nField types\n3\nActions\n2\nNotice\nInvitation issued for new.user@example.com"
+    }
+  ]
+}

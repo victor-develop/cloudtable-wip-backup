@@ -921,7 +921,7 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
     fieldTypeRegistry
   });
   const viewQueryReader = {
-    read(input: { tableId: string; viewId: string; workspaceId: string }) {
+    read(input: { cursor?: string; limit?: number; tableId: string; viewId: string; workspaceId: string }) {
       return readViewQuery(
         env.DB,
         fieldTypeRegistry,
@@ -1251,7 +1251,7 @@ export function createRuntimeWithSnapshot(
     fieldTypeRegistry
   });
   const viewQueryReader = {
-    read(input: { tableId: string; viewId: string; workspaceId: string }) {
+    read(input: { cursor?: string; limit?: number; tableId: string; viewId: string; workspaceId: string }) {
       return readViewQuery(
         env.DB,
         fieldTypeRegistry,

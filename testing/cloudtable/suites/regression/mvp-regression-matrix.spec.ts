@@ -8331,6 +8331,34 @@ describe("cloudtable MVP regression matrix", () => {
       snapshotId: "snap_invited_recipe_view"
     });
 
+    const syncPreviewResponse = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes/preview", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          businessRule: "Keep account status aligned to the linked ticket status.",
+          name: "Invited direct sync",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 72,
+          recipeType: "direct_sync",
+          relatedSourceFieldId: "fld_ticket_account",
+          syncSourceFieldId: "fld_ticket_status",
+          syncTargetFieldId: "fld_account_status",
+          workflowId: "wf_invited_direct_sync_recipe",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(syncPreviewResponse.status).toBe(200);
+    const syncPreviewBody = (await syncPreviewResponse.json()) as {
+      preview: { hash: string };
+    };
+
     const syncCreateResponse = await handleFetch(
       new Request("https://example.test/v1/tables/tbl_1/workflow-recipes", {
         method: "POST",
@@ -8345,6 +8373,7 @@ describe("cloudtable MVP regression matrix", () => {
           name: "Invited direct sync",
           permissionScopeHash: "scope:table:tbl_1",
           policyRevision: 72,
+          previewHash: syncPreviewBody.preview.hash,
           publish: {
             commandId: "cmd_invited_direct_sync_publish",
             idempotencyKey: "idem_invited_direct_sync_publish"
@@ -8372,6 +8401,32 @@ describe("cloudtable MVP regression matrix", () => {
       workflowId: "wf_invited_direct_sync_recipe"
     });
 
+    const rollupPreviewResponse = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes/preview", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          businessRule: "Roll ticket amount into account revenue.",
+          name: "Invited revenue rollup",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 72,
+          recipeType: "grouped_rollup",
+          rollupFieldIds: ["fld_account_revenue_rollup"],
+          workflowId: "wf_invited_grouped_rollup_recipe",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(rollupPreviewResponse.status).toBe(200);
+    const rollupPreviewBody = (await rollupPreviewResponse.json()) as {
+      preview: { hash: string };
+    };
+
     const rollupCreateResponse = await handleFetch(
       new Request("https://example.test/v1/tables/tbl_1/workflow-recipes", {
         method: "POST",
@@ -8386,6 +8441,7 @@ describe("cloudtable MVP regression matrix", () => {
           name: "Invited revenue rollup",
           permissionScopeHash: "scope:table:tbl_1",
           policyRevision: 72,
+          previewHash: rollupPreviewBody.preview.hash,
           publish: {
             commandId: "cmd_invited_rollup_publish",
             idempotencyKey: "idem_invited_rollup_publish"

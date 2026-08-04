@@ -67,6 +67,8 @@ type ViewSortDefinition = {
 };
 
 type ReadViewQueryInput = {
+  cursor?: string | null;
+  limit?: number | null;
   permissionScopeHash?: string | null;
   policyRevision?: number | null;
   principalId?: string | null;
@@ -95,6 +97,7 @@ type ViewQueryRowResult = {
 export type ReadViewQueryResult = {
   fields: ViewFieldMetadata[];
   groups?: ViewQueryGroupResult[];
+  pageInfo: ViewQueryPageInfo;
   rows: ViewQueryRowResult[];
   view: {
     actions?: {
@@ -133,6 +136,18 @@ export type ReadViewQueryResult = {
   };
 };
 
+export type ViewQueryPageInfo = {
+  hasNextPage: boolean;
+  limit: number;
+  nextCursor: string | null;
+  returnedRowCount: number;
+};
+
+export type ViewQueryPageInput = {
+  cursor?: string | null;
+  limit?: number | null;
+};
+
 export type ViewQueryGroupResult = {
   bucketKey: string;
   groupLabel: string;
@@ -169,6 +184,84 @@ type IndexedFieldValue = {
   numberValue: number | null;
   textValue: string | null;
 };
+
+const DEFAULT_VIEW_QUERY_LIMIT = 100;
+const MAX_VIEW_QUERY_LIMIT = 500;
+
+type ViewQueryCursorPayload = {
+  offset: number;
+};
+
+export function validateViewQueryLimit(value: string | number | null | undefined): number {
+  if (value == null || value === "") {
+    return DEFAULT_VIEW_QUERY_LIMIT;
+  }
+
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_VIEW_QUERY_LIMIT) {
+    throw new Error(`limit must be an integer between 1 and ${MAX_VIEW_QUERY_LIMIT} for view reads.`);
+  }
+
+  return parsed;
+}
+
+export function validateViewQueryCursor(value: unknown): string | null {
+  if (value == null || value === "") {
+    return null;
+  }
+
+  if (typeof value !== "string") {
+    throw new Error("cursor must be a string when provided for view reads.");
+  }
+
+  decodeViewQueryCursor(value);
+  return value;
+}
+
+function encodeViewQueryCursor(payload: ViewQueryCursorPayload): string {
+  return btoa(JSON.stringify(payload)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
+}
+
+function decodeViewQueryCursor(cursor: string): ViewQueryCursorPayload {
+  try {
+    const padded = cursor.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(cursor.length / 4) * 4, "=");
+    const parsed = JSON.parse(atob(padded)) as Record<string, unknown>;
+    if (!Number.isInteger(parsed.offset) || (parsed.offset as number) < 0) {
+      throw new Error("invalid offset");
+    }
+
+    return {
+      offset: parsed.offset as number
+    };
+  } catch {
+    throw new Error("cursor must be a valid view-read cursor.");
+  }
+}
+
+function paginateMaterializedRows(
+  rows: readonly MaterializedViewRow[],
+  input: ViewQueryPageInput
+): {
+  pageInfo: ViewQueryPageInfo;
+  rows: MaterializedViewRow[];
+} {
+  const limit = validateViewQueryLimit(input.limit);
+  const cursor = validateViewQueryCursor(input.cursor);
+  const offset = cursor == null ? 0 : decodeViewQueryCursor(cursor).offset;
+  const pageRows = rows.slice(offset, offset + limit);
+  const nextOffset = offset + pageRows.length;
+  const hasNextPage = nextOffset < rows.length;
+
+  return {
+    pageInfo: {
+      hasNextPage,
+      limit,
+      nextCursor: hasNextPage ? encodeViewQueryCursor({ offset: nextOffset }) : null,
+      returnedRowCount: pageRows.length
+    },
+    rows: pageRows
+  };
+}
 
 function parseViewSchema(raw: string): ParsedViewSchema {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -992,6 +1085,12 @@ export async function readViewQuery(
   if (blockedFieldIds.length > 0) {
     return {
       fields,
+      pageInfo: {
+        hasNextPage: false,
+        limit: validateViewQueryLimit(input.limit),
+        nextCursor: null,
+        returnedRowCount: 0
+      },
       rows: [],
       view: {
         actions: {
@@ -1156,12 +1255,13 @@ export async function readViewQuery(
       sorts: schema.sorts
     });
   });
-  const rows = sortedMaterializedRows.map((row) => row.row);
+  const ungroupedPage = paginateMaterializedRows(sortedMaterializedRows, input);
 
   if (!schema.groupByFieldId) {
     return {
       fields,
-      rows,
+      pageInfo: ungroupedPage.pageInfo,
+      rows: ungroupedPage.rows.map((row) => row.row),
       view: {
         actions: {
           createRecord,
@@ -1174,7 +1274,7 @@ export async function readViewQuery(
         diagnostics: viewDiagnostics,
         filters: buildFilterMetadata(schema, snapshot, visibleFilterFieldIds),
         redactedFieldIds: surfacePlan.redactedFieldIds,
-        redactionApplied: rows.some((row) => row.redactedFieldIds.length > 0),
+        redactionApplied: ungroupedPage.rows.some((row) => row.row.redactedFieldIds.length > 0),
         tableId: view.table_id,
         viewId: view.id,
         viewKey: view.view_key,
@@ -1224,7 +1324,12 @@ export async function readViewQuery(
     return left.recordId < right.recordId ? -1 : 1;
   });
   const groups: ViewQueryGroupResult[] = [];
+  const groupRowCounts = new Map<string, number>();
   for (const row of sortedRows) {
+    groupRowCounts.set(row.groupBucketKey, (groupRowCounts.get(row.groupBucketKey) ?? 0) + 1);
+  }
+  const groupedPage = paginateMaterializedRows(sortedRows, input);
+  for (const row of groupedPage.rows) {
     const currentGroup = groups.at(-1);
 
     if (!currentGroup || currentGroup.bucketKey !== row.groupBucketKey) {
@@ -1232,14 +1337,13 @@ export async function readViewQuery(
         bucketKey: row.groupBucketKey,
         groupLabel: row.groupLabel,
         groupValue: row.groupValue,
-        rowCount: 1,
+        rowCount: groupRowCounts.get(row.groupBucketKey) ?? 0,
         rows: [row.row]
       });
       continue;
     }
 
     currentGroup.rows.push(row.row);
-    currentGroup.rowCount += 1;
   }
 
   const configuredGroups =
@@ -1275,6 +1379,7 @@ export async function readViewQuery(
   return {
     fields,
     groups: mergedGroups,
+    pageInfo: groupedPage.pageInfo,
     rows: [],
     view: {
       actions: {
@@ -1288,7 +1393,7 @@ export async function readViewQuery(
       diagnostics: viewDiagnostics,
       filters: buildFilterMetadata(schema, snapshot, visibleFilterFieldIds),
       redactedFieldIds: surfacePlan.redactedFieldIds,
-      redactionApplied: rows.some((row) => row.redactedFieldIds.length > 0),
+      redactionApplied: groupedPage.rows.some((row) => row.row.redactedFieldIds.length > 0),
       tableId: view.table_id,
       viewId: view.id,
       viewKey: view.view_key,

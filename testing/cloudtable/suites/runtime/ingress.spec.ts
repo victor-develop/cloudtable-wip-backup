@@ -335,6 +335,56 @@ afterEach(() => {
 const fieldTypeRegistry = createFieldTypeRegistry();
 const workflowOperatorRegistry = createWorkflowOperatorRegistry();
 
+describe("CloudTable Studio shell", () => {
+  it("serves the Studio shell with auth, tenant, navigation, and permission-aware grid hooks", async () => {
+    const { env } = createEnv();
+
+    const response = await handleFetch(
+      new Request("https://example.test/studio"),
+      env,
+      {} as ExecutionContext
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(html).toContain("CloudTable Studio");
+    expect(html).toContain("/v1/auth/google/login");
+    expect(html).toContain("/v1/auth/session");
+    expect(html).toContain("/v1/tenants");
+    expect(html).toContain("/v1/auth/session/selection");
+    expect(html).toContain("/v1/workspaces/");
+    expect(html).toContain("/field-types");
+    expect(html).toContain("/agent-tools");
+    expect(html).toContain("/schema?workspaceId=");
+    expect(html).toContain("/definition");
+    expect(html).toContain("/activity");
+    expect(html).toContain("/invitations");
+    expect(html).toContain("hiddenFieldIds");
+    expect(html).toContain("readState");
+    expect(html).toContain("redacted");
+    expect(html).toContain("record.create");
+    expect(html).toContain("/cells/");
+  });
+
+  it("serves responsive desktop and mobile Studio layout rules from app deep links", async () => {
+    const { env } = createEnv();
+
+    const response = await handleFetch(
+      new Request("https://example.test/studio/workspaces/ws_1/apps/app_1"),
+      env,
+      {} as ExecutionContext
+    );
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("grid-template-columns: 260px minmax(0, 1fr) 340px");
+    expect(html).toContain("@media (max-width: 980px)");
+    expect(html).toContain("@media (max-width: 720px)");
+    expect(html).toContain("grid-template-columns: 1fr");
+  });
+});
+
 function createBatch(
   messages: CloudTableQueueMessage[]
 ): {
@@ -9437,6 +9487,243 @@ describe("cloudtable runtime ingress", () => {
     expect(body.outputDiagnostics).toEqual([]);
   });
 
+  it("previews a scoped app-builder plan through sanctioned agent tools", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      fieldId: "fld_title",
+      fieldKey: "title",
+      fieldType: "text.single_line",
+      label: "Title",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_internal",
+      fieldKey: "internal",
+      fieldType: "text.long",
+      label: "Internal",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_stage",
+      fieldKey: "stage",
+      fieldType: "status.semantic",
+      label: "Stage",
+      tableId: "tbl_1"
+    });
+    setFieldPrincipalPermission(db, {
+      fieldId: "fld_internal",
+      permission: {
+        agent: false,
+        read: "hidden",
+        workflow: false,
+        write: false
+      },
+      principalId: "agt_builder"
+    });
+    setFieldPrincipalPermission(db, {
+      fieldId: "fld_stage",
+      permission: {
+        agent: true,
+        read: "visible",
+        workflow: true,
+        write: true
+      },
+      principalId: "agt_builder"
+    });
+    setFieldPrincipalPermission(db, {
+      fieldId: "fld_title",
+      permission: {
+        agent: true,
+        read: "visible",
+        workflow: true,
+        write: true
+      },
+      principalId: "agt_builder"
+    });
+
+    const response = await handleFetch(
+      new Request("https://example.test/v1/app-builder/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          app: {
+            appId: "app_1",
+            appName: "Builder CRM",
+            tables: [
+              {
+                fields: [
+                  {
+                    fieldId: "fld_stage",
+                    fieldType: "status.semantic",
+                    name: "Stage"
+                  }
+                ],
+                permissions: [
+                  {
+                    agent: false,
+                    fieldId: "fld_internal",
+                    principalId: "role_support",
+                    read: "hidden",
+                    workflow: false,
+                    write: false
+                  }
+                ],
+                primaryField: {
+                  fieldId: "fld_title",
+                  fieldType: "text.single_line",
+                  name: "Title",
+                  required: true
+                },
+                tableId: "tbl_1",
+                tableName: "Builder Accounts",
+                views: [
+                  {
+                    sortFieldIds: ["fld_stage"],
+                    viewId: "view_pipeline",
+                    viewName: "Pipeline",
+                    visibleFieldIds: ["fld_title", "fld_internal", "fld_stage"]
+                  }
+                ]
+              }
+            ]
+          },
+          businessBrief: "Track accounts through a simple sales pipeline without exposing internal notes.",
+          principalId: "agt_builder",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      approval: {
+        previewHash: string;
+        requiredForExecute: boolean;
+      };
+      diagnostics: string[];
+      impact: {
+        mutationTargets: string[];
+        stepCount: number;
+        tables: Array<{
+          fieldCount: number;
+          permissionCount: number;
+          tableId: string;
+          viewCount: number;
+        }>;
+      };
+      previews: Array<{
+        key: string;
+        response: {
+          inputDiagnostics?: string[];
+          input?: {
+            visibleFieldIds?: string[];
+          };
+          output?: {
+            command?: {
+              commandType: string;
+              payload: {
+                visibleFieldIds?: string[];
+              };
+            };
+          };
+        };
+        toolId: string;
+      }>;
+      status: string;
+    };
+
+    expect(body.status).toBe("preview");
+    expect(body.approval.requiredForExecute).toBe(true);
+    expect(body.approval.previewHash.length).toBeGreaterThan(20);
+    expect(body.impact).toMatchObject({
+      mutationTargets: ["table", "field", "view", "permission"],
+      stepCount: 4,
+      tables: [
+        {
+          fieldCount: 2,
+          permissionCount: 1,
+          tableId: "tbl_1",
+          viewCount: 1
+        }
+      ]
+    });
+    const viewPreview = body.previews.find((preview) => preview.toolId === "createView");
+    expect(viewPreview?.response.inputDiagnostics).toEqual(["agent_hidden:fld_internal"]);
+    expect(viewPreview?.response.input?.visibleFieldIds).toEqual(["fld_title", "fld_stage"]);
+    expect(viewPreview?.response.output?.command).toMatchObject({
+      commandType: "view.create",
+      payload: {
+        visibleFieldIds: ["fld_title", "fld_stage"]
+      }
+    });
+    expect(body.diagnostics).toEqual(["agent_hidden:fld_internal"]);
+  });
+
+  it("requires explicit approval and matching preview hash for app-builder execute", async () => {
+    const { env } = createEnv();
+    const requestBody = {
+      app: {
+        appId: "app_1",
+        tables: [
+          {
+            primaryField: {
+              fieldId: "fld_name",
+              fieldType: "text.single_line",
+              name: "Name"
+            },
+            tableId: "tbl_hash_guard",
+            tableName: "Hash Guard"
+          }
+        ]
+      },
+      businessBrief: "Create a guarded table.",
+      principalId: "agt_builder",
+      workspaceId: "ws_1"
+    };
+
+    const unapproved = await handleFetch(
+      new Request("https://example.test/v1/app-builder/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(requestBody)
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(unapproved.status).toBe(400);
+    expect((await unapproved.json()) as { message: string }).toMatchObject({
+      message: "approved: true is required for app builder execute."
+    });
+
+    const staleHash = await handleFetch(
+      new Request("https://example.test/v1/app-builder/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          ...requestBody,
+          approved: true,
+          previewHash: "stale"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(staleHash.status).toBe(400);
+    expect((await staleHash.json()) as { message: string }).toMatchObject({
+      message:
+        "previewHash does not match the current app builder proposal, permission scope, or principal. Run preview again before execute."
+    });
+  });
+
   it("builds a saved-view deletion draft through the agent-tool preview ingress", async () => {
     const { db, env } = createEnv();
 
@@ -14045,7 +14332,7 @@ describe("cloudtable runtime ingress", () => {
           relatedSourceFieldId: "fld_google_related_account",
           syncSourceFieldId: "fld_google_source_status",
           syncTargetFieldId: "fld_google_target_status",
-          workflowId: "wf_google_session_recipe_preview",
+          workflowId: "wf_google_session_recipe_create",
           workspaceId: "ws_1"
         })
       }),
@@ -14055,8 +14342,12 @@ describe("cloudtable runtime ingress", () => {
     expect(recipePreviewResponse.status).toBe(200);
     const recipePreviewBody = (await recipePreviewResponse.json()) as {
       output: { command: { actor: { principalId: string } } };
+      preview: { hash: string; requiredForCreate: boolean };
     };
     expect(recipePreviewBody.output.command.actor.principalId).toBe("usr_google_member");
+    expect(recipePreviewBody.preview).toMatchObject({
+      requiredForCreate: true
+    });
 
     const recipeCreateResponse = await handleFetch(
       new Request("https://example.test/v1/tables/tbl_1/workflow-recipes", {
@@ -14072,6 +14363,7 @@ describe("cloudtable runtime ingress", () => {
           name: "Google session status sync",
           permissionScopeHash: "scope:table:tbl_1",
           policyRevision: 63,
+          previewHash: recipePreviewBody.preview.hash,
           publish: {
             commandId: "cmd_google_session_recipe_publish",
             idempotencyKey: "idem_google_session_recipe_publish"
@@ -19033,7 +19325,11 @@ describe("cloudtable runtime ingress", () => {
           metadata: Record<string, unknown>;
         };
       };
+      preview: { hash: string; requiredForCreate: boolean };
     };
+    expect(previewBody.preview).toMatchObject({
+      requiredForCreate: true
+    });
     expect(previewBody.output.proposal.metadata).toMatchObject({
       aggregateDefinitions: [
         {
@@ -19114,6 +19410,7 @@ describe("cloudtable runtime ingress", () => {
           policyRevision: 52,
           principalId: "agt_rollup_workflow_execute",
           name: "Ticket revenue rollup",
+          previewHash: previewBody.preview.hash,
           publish: true,
           publishCommandId: "cmd_publish_rollup_workflow_recipe",
           publishIdempotencyKey: "idem_publish_rollup_workflow_recipe",
@@ -19846,7 +20143,11 @@ describe("cloudtable runtime ingress", () => {
           metadata: Record<string, unknown>;
         };
       };
+      preview: { hash: string; requiredForCreate: boolean };
     };
+    expect(previewBody.preview).toMatchObject({
+      requiredForCreate: true
+    });
     expect(previewBody.output.proposal.metadata).toMatchObject({
       relatedTableResolvers: [
         {
@@ -19903,6 +20204,7 @@ describe("cloudtable runtime ingress", () => {
           policyRevision: 53,
           principalId: "agt_sync_workflow_execute",
           name: "Ticket status sync",
+          previewHash: previewBody.preview.hash,
           recipeType: "direct_sync",
           relatedSourceFieldId: "fld_ticket_account",
           syncSourceFieldId: "fld_ticket_status",
@@ -20331,6 +20633,215 @@ describe("cloudtable runtime ingress", () => {
         }
       }
     ]);
+  });
+
+  it("paginates permissioned saved-view reads with deterministic cursor ordering", async () => {
+    const { db, env } = createEnv();
+
+    insertField(db, {
+      fieldId: "fld_name",
+      fieldKey: "name",
+      fieldType: "text.single_line",
+      label: "Name",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_salary",
+      fieldKey: "salary",
+      fieldType: "number.decimal",
+      label: "Salary",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_score",
+      fieldKey: "score",
+      fieldType: "number.decimal",
+      label: "Score",
+      tableId: "tbl_1"
+    });
+    for (const record of [
+      { name: "Bravo", recordId: "rec_b", recordKey: "record-2", salary: "20", score: 1 },
+      { name: "Alpha", recordId: "rec_a", recordKey: "record-1", salary: "10", score: 1 },
+      { name: "Charlie", recordId: "rec_c", recordKey: "record-3", salary: "30", score: 2 }
+    ]) {
+      insertRecordProjection(db, {
+        fields: {
+          name: record.name,
+          score: record.score,
+          salary: record.salary
+        },
+        recordId: record.recordId,
+        recordKey: record.recordKey,
+        tableId: "tbl_1"
+      });
+      insertFieldIndexEntry(db, {
+        fieldId: "fld_score",
+        numberValue: record.score,
+        recordId: record.recordId,
+        tableId: "tbl_1"
+      });
+    }
+    insertView(db, {
+      sorts: [
+        {
+          fieldId: "fld_score",
+          mode: "ascending"
+        }
+      ],
+      tableId: "tbl_1",
+      viewId: "view_page_comp",
+      viewKey: "page-comp",
+      viewName: "Paged Comp",
+      visibleFieldIds: ["fld_name", "fld_salary"]
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_view_page_comp",
+      workspaceId: "ws_1",
+      principalId: "usr_member",
+      policyRevision: 7,
+      schemaEpoch: 1,
+      scopeHash: "scope:view:view_page_comp",
+      fields: {
+        fld_name: {
+          agent: true,
+          fieldId: "fld_name",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_salary: {
+          agent: true,
+          fieldId: "fld_salary",
+          fieldType: "number.decimal",
+          read: "redacted",
+          workflow: true,
+          write: false
+        },
+        fld_score: {
+          agent: true,
+          fieldId: "fld_score",
+          fieldType: "number.decimal",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const firstPageResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/views/view_page_comp?workspaceId=ws_1&principalId=usr_member&policyRevision=7&permissionScopeHash=scope:view:view_page_comp&limit=2"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(firstPageResponse.status).toBe(200);
+    const firstPage = (await firstPageResponse.json()) as {
+      pageInfo: { hasNextPage: boolean; limit: number; nextCursor: string | null; returnedRowCount: number };
+      rows: Array<{ cells: Record<string, unknown>; recordId: string; redactedFieldIds: string[] }>;
+      view: { redactionApplied: boolean };
+    };
+
+    expect(firstPage.rows.map((row) => row.recordId)).toEqual(["rec_a", "rec_b"]);
+    expect(firstPage.rows[0]?.cells).toEqual({
+      fld_name: "Alpha",
+      fld_salary: "[redacted]"
+    });
+    expect(firstPage.rows[0]?.redactedFieldIds).toEqual(["fld_salary"]);
+    expect(firstPage.pageInfo).toMatchObject({
+      hasNextPage: true,
+      limit: 2,
+      returnedRowCount: 2
+    });
+    expect(typeof firstPage.pageInfo.nextCursor).toBe("string");
+    expect(firstPage.view.redactionApplied).toBe(true);
+
+    const secondPageResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/tables/tbl_1/views/view_page_comp?workspaceId=ws_1&principalId=usr_member&policyRevision=7&permissionScopeHash=scope:view:view_page_comp&limit=2&cursor=${encodeURIComponent(firstPage.pageInfo.nextCursor ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const agentPageResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            cursor: firstPage.pageInfo.nextCursor,
+            limit: 2,
+            tableId: "tbl_1",
+            viewId: "view_page_comp"
+          },
+          permissionScopeHash: "scope:view:view_page_comp",
+          policyRevision: 7,
+          principalId: "usr_member",
+          toolId: "queryView",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(secondPageResponse.status).toBe(200);
+    expect(agentPageResponse.status).toBe(200);
+
+    const secondPage = (await secondPageResponse.json()) as {
+      pageInfo: { hasNextPage: boolean; nextCursor: string | null; returnedRowCount: number };
+      rows: Array<{ recordId: string }>;
+    };
+    const agentPage = (await agentPageResponse.json()) as {
+      output: {
+        kind: string;
+        view: typeof secondPage;
+      };
+    };
+
+    expect(secondPage.rows.map((row) => row.recordId)).toEqual(["rec_c"]);
+    expect(secondPage.pageInfo).toEqual({
+      hasNextPage: false,
+      limit: 2,
+      nextCursor: null,
+      returnedRowCount: 1
+    });
+    expect(agentPage.output).toEqual({
+      kind: "view-query",
+      view: secondPage
+    });
+  });
+
+  it("rejects invalid saved-view pagination inputs", async () => {
+    const { env } = createEnv();
+
+    const invalidLimitResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/views/view_missing?workspaceId=ws_1&limit=0"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const invalidCursorResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/views/view_missing?workspaceId=ws_1&cursor=not-a-cursor"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(invalidLimitResponse.status).toBe(400);
+    expect((await invalidLimitResponse.json()) as { message: string }).toMatchObject({
+      message: "limit must be an integer between 1 and 500 for view reads."
+    });
+    expect(invalidCursorResponse.status).toBe(400);
+    expect((await invalidCursorResponse.json()) as { message: string }).toMatchObject({
+      message: "cursor must be a valid view-read cursor."
+    });
   });
 
   it("updates a saved view through the route ingress and reflects the new definition on reads immediately", async () => {
@@ -21423,6 +21934,79 @@ describe("cloudtable runtime ingress", () => {
             states: {
               fld_name: "visible"
             }
+          }
+        ]
+      }
+    ]);
+
+    const firstGroupedPageResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/tables/tbl_1/views/view_grouped_pipeline?workspaceId=ws_1&principalId=usr_member&policyRevision=6&permissionScopeHash=scope:view:view_grouped_pipeline&limit=2"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const firstGroupedPage = (await firstGroupedPageResponse.json()) as {
+      groups?: Array<{ bucketKey: string; rowCount: number; rows: Array<{ recordId: string }> }>;
+      pageInfo: { hasNextPage: boolean; nextCursor: string | null; returnedRowCount: number };
+    };
+
+    expect(firstGroupedPage.pageInfo).toMatchObject({
+      hasNextPage: true,
+      returnedRowCount: 2
+    });
+    expect(
+      firstGroupedPage.groups?.map((group) => ({
+        bucketKey: group.bucketKey,
+        rowCount: group.rowCount,
+        rows: group.rows.map((row) => ({ recordId: row.recordId }))
+      }))
+    ).toEqual([
+      {
+        bucketKey: "\"active\"",
+        rowCount: 2,
+        rows: [
+          {
+            recordId: "rec_2"
+          },
+          {
+            recordId: "rec_3"
+          }
+        ]
+      }
+    ]);
+
+    const secondGroupedPageResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/tables/tbl_1/views/view_grouped_pipeline?workspaceId=ws_1&principalId=usr_member&policyRevision=6&permissionScopeHash=scope:view:view_grouped_pipeline&limit=2&cursor=${encodeURIComponent(firstGroupedPage.pageInfo.nextCursor ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const secondGroupedPage = (await secondGroupedPageResponse.json()) as {
+      groups?: Array<{ bucketKey: string; rowCount: number; rows: Array<{ recordId: string }> }>;
+      pageInfo: { hasNextPage: boolean; nextCursor: string | null; returnedRowCount: number };
+    };
+
+    expect(secondGroupedPage.pageInfo).toEqual({
+      hasNextPage: false,
+      limit: 2,
+      nextCursor: null,
+      returnedRowCount: 1
+    });
+    expect(
+      secondGroupedPage.groups?.map((group) => ({
+        bucketKey: group.bucketKey,
+        rowCount: group.rowCount,
+        rows: group.rows.map((row) => ({ recordId: row.recordId }))
+      }))
+    ).toEqual([
+      {
+        bucketKey: "\"backlog\"",
+        rowCount: 1,
+        rows: [
+          {
+            recordId: "rec_1"
           }
         ]
       }

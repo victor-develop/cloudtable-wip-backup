@@ -1,0 +1,85 @@
+{
+  "baseUrl": "http://127.0.0.1:8788/studio",
+  "results": [
+    {
+      "rows": [
+        {
+          "email": {
+            "bottom": 809.953125,
+            "left": 27,
+            "right": 363,
+            "top": 794.953125
+          },
+          "role": {
+            "bottom": 827.953125,
+            "left": 27,
+            "right": 125.765625,
+            "top": 812.953125
+          },
+          "overlaps": false
+        },
+        {
+          "email": {
+            "bottom": 850.953125,
+            "left": 27,
+            "right": 363,
+            "top": 835.953125
+          },
+          "role": {
+            "bottom": 868.953125,
+            "left": 27,
+            "right": 137.90625,
+            "top": 853.953125
+          },
+          "overlaps": false
+        }
+      ],
+      "screenshot": "/Users/victorzhou/.paperclip/instances/default/projects/840ede41-bcc1-45ca-8fb6-229b5430ee7f/e45a9cae-72a7-4dbd-b5f4-c2a20ac5d305/_default/testing/cloudtable/artifacts/clo-3222/mobile-membership-fixed.png",
+      "viewport": {
+        "height": 844,
+        "name": "mobile",
+        "width": 390
+      }
+    },
+    {
+      "rows": [
+        {
+          "email": {
+            "bottom": 334,
+            "left": 1128,
+            "right": 1302.234375,
+            "top": 319
+          },
+          "role": {
+            "bottom": 334,
+            "left": 1314.234375,
+            "right": 1413,
+            "top": 319
+          },
+          "overlaps": false
+        },
+        {
+          "email": {
+            "bottom": 357,
+            "left": 1128,
+            "right": 1290.09375,
+            "top": 342
+          },
+          "role": {
+            "bottom": 357,
+            "left": 1302.09375,
+            "right": 1413,
+            "top": 342
+          },
+          "overlaps": false
+        }
+      ],
+      "screenshot": "/Users/victorzhou/.paperclip/instances/default/projects/840ede41-bcc1-45ca-8fb6-229b5430ee7f/e45a9cae-72a7-4dbd-b5f4-c2a20ac5d305/_default/testing/cloudtable/artifacts/clo-3222/desktop-membership-fixed.png",
+      "viewport": {
+        "height": 1000,
+        "name": "desktop",
+        "width": 1440
+      }
+    }
+  ]
+}

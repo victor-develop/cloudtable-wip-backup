@@ -74,7 +74,11 @@ import {
   readTableSchemaMetadata,
   readViewDefinitionMetadata
 } from "./schema-metadata-read";
-import { readViewQuery } from "./view-query-read";
+import {
+  readViewQuery,
+  validateViewQueryCursor,
+  validateViewQueryLimit
+} from "./view-query-read";
 import {
   readWorkflowHistoryForRun,
   readWorkflowHistoryForWorkflow,
@@ -90,6 +94,7 @@ import { createRuntime, createRuntimeWithSnapshot } from "./bootstrap";
 import type { CloudTableRuntime } from "./bootstrap";
 import { badRequest, conflict, forbidden, json, methodNotAllowed, notFound, unauthorized } from "./http";
 import type { CloudTableEnv } from "./env";
+import { renderStudioShell } from "./studio";
 import {
   enqueueScheduledWorkflowDispatches,
   previewWorkflowTestRun,
@@ -162,6 +167,13 @@ export async function handleFetch(
 ): Promise<Response> {
   const runtime = createRuntime(env);
   const url = new URL(request.url);
+
+  if (
+    request.method === "GET" &&
+    (url.pathname === "/" || url.pathname === "/studio" || url.pathname.startsWith("/studio/"))
+  ) {
+    return renderStudioShell();
+  }
 
   if (request.method === "GET" && url.pathname === "/healthz") {
     return json({
@@ -849,6 +861,14 @@ export async function handleFetch(
 
   if (url.pathname === "/v1/agent-tools/execute") {
     return handleAgentToolIngress(request, env, "execute");
+  }
+
+  if (url.pathname === "/v1/app-builder/preview") {
+    return handleAppBuilderIngress(request, env, "preview");
+  }
+
+  if (url.pathname === "/v1/app-builder/execute") {
+    return handleAppBuilderIngress(request, env, "execute");
   }
 
   const workflowRecipePreviewMatch = url.pathname.match(
@@ -1867,6 +1887,15 @@ export async function handleFetch(
       return badRequest("policyRevision must be a finite number when provided for permissioned view reads.");
     }
 
+    let limit: number;
+    let cursor: string | null;
+    try {
+      limit = validateViewQueryLimit(url.searchParams.get("limit"));
+      cursor = validateViewQueryCursor(url.searchParams.get("cursor"));
+    } catch (error) {
+      return badRequest(error instanceof Error ? error.message : "Invalid view read pagination parameters.");
+    }
+
     const [, tableId, viewId] = viewReadMatch;
     let resolvedSnapshot: Awaited<ReturnType<typeof resolvePermissionSnapshot>> | null = null;
     if (principalId) {
@@ -1894,6 +1923,8 @@ export async function handleFetch(
       runtime.viewPlanner,
       runtime.workflowOperatorRegistry,
       {
+        cursor,
+        limit,
         permissionScopeHash: resolvedSnapshot?.ok ? resolvedSnapshot.snapshot.scopeHash : null,
         policyRevision: resolvedSnapshot?.ok ? resolvedSnapshot.snapshot.policyRevision : null,
         principalId: resolvedSnapshot?.ok ? resolvedSnapshot.snapshot.principalId : null,
@@ -4181,6 +4212,8 @@ function buildAgentToolInvocation(
     case "queryView":
       return {
         input: {
+          cursor: validateViewQueryCursor(input.cursor) ?? undefined,
+          limit: validateViewQueryLimit(input.limit as string | number | null | undefined),
           tableId: readRequiredAgentToolString(input.tableId, "tableId"),
           viewId: readRequiredAgentToolString(input.viewId, "viewId"),
           workspaceId: context.workspaceId
@@ -5000,10 +5033,25 @@ async function handleWorkflowRecipePreviewIngress(
     return context.response;
   }
 
-  return handleAgentToolIngress(
+  const previewResponse = await handleAgentToolIngress(
     buildWorkflowRecipeAgentToolRequest(request, body, context, "proposeWorkflow", built.input),
     env,
     "preview"
+  );
+  if (!previewResponse.ok) {
+    return previewResponse;
+  }
+
+  const previewBody = (await previewResponse.json()) as Record<string, unknown>;
+  return json(
+    {
+      ...previewBody,
+      preview: {
+        hash: await workflowRecipePreviewHash(body, built.input, context),
+        requiredForCreate: true
+      }
+    },
+    { status: previewResponse.status }
   );
 }
 
@@ -5031,6 +5079,18 @@ async function handleWorkflowRecipeCreateIngress(
   const context = await resolveWorkflowRecipeIngressContext(request, env, body);
   if ("response" in context) {
     return context.response;
+  }
+
+  const previewHash = readNonEmptyString(body.previewHash);
+  if (!previewHash) {
+    return badRequest("previewHash from a successful workflow recipe preview is required for workflow recipe create.");
+  }
+
+  const expectedPreviewHash = await workflowRecipePreviewHash(body, built.input, context);
+  if (previewHash !== expectedPreviewHash) {
+    return badRequest(
+      "previewHash does not match the current workflow recipe inputs, permission scope, or principal. Run preview again before create."
+    );
   }
 
   const commandId = readNonEmptyString(body.commandId);
@@ -5109,6 +5169,10 @@ async function handleWorkflowRecipeCreateIngress(
   }
 
   const publishRequested = body.publish === true || isRecord(body.publish);
+  if (publishRequested && (proposalDiagnostics.length > 0 || outputDiagnostics.length > 0)) {
+    return badRequest("Workflow recipe publish requires a successful preview with no diagnostics.");
+  }
+
   if (!publishRequested) {
     return json({
       create: createSummary,
@@ -5170,6 +5234,377 @@ async function handleWorkflowRecipeCreateIngress(
   );
 }
 
+type AppBuilderStep = {
+  category: "table" | "field" | "view" | "permission" | "workflow";
+  input: Record<string, unknown>;
+  key: string;
+  toolId:
+    | "configureFieldPermission"
+    | "createField"
+    | "createTable"
+    | "createView"
+    | "proposeWorkflow";
+};
+
+async function handleAppBuilderIngress(
+  request: Request,
+  env: CloudTableEnv,
+  ingress: "execute" | "preview"
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return methodNotAllowed(request.method, ["POST"]);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return badRequest(`App builder ${ingress} body must be valid JSON.`);
+  }
+
+  const built = buildAppBuilderPlan(body);
+  if ("response" in built) {
+    return built.response;
+  }
+
+  const context = await resolveWorkflowRecipeIngressContext(request, env, body);
+  if ("response" in context) {
+    return context.response;
+  }
+
+  const previewHash = await appBuilderPreviewHash(body, built.steps, context);
+  if (ingress === "execute") {
+    if (body.approved !== true) {
+      return badRequest("approved: true is required for app builder execute.");
+    }
+
+    if (readNonEmptyString(body.previewHash) !== previewHash) {
+      return badRequest(
+        "previewHash does not match the current app builder proposal, permission scope, or principal. Run preview again before execute."
+      );
+    }
+  }
+
+  const previews = [];
+  const executions = [];
+  const diagnostics = new Set<string>();
+  for (const step of built.steps) {
+    const previewResponse = await handleAgentToolIngress(
+      buildWorkflowRecipeAgentToolRequest(request, body, context, step.toolId, step.input),
+      env,
+      "preview"
+    );
+    const previewBody = (await previewResponse.json()) as Record<string, unknown>;
+    previews.push({
+      category: step.category,
+      key: step.key,
+      response: previewBody,
+      status: previewResponse.status,
+      toolId: step.toolId
+    });
+    readDiagnostics(previewBody.inputDiagnostics).forEach((diagnostic) => diagnostics.add(diagnostic));
+    readDiagnostics(previewBody.outputDiagnostics).forEach((diagnostic) => diagnostics.add(diagnostic));
+
+    if (!previewResponse.ok) {
+      return json(
+        {
+          businessBrief: built.businessBrief,
+          diagnostics: [...diagnostics],
+          impact: built.impact,
+          previewHash,
+          previews,
+          status: "rejected"
+        },
+        { status: previewResponse.status }
+      );
+    }
+
+    if (ingress === "execute") {
+      const output = isRecord(previewBody.output) ? previewBody.output : {};
+      const command = isRecord(output.command) ? output.command : null;
+      if (!command) {
+        return badRequest(`App builder step ${step.key} did not produce an executable command.`);
+      }
+
+      const executeResponse = await handleAgentToolIngress(
+        buildWorkflowRecipeAgentToolRequest(request, body, context, "executeCommand", {
+          command
+        }),
+        env,
+        "execute"
+      );
+      const executeBody = (await executeResponse.json()) as Record<string, unknown>;
+      executions.push({
+        category: step.category,
+        key: step.key,
+        response: executeBody,
+        status: executeResponse.status,
+        toolId: "executeCommand"
+      });
+
+      if (!executeResponse.ok) {
+        return json(
+          {
+            businessBrief: built.businessBrief,
+            diagnostics: [...diagnostics],
+            executions,
+            impact: built.impact,
+            previewHash,
+            previews,
+            status: "rejected"
+          },
+          { status: executeResponse.status }
+        );
+      }
+    }
+  }
+
+  return json({
+    approval: {
+      previewHash,
+      requiredForExecute: true
+    },
+    businessBrief: built.businessBrief,
+    diagnostics: [...diagnostics],
+    ...(ingress === "execute" ? { executions } : {}),
+    impact: built.impact,
+    previews,
+    status: ingress === "execute" ? "executed" : "preview"
+  });
+}
+
+function buildAppBuilderPlan(body: Record<string, unknown>):
+  | {
+      businessBrief: string;
+      impact: Record<string, unknown>;
+      steps: AppBuilderStep[];
+    }
+  | { response: Response } {
+  const businessBrief = readNonEmptyString(body.businessBrief);
+  const app = isRecord(body.app) ? body.app : null;
+  if (!businessBrief || !app) {
+    return { response: badRequest("businessBrief and object app are required for app builder.") };
+  }
+
+  if (body.code !== undefined || body.commands !== undefined || body.toolId !== undefined) {
+    return {
+      response: badRequest("App builder accepts only scoped app/table/field/view/permission/workflow proposals.")
+    };
+  }
+
+  const appId = readNonEmptyString(app.appId);
+  const tables = Array.isArray(app.tables) ? app.tables.filter(isRecord) : [];
+  if (!appId || tables.length === 0) {
+    return { response: badRequest("app.appId and at least one app.tables entry are required.") };
+  }
+
+  const steps: AppBuilderStep[] = [];
+  const impactTables = [];
+  for (const table of tables) {
+    const tableId = readNonEmptyString(table.tableId);
+    const tableName = readNonEmptyString(table.tableName);
+    const primaryField = isRecord(table.primaryField) ? table.primaryField : null;
+    if (!tableId || !tableName || !primaryField) {
+      return {
+        response: badRequest("Each app builder table requires tableId, tableName, and primaryField.")
+      };
+    }
+
+    const primaryFieldId = readNonEmptyString(primaryField.fieldId);
+    const primaryFieldType = readNonEmptyString(primaryField.fieldType);
+    const primaryFieldName = readNonEmptyString(primaryField.name);
+    if (!primaryFieldId || !primaryFieldType || !primaryFieldName) {
+      return {
+        response: badRequest("Each app builder primaryField requires fieldId, fieldType, and name.")
+      };
+    }
+
+    steps.push({
+      category: "table",
+      input: {
+        appId,
+        commandId: `cmd_app_builder_${tableId}_table`,
+        idempotencyKey: `idem_app_builder_${tableId}_table`,
+        primaryField: {
+          fieldId: primaryFieldId,
+          fieldType: primaryFieldType,
+          name: primaryFieldName,
+          required: primaryField.required === true
+        },
+        tableId,
+        tableName,
+        ...(readNonEmptyString(table.description) ? { description: readNonEmptyString(table.description) } : {})
+      },
+      key: `table:${tableId}`,
+      toolId: "createTable"
+    });
+
+    const fields = Array.isArray(table.fields) ? table.fields.filter(isRecord) : [];
+    for (const field of fields) {
+      const fieldId = readNonEmptyString(field.fieldId);
+      const fieldType = readNonEmptyString(field.fieldType);
+      const name = readNonEmptyString(field.name);
+      if (!fieldId || !fieldType || !name) {
+        return { response: badRequest("Each app builder field requires fieldId, fieldType, and name.") };
+      }
+
+      steps.push({
+        category: "field",
+        input: {
+          commandId: `cmd_app_builder_${tableId}_${fieldId}`,
+          config: isRecord(field.config) ? field.config : {},
+          fieldId,
+          fieldType,
+          idempotencyKey: `idem_app_builder_${tableId}_${fieldId}`,
+          name,
+          required: field.required === true,
+          tableId
+        },
+        key: `field:${tableId}:${fieldId}`,
+        toolId: "createField"
+      });
+    }
+
+    const views = Array.isArray(table.views) ? table.views.filter(isRecord) : [];
+    for (const view of views) {
+      const viewId = readNonEmptyString(view.viewId);
+      const viewName = readNonEmptyString(view.viewName);
+      if (!viewId || !viewName) {
+        return { response: badRequest("Each app builder view requires viewId and viewName.") };
+      }
+
+      steps.push({
+        category: "view",
+        input: {
+          commandId: `cmd_app_builder_${tableId}_${viewId}`,
+          filterFieldIds: readOptionalStringList(view.filterFieldIds),
+          filters: Array.isArray(view.filters) ? view.filters.filter(isRecord) : [],
+          groupByFieldId: readNonEmptyString(view.groupByFieldId) ?? undefined,
+          idempotencyKey: `idem_app_builder_${tableId}_${viewId}`,
+          showEmptyGroups: view.showEmptyGroups === true,
+          sortFieldIds: readOptionalStringList(view.sortFieldIds),
+          sorts: Array.isArray(view.sorts) ? view.sorts.filter(isRecord) : [],
+          tableId,
+          viewId,
+          viewName,
+          visibleFieldIds: readOptionalStringList(view.visibleFieldIds)
+        },
+        key: `view:${tableId}:${viewId}`,
+        toolId: "createView"
+      });
+    }
+
+    const permissions = Array.isArray(table.permissions) ? table.permissions.filter(isRecord) : [];
+    for (const permission of permissions) {
+      const fieldId = readNonEmptyString(permission.fieldId);
+      const principalId = readNonEmptyString(permission.principalId);
+      const read = readFieldPermissionRead(permission.read);
+      if (!fieldId || !principalId || !read) {
+        return {
+          response: badRequest(
+            "Each app builder permission requires fieldId, principalId, and read visible/redacted/hidden."
+          )
+        };
+      }
+
+      steps.push({
+        category: "permission",
+        input: {
+          agent: permission.agent === true,
+          commandId: `cmd_app_builder_${tableId}_${fieldId}_${principalId}_permission`,
+          fieldId,
+          idempotencyKey: `idem_app_builder_${tableId}_${fieldId}_${principalId}_permission`,
+          principalId,
+          read,
+          tableId,
+          workflow: permission.workflow === true,
+          write: permission.write === true
+        },
+        key: `permission:${tableId}:${fieldId}:${principalId}`,
+        toolId: "configureFieldPermission"
+      });
+    }
+
+    const workflows = Array.isArray(table.workflows) ? table.workflows.filter(isRecord) : [];
+    for (const workflow of workflows) {
+      const workflowId = readNonEmptyString(workflow.workflowId);
+      const name = readNonEmptyString(workflow.name);
+      if (!workflowId || !name) {
+        return { response: badRequest("Each app builder workflow requires workflowId and name.") };
+      }
+
+      steps.push({
+        category: "workflow",
+        input: {
+          actionIds: readOptionalStringList(workflow.actionIds),
+          businessRule: readNonEmptyString(workflow.businessRule) ?? businessBrief,
+          commandId: `cmd_app_builder_${tableId}_${workflowId}`,
+          fieldIds: readOptionalStringList(workflow.fieldIds),
+          idempotencyKey: `idem_app_builder_${tableId}_${workflowId}`,
+          name,
+          tableId,
+          triggerId: readNonEmptyString(workflow.triggerId) ?? "field_changed",
+          workflowId
+        },
+        key: `workflow:${tableId}:${workflowId}`,
+        toolId: "proposeWorkflow"
+      });
+    }
+
+    impactTables.push({
+      fieldCount: fields.length + 1,
+      permissionCount: permissions.length,
+      tableId,
+      tableName,
+      viewCount: views.length,
+      workflowCount: workflows.length
+    });
+  }
+
+  return {
+    businessBrief,
+    impact: {
+      appId,
+      appName: readNonEmptyString(app.appName) ?? null,
+      mutationTargets: Array.from(new Set(steps.map((step) => step.category))),
+      stepCount: steps.length,
+      tables: impactTables
+    },
+    steps
+  };
+}
+
+function readOptionalStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0) : [];
+}
+
+function readFieldPermissionRead(value: unknown): "hidden" | "redacted" | "visible" | null {
+  return value === "hidden" || value === "redacted" || value === "visible" ? value : null;
+}
+
+function readDiagnostics(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+async function appBuilderPreviewHash(
+  body: Record<string, unknown>,
+  steps: readonly AppBuilderStep[],
+  context: {
+    principalId: string;
+    workspaceId: string;
+  }
+): Promise<string> {
+  const payload = stableStringify({
+    permissionScopeHash: readNonEmptyString(body.permissionScopeHash),
+    policyRevision: typeof body.policyRevision === "number" ? body.policyRevision : null,
+    principalId: context.principalId,
+    steps,
+    workspaceId: context.workspaceId
+  });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+  return toBase64Url(digest);
+}
+
 function buildWorkflowRecipeAgentToolRequest(
   request: Request,
   body: Record<string, unknown>,
@@ -5177,7 +5612,13 @@ function buildWorkflowRecipeAgentToolRequest(
     principalId: string;
     workspaceId: string;
   },
-  toolId: "executeCommand" | "proposeWorkflow",
+  toolId:
+    | "configureFieldPermission"
+    | "createField"
+    | "createTable"
+    | "createView"
+    | "executeCommand"
+    | "proposeWorkflow",
   input: Record<string, unknown>
 ): Request {
   return new Request(new URL(`/v1/agent-tools/${toolId === "executeCommand" ? "execute" : "preview"}`, request.url), {
@@ -5194,6 +5635,40 @@ function buildWorkflowRecipeAgentToolRequest(
     },
     method: "POST"
   });
+}
+
+async function workflowRecipePreviewHash(
+  body: Record<string, unknown>,
+  input: Record<string, unknown>,
+  context: {
+    principalId: string;
+    workspaceId: string;
+  }
+): Promise<string> {
+  const payload = stableStringify({
+    input,
+    permissionScopeHash: readNonEmptyString(body.permissionScopeHash),
+    policyRevision: typeof body.policyRevision === "number" ? body.policyRevision : null,
+    principalId: context.principalId,
+    workspaceId: context.workspaceId
+  });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));
+  return toBase64Url(digest);
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
 }
 
 async function resolveWorkflowRecipeIngressContext(
