@@ -80,9 +80,11 @@ export type WorkspaceMembershipIdentityRecord = {
   workspaceId: string;
   workspaceMembershipId: string;
   workspaceMembershipStatus: string;
+  workspaceName: string;
   workspacePrincipalId: string | null;
   workspacePrincipalRoleKey: string | null;
   workspaceRoleKey: string;
+  workspaceSlug: string;
 };
 
 export type CanonicalUserRecord = {
@@ -163,6 +165,10 @@ export type CloudTableRepository = {
     externalSubject: string;
     providerKey: string;
   }): Promise<CanonicalUserRecord | null>;
+  findPendingInvitationForWorkspaceEmail(input: {
+    invitedEmail: string;
+    workspaceId: string;
+  }): Promise<InvitationRecord | null>;
   commitAcceptedCommand(commit: EventLedgerCommit): Promise<{
     event: EventLedgerRecord;
     receipts: IdempotencyReceipt[];
@@ -177,6 +183,7 @@ export type CloudTableRepository = {
   }): Promise<"linked" | "noop" | "conflict">;
   listPendingOutboxEntries(input: { availableBefore: string; limit: number }): Promise<OutboxRow[]>;
   listWorkspaceMembershipIdentitiesForUser(userId: string): Promise<WorkspaceMembershipIdentityRecord[]>;
+  listWorkspaceMembershipIdentitiesForWorkspace(workspaceId: string): Promise<WorkspaceMembershipIdentityRecord[]>;
   listAppActivity(input: {
     appId: string;
     beforeWorkspaceSequence?: number | null;

@@ -1,13 +1,19 @@
 import type {
+  WorkflowActionManifest,
   WorkflowAuthoringMetadata,
   WorkflowConditionBindingMetadata,
   WorkflowConditionBinding,
   WorkflowConditionInspectionMetadata,
   WorkflowConditionManifest,
-  WorkflowDefinition
+  WorkflowDefinition,
+  WorkflowRecipeAuthoringCatalog,
+  WorkflowRecipeAuthoringMetadata,
+  WorkflowRecipeType
 } from "./types";
 import type { WorkflowOperatorRegistry } from "./types";
 import { serializeWorkflowOperatorManifest } from "./manifest";
+import type { AggregateOperationRegistry } from "../aggregates/types";
+import { serializeAggregateOperationManifest } from "../aggregates/manifest";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -447,4 +453,106 @@ export function draftWorkflowConditionsFromMetadata(
   }
 
   return draftedConditions;
+}
+
+const workflowRecipeTypes: WorkflowRecipeType[] = ["direct_sync", "grouped_rollup"];
+const workflowRecipeStatusValues: WorkflowRecipeAuthoringMetadata["statusValues"] = [
+  "draft",
+  "published",
+  "paused"
+];
+const workflowRecipeMatchStrategies: WorkflowRecipeAuthoringMetadata["matchStrategies"] = [
+  "single_relation",
+  "value_match"
+];
+
+function requireActionManifest(
+  workflowOperatorRegistry: WorkflowOperatorRegistry,
+  operatorId: string
+): WorkflowActionManifest {
+  const operator = workflowOperatorRegistry.require(operatorId);
+  if (operator.kind !== "action") {
+    throw new Error(`Workflow recipe ${operatorId} requires an action operator.`);
+  }
+
+  return serializeWorkflowOperatorManifest(operator) as WorkflowActionManifest;
+}
+
+export function buildWorkflowRecipeAuthoringCatalog(input: {
+  aggregateOperationRegistry: AggregateOperationRegistry;
+  workflowOperatorRegistry: WorkflowOperatorRegistry;
+}): WorkflowRecipeAuthoringCatalog {
+  const syncRelatedField = requireActionManifest(
+    input.workflowOperatorRegistry,
+    "sync_related_field"
+  );
+  const setCell = requireActionManifest(input.workflowOperatorRegistry, "set_cell");
+
+  return {
+    recipeTypes: [...workflowRecipeTypes],
+    recipes: {
+      direct_sync: {
+        description:
+          "Author a field_changed workflow that syncs one source field into related target records.",
+        fixedTriggerId: "field_changed",
+        maintenance: {
+          kinds: ["backfill", "recompute"],
+          queuedMessage: "Sync maintenance is queued after publish and runs asynchronously.",
+          route: {
+            method: "POST",
+            pathTemplate: "/v1/workflows/{workflowId}/sync-maintenance"
+          }
+        },
+        matchStrategies: [...workflowRecipeMatchStrategies],
+        previewRoute: {
+          method: "POST",
+          pathTemplate: "/v1/tables/{tableId}/workflow-recipes/preview"
+        },
+        publishRoute: {
+          method: "POST",
+          pathTemplate: "/v1/workflows/{workflowId}/publish"
+        },
+        recipeType: "direct_sync",
+        requiredInputIds: [
+          "tableId",
+          "workflowId",
+          "name",
+          "syncSourceFieldId",
+          "syncTargetFieldId",
+          "relatedSourceFieldId"
+        ],
+        statusValues: [...workflowRecipeStatusValues],
+        workflowOperators: [syncRelatedField]
+      },
+      grouped_rollup: {
+        aggregateOperations: input.aggregateOperationRegistry
+          .list()
+          .map(serializeAggregateOperationManifest),
+        description:
+          "Author a field_changed workflow that recomputes grouped rollup fields on related target records.",
+        fixedTriggerId: "field_changed",
+        maintenance: {
+          kinds: ["backfill", "recompute"],
+          queuedMessage: "Rollup maintenance is queued after publish and runs asynchronously.",
+          route: {
+            method: "POST",
+            pathTemplate: "/v1/workflows/{workflowId}/aggregate-maintenance"
+          }
+        },
+        matchStrategies: [...workflowRecipeMatchStrategies],
+        previewRoute: {
+          method: "POST",
+          pathTemplate: "/v1/tables/{tableId}/workflow-recipes/preview"
+        },
+        publishRoute: {
+          method: "POST",
+          pathTemplate: "/v1/workflows/{workflowId}/publish"
+        },
+        recipeType: "grouped_rollup",
+        requiredInputIds: ["tableId", "workflowId", "name", "rollupFieldIds"],
+        statusValues: [...workflowRecipeStatusValues],
+        workflowOperators: [setCell]
+      }
+    }
+  };
 }

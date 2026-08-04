@@ -189,6 +189,7 @@ function createEnv(): {
   env = {
     AGGREGATE_MAINTENANCE_QUEUE: aggregateQueue as unknown as Queue<CloudTableQueueMessage>,
     ARTIFACTS_BUCKET: {} as R2Bucket,
+    AUTH_ALLOWED_REDIRECT_ORIGINS: "https://app.example.test",
     AUTH_SESSION_SECRET: "test-session-secret",
     AUTH_SESSION_TTL_SECONDS: "3600",
     DB: db as unknown as D1Database,
@@ -972,6 +973,69 @@ function insertWorkflowDeadLetter(
     );
 }
 
+function insertWorkflowBackfillJob(
+  db: SqliteD1Database,
+  input: {
+    attemptCount?: number;
+    chunkSize?: number;
+    completedAt?: string | null;
+    createdAt?: string;
+    cursor?: Record<string, unknown> | null;
+    dependencyAlias: string;
+    dependencyKind: "aggregate" | "sync";
+    jobId: string;
+    lastError?: string | null;
+    processedCount?: number;
+    reason?: string;
+    status: string;
+    updatedAt?: string;
+    workflowId: string;
+    workflowVersionId?: string;
+    workspaceId?: string;
+  }
+): void {
+  const workspaceId = input.workspaceId ?? "ws_1";
+  db.inner
+    .prepare(
+      `INSERT INTO workflow_backfill_jobs (
+        id,
+        workspace_id,
+        workflow_id,
+        workflow_version_id,
+        dependency_kind,
+        dependency_alias,
+        reason,
+        status,
+        chunk_size,
+        cursor_json,
+        processed_count,
+        attempt_count,
+        last_error,
+        created_at,
+        updated_at,
+        completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.jobId,
+      workspaceId,
+      input.workflowId,
+      input.workflowVersionId ?? `${input.workflowId}:v1`,
+      input.dependencyKind,
+      input.dependencyAlias,
+      input.reason ?? "manual",
+      input.status,
+      input.chunkSize ?? 250,
+      input.cursor === undefined || input.cursor === null ? null : JSON.stringify(input.cursor),
+      input.processedCount ?? 0,
+      input.attemptCount ?? 0,
+      input.lastError ?? null,
+      input.createdAt ?? "2026-06-06T00:00:00.000Z",
+      input.updatedAt ?? "2026-06-06T00:00:00.000Z",
+      input.completedAt ?? null
+    );
+}
+
 function insertPermissionSnapshot(db: SqliteD1Database, snapshot: EffectivePermissionSnapshot): void {
   db.inner
     .prepare(
@@ -1032,6 +1096,124 @@ function setFieldPrincipalPermission(
       input.workspaceId ?? "ws_1",
       input.fieldId
     );
+}
+
+function insertAccountsLookupMaintenanceSchema(db: SqliteD1Database): void {
+  db.inner
+    .prepare(
+      `INSERT INTO tables (
+         id,
+         workspace_id,
+         app_id,
+         slug,
+         name,
+         schema_epoch,
+         current_schema_version,
+         created_at,
+         updated_at,
+         archived_at,
+         last_event_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      "tbl_accounts",
+      "ws_1",
+      "app_1",
+      "accounts",
+      "Accounts",
+      0,
+      1,
+      "2026-06-06T00:00:00.000Z",
+      "2026-06-06T00:00:00.000Z",
+      null,
+      null
+    );
+  insertField(db, {
+    fieldId: "fld_account",
+    fieldKey: "account",
+    fieldType: "relation.record",
+    label: "Account",
+    tableId: "tbl_1",
+    config: {
+      allowMultiple: false,
+      targetTableId: "tbl_accounts"
+    }
+  });
+  insertField(db, {
+    fieldId: "fld_ticket_account_name",
+    fieldKey: "ticket_account_name",
+    fieldType: "computed.readonly",
+    label: "Ticket Account Name",
+    tableId: "tbl_1",
+    config: {
+      lookup: {
+        sourceFieldId: "fld_account",
+        targetFieldId: "fld_account_name"
+      }
+    }
+  });
+  insertField(db, {
+    fieldId: "fld_account_name",
+    fieldKey: "account_name",
+    fieldType: "text.single_line",
+    label: "Account Name",
+    tableId: "tbl_accounts"
+  });
+}
+
+function createLookupMaintenanceWorkflowDefinition(
+  input: {
+    omitPrincipal?: boolean;
+    status?: "paused" | "published";
+    workflowId: string;
+  }
+): Record<string, unknown> {
+  return {
+    actions: [],
+    conditions: [],
+    metadata: {
+      lookupDefinitions: [
+        {
+          alias: "ticket_account_name",
+          dependencyFieldIds: ["fld_account"],
+          lookupSource: {
+            kind: "related_record",
+            resolverAlias: "account_lookup"
+          },
+          sourceRelationPath: "relatedTables.account_lookup",
+          targetFieldId: "fld_ticket_account_name",
+          valueFieldId: "fld_account_name"
+        }
+      ],
+      relatedTableResolvers: [
+        {
+          alias: "account_lookup",
+          sourceFieldId: "fld_account",
+          strategy: "single_relation",
+          targetTableId: "tbl_accounts"
+        }
+      ],
+      status: input.status ?? "published",
+      tableId: "tbl_1"
+    },
+    ...(input.omitPrincipal
+      ? {}
+      : {
+          principal: {
+            policyRevision: 33,
+            principalId: "wf_lookup_manual_service",
+            schemaEpoch: 0,
+            scopeHash: "scope:wf:lookup-manual"
+          }
+        }),
+    trigger: {
+      match: {
+        tableId: "tbl_1"
+      },
+      operatorId: "field_changed"
+    },
+    workflowId: input.workflowId
+  };
 }
 
 describe("cloudtable runtime ingress", () => {
@@ -2719,12 +2901,344 @@ describe("cloudtable runtime ingress", () => {
       workspaceId: "ws_1"
     });
 
+    const dependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_aggregate_manual/dependencies?workspaceId=ws_1&principalId=ops_aggregate&permissionScopeHash=scope:table:tbl_1&policyRevision=26"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(dependencyResponse.status).toBe(200);
+    const dependencyBody = (await dependencyResponse.json()) as {
+      backfillJobs: Array<{
+        dependencyAlias: string;
+        dependencyKind: string;
+        reason: string;
+        status: string;
+      }>;
+      dependencies: Array<{
+        alias: string;
+        dependencyFieldIds: string[];
+        kind: string;
+        sourceTableId: string | null;
+        status: string;
+        targetTableId: string | null;
+      }>;
+      summary: {
+        attentionRequiredBackfillJobs: unknown[];
+        backfillJobsByStatus: Record<string, number>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+        pendingBackfillJobCount: number;
+        totalBackfillJobCount: number;
+      };
+      suggestedMaintenanceRequests: unknown[];
+    };
+    expect(dependencyBody.dependencies).toContainEqual(
+      expect.objectContaining({
+        alias: "max_ticket_amount",
+        dependencyFieldIds: ["fld_account", "fld_amount"],
+        kind: "aggregate",
+        sourceTableId: "tbl_1",
+        status: "published",
+        targetTableId: "tbl_accounts"
+      })
+    );
+    expect(dependencyBody.backfillJobs).toContainEqual(
+      expect.objectContaining({
+        dependencyAlias: "max_ticket_amount",
+        dependencyKind: "aggregate",
+        reason: "manual",
+        status: "queued"
+      })
+    );
+    expect(dependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [],
+      backfillJobsByStatus: {
+        queued: 1
+      },
+      failedBackfillJobCount: 0,
+      maintenanceState: "active",
+      pendingBackfillJobCount: 1,
+      totalBackfillJobCount: 1
+    });
+    expect(dependencyBody.suggestedMaintenanceRequests).toEqual([]);
+
+    db.inner
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = ?,
+             last_error = ?,
+             updated_at = ?
+         WHERE workspace_id = ? AND workflow_id = ?`
+      )
+      .run(
+        "failed",
+        "aggregate coordinator failed",
+        "2026-06-06T00:13:00.000Z",
+        "ws_1",
+        "wf_aggregate_manual"
+      );
+
+    const failedDependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_aggregate_manual/dependencies?workspaceId=ws_1&principalId=ops_aggregate&permissionScopeHash=scope:table:tbl_1&policyRevision=26"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(failedDependencyResponse.status).toBe(200);
+    const failedDependencyBody = (await failedDependencyResponse.json()) as {
+      summary: {
+        attentionRequiredBackfillJobs: Array<{
+          lastError: string | null;
+          operatorAction: string;
+          staleRunning: boolean;
+          status: string;
+        }>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+        pendingBackfillJobCount: number;
+      };
+      suggestedMaintenanceRequests: Array<{
+        input: {
+          aggregateAliases: string[];
+          kind: string;
+          reason: string;
+          requestId: string;
+          workflowId: string;
+          workspaceId: string;
+        };
+        reason: string;
+        successorToolId: string;
+        toolId: string;
+      }>;
+    };
+    expect(failedDependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [
+        expect.objectContaining({
+          lastError: "aggregate coordinator failed",
+          operatorAction: "retry_backfill",
+          staleRunning: false,
+          status: "failed"
+        })
+      ],
+      failedBackfillJobCount: 1,
+      maintenanceState: "attention_required",
+      pendingBackfillJobCount: 0
+    });
+    expect(failedDependencyBody.suggestedMaintenanceRequests).toEqual([
+      {
+        input: {
+          aggregateAliases: ["max_ticket_amount"],
+          kind: "backfill",
+          reason: "manual",
+          requestId: "workflow-aggregate-maintenance:wf_aggregate_manual:backfill:manual",
+          workflowId: "wf_aggregate_manual",
+          workspaceId: "ws_1"
+        },
+        reason: "attention_required_backfill",
+        successorToolId: "requestWorkflowAggregateMaintenance",
+        toolId: "prepareWorkflowAggregateMaintenance"
+      }
+    ]);
+
+    const prepareSuggestedAggregateMaintenance = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: failedDependencyBody.suggestedMaintenanceRequests[0]!.input,
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_aggregate",
+          toolId: failedDependencyBody.suggestedMaintenanceRequests[0]!.toolId,
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(prepareSuggestedAggregateMaintenance.status).toBe(200);
+    const prepareSuggestedAggregateMaintenanceBody =
+      (await prepareSuggestedAggregateMaintenance.json()) as {
+        output: {
+          kind: string;
+          successorInvocation: {
+            input: {
+              aggregateAliases: string[];
+              kind: string;
+              reason: string;
+              requestId: string;
+              workflowId: string;
+              workspaceId: string;
+            };
+            toolId: string;
+          };
+        };
+        tool: {
+          id: string;
+          phase: string;
+          successorToolId: string | null;
+        };
+      };
+    expect(prepareSuggestedAggregateMaintenanceBody.tool).toMatchObject({
+      id: "prepareWorkflowAggregateMaintenance",
+      phase: "preview",
+      successorToolId: "requestWorkflowAggregateMaintenance"
+    });
+    expect(prepareSuggestedAggregateMaintenanceBody.output).toMatchObject({
+      kind: "workflow-maintenance-draft",
+      successorInvocation: {
+        input: failedDependencyBody.suggestedMaintenanceRequests[0]!.input,
+        toolId: "requestWorkflowAggregateMaintenance"
+      }
+    });
+
+    const executeSuggestedAggregateMaintenance = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: prepareSuggestedAggregateMaintenanceBody.output.successorInvocation.input,
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_aggregate",
+          toolId: prepareSuggestedAggregateMaintenanceBody.output.successorInvocation.toolId,
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(executeSuggestedAggregateMaintenance.status).toBe(200);
+    expect((await executeSuggestedAggregateMaintenance.json()) as {
+      output: {
+        aliases: string[];
+        dependencyKind: string;
+        kind: string;
+        requestId: string;
+        status: string;
+        workflowId: string;
+        workflowVersionId: string;
+      };
+      tool: {
+        id: string;
+        phase: string;
+      };
+    }).toMatchObject({
+      output: {
+        aliases: ["max_ticket_amount"],
+        dependencyKind: "aggregate",
+        kind: "workflow-maintenance-request",
+        requestId: "workflow-aggregate-maintenance:wf_aggregate_manual:backfill:manual",
+        status: "enqueued",
+        workflowId: "wf_aggregate_manual",
+        workflowVersionId: "wf_aggregate_manual:v1"
+      },
+      tool: {
+        id: "requestWorkflowAggregateMaintenance",
+        phase: "execute"
+      }
+    });
+    expect(aggregateQueue.sent).toHaveLength(2);
+    expect(aggregateQueue.sent[1]).toMatchObject({
+      kind: "aggregate-maintenance",
+      payload: {
+        aggregate: {
+          alias: "max_ticket_amount"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "manual"
+        },
+        workflowId: "wf_aggregate_manual",
+        workflowVersionId: "wf_aggregate_manual:v1"
+      },
+      workspaceId: "ws_1"
+    });
+
     const duplicate = await request();
     expect(duplicate.status).toBe(409);
     expect((await duplicate.json()) as { message: string }).toMatchObject({
       message:
         "Aggregate maintenance request manual-backfill-1 was already accepted for workflow wf_aggregate_manual."
     });
+
+    const abandonResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_aggregate_manual/backfill-jobs/wbf:ws_1:wf_aggregate_manual:v1:aggregate:max_ticket_amount:manual/disposition",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            disposition: "abandoned",
+            permissionScopeHash: "scope:table:tbl_1",
+            policyRevision: 26,
+            principalId: "ops_aggregate",
+            reason: "workflow definition replaced before retry",
+            workspaceId: "ws_1"
+          })
+        }
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(abandonResponse.status).toBe(202);
+    expect((await abandonResponse.json()) as {
+      jobId: string;
+      operatorReason: string;
+      status: string;
+    }).toMatchObject({
+      jobId: "wbf:ws_1:wf_aggregate_manual:v1:aggregate:max_ticket_amount:manual",
+      operatorReason: "workflow definition replaced before retry",
+      status: "abandoned"
+    });
+
+    const abandonedDependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_aggregate_manual/dependencies?workspaceId=ws_1&principalId=ops_aggregate&permissionScopeHash=scope:table:tbl_1&policyRevision=26"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(abandonedDependencyResponse.status).toBe(200);
+    const abandonedDependencyBody = (await abandonedDependencyResponse.json()) as {
+      summary: {
+        abandonedBackfillJobCount: number;
+        attentionRequiredBackfillJobs: unknown[];
+        intentionallyClosedBackfillJobs: Array<{
+          operatorAction: string;
+          operatorActorPrincipalId: string;
+          operatorReason: string;
+          status: string;
+        }>;
+        maintenanceState: string;
+        terminalBackfillJobCount: number;
+      };
+      suggestedMaintenanceRequests: unknown[];
+    };
+    expect(abandonedDependencyBody.summary).toMatchObject({
+      abandonedBackfillJobCount: 1,
+      attentionRequiredBackfillJobs: [],
+      intentionallyClosedBackfillJobs: [
+        expect.objectContaining({
+          operatorAction: "abandoned_backfill",
+          operatorActorPrincipalId: "ops_aggregate",
+          operatorReason: "workflow definition replaced before retry",
+          status: "abandoned"
+        })
+      ],
+      maintenanceState: "complete",
+      terminalBackfillJobCount: 1
+    });
+    expect(abandonedDependencyBody.suggestedMaintenanceRequests).toEqual([]);
   });
 
   it("enqueues manual sync backfill requests through workflow operator ingress and rejects duplicate request ids", async () => {
@@ -2904,11 +3418,1419 @@ describe("cloudtable runtime ingress", () => {
       workspaceId: "ws_1"
     });
 
+    const dependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_sync_manual/dependencies?workspaceId=ws_1&principalId=ops_sync&permissionScopeHash=scope:table:tbl_1&policyRevision=31"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(dependencyResponse.status).toBe(200);
+    const dependencyBody = (await dependencyResponse.json()) as {
+      backfillJobs: Array<{
+        dependencyAlias: string;
+        dependencyKind: string;
+        reason: string;
+        status: string;
+      }>;
+      dependencies: Array<{
+        alias: string;
+        dependencyFieldIds: string[];
+        kind: string;
+        sourceTableId: string | null;
+        status: string;
+        targetTableId: string | null;
+        updatedAt: string;
+      }>;
+      summary: {
+        attentionRequiredBackfillJobs: unknown[];
+        backfillJobsByStatus: Record<string, number>;
+        completedBackfillJobCount: number;
+        dependenciesByKind: Record<string, number>;
+        dependenciesByStatus: Record<string, number>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+        pendingBackfillJobCount: number;
+        resumableBackfillJobCount: number;
+        runningBackfillJobCount: number;
+        totalBackfillProcessedCount: number;
+        totalBackfillJobCount: number;
+      };
+      suggestedMaintenanceRequests: unknown[];
+    };
+    expect(dependencyBody.dependencies).toContainEqual(
+      expect.objectContaining({
+        alias: "destination:fld_source_status:fld_account_status",
+        dependencyFieldIds: ["fld_account", "fld_source_status"],
+        kind: "sync",
+        sourceTableId: "tbl_1",
+        status: "published",
+        targetTableId: "tbl_accounts"
+      })
+    );
+    expect(dependencyBody.backfillJobs).toContainEqual(
+      expect.objectContaining({
+        dependencyAlias: "destination:fld_source_status:fld_account_status",
+        dependencyKind: "sync",
+        reason: "manual",
+        status: "queued"
+      })
+    );
+    expect(dependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [],
+      backfillJobsByStatus: {
+        queued: 1
+      },
+      completedBackfillJobCount: 0,
+      dependenciesByKind: expect.objectContaining({
+        sync: 1
+      }),
+      dependenciesByStatus: expect.objectContaining({
+        published: expect.any(Number)
+      }),
+      failedBackfillJobCount: 0,
+      maintenanceState: "active",
+      pendingBackfillJobCount: 1,
+      resumableBackfillJobCount: 0,
+      runningBackfillJobCount: 0,
+      totalBackfillProcessedCount: 0,
+      totalBackfillJobCount: 1
+    });
+    expect(dependencyBody.suggestedMaintenanceRequests).toEqual([]);
+
+    const toolDependencyResponse = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            workflowId: "wf_sync_manual"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 31,
+          principalId: "ops_sync",
+          toolId: "readWorkflowDependencies",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(toolDependencyResponse.status).toBe(200);
+    const toolDependencyBody = (await toolDependencyResponse.json()) as {
+      input: {
+        workflowId: string;
+      };
+      output: {
+        dependencies: Record<string, unknown>;
+        kind: string;
+      };
+      tool: {
+        id: string;
+        phase: string;
+        scope: string;
+      };
+    };
+    expect(toolDependencyBody.tool).toMatchObject({
+      id: "readWorkflowDependencies",
+      phase: "draft",
+      scope: "workflow"
+    });
+    expect(toolDependencyBody.input).toEqual({
+      workflowId: "wf_sync_manual"
+    });
+    expect(toolDependencyBody.output.kind).toBe("workflow-dependencies");
+    const stableDependencySnapshot = (body: typeof dependencyBody) => ({
+      ...body,
+      dependencies: body.dependencies.map(({ updatedAt: _updatedAt, ...dependency }) => dependency)
+    });
+    expect(stableDependencySnapshot(toolDependencyBody.output.dependencies as typeof dependencyBody)).toEqual(
+      stableDependencySnapshot(dependencyBody)
+    );
+
+    db.inner
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = ?,
+             cursor_json = ?,
+             processed_count = ?,
+             last_error = NULL,
+             updated_at = ?
+         WHERE workspace_id = ? AND workflow_id = ?`
+      )
+      .run(
+        "running",
+        JSON.stringify({ lastRecordId: "rec_1" }),
+        2,
+        "2026-06-06T00:00:00.000Z",
+        "ws_1",
+        "wf_sync_manual"
+      );
+
+    const staleRunningDependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_sync_manual/dependencies?workspaceId=ws_1&principalId=ops_sync&permissionScopeHash=scope:table:tbl_1&policyRevision=31"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(staleRunningDependencyResponse.status).toBe(200);
+    const staleRunningDependencyBody = (await staleRunningDependencyResponse.json()) as {
+      summary: {
+        attentionRequiredBackfillJobs: Array<{
+          lastError: string | null;
+          operatorAction: string;
+          staleRunning: boolean;
+          status: string;
+        }>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+        pendingBackfillJobCount: number;
+        staleRunningBackfillJobCount: number;
+      };
+      suggestedMaintenanceRequests: Array<{
+        input: {
+          kind: string;
+          reason: string;
+          requestId: string;
+          syncAliases: string[];
+          workflowId: string;
+          workspaceId: string;
+        };
+        reason: string;
+        successorToolId: string;
+        toolId: string;
+      }>;
+    };
+    expect(staleRunningDependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [
+        expect.objectContaining({
+          lastError: null,
+          operatorAction: "retry_backfill",
+          staleRunning: true,
+          status: "running"
+        })
+      ],
+      failedBackfillJobCount: 1,
+      maintenanceState: "attention_required",
+      pendingBackfillJobCount: 1,
+      staleRunningBackfillJobCount: 1
+    });
+    expect(staleRunningDependencyBody.suggestedMaintenanceRequests).toEqual([
+      {
+        input: {
+          kind: "backfill",
+          reason: "manual",
+          requestId: "workflow-sync-maintenance:wf_sync_manual:backfill:manual",
+          syncAliases: ["destination:fld_source_status:fld_account_status"],
+          workflowId: "wf_sync_manual",
+          workspaceId: "ws_1"
+        },
+        reason: "attention_required_backfill",
+        successorToolId: "requestWorkflowSyncMaintenance",
+        toolId: "prepareWorkflowSyncMaintenance"
+      }
+    ]);
+
+    db.inner
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = ?,
+             cursor_json = ?,
+             processed_count = ?,
+             last_error = ?,
+             updated_at = ?
+         WHERE workspace_id = ? AND workflow_id = ?`
+      )
+      .run(
+        "running",
+        JSON.stringify({ lastRecordId: "rec_1" }),
+        2,
+        "transient coordinator failure",
+        "2026-06-06T00:12:00.000Z",
+        "ws_1",
+        "wf_sync_manual"
+      );
+
+    const runningDependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_sync_manual/dependencies?workspaceId=ws_1&principalId=ops_sync&permissionScopeHash=scope:table:tbl_1&policyRevision=31"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(runningDependencyResponse.status).toBe(200);
+    const runningDependencyBody = (await runningDependencyResponse.json()) as {
+      summary: {
+        attentionRequiredBackfillJobs: Array<{
+          lastError: string | null;
+          operatorAction: string;
+          staleRunning: boolean;
+          status: string;
+        }>;
+        backfillJobsByStatus: Record<string, number>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+        pendingBackfillJobCount: number;
+        resumableBackfillJobCount: number;
+        runningBackfillJobCount: number;
+        totalBackfillProcessedCount: number;
+      };
+      suggestedMaintenanceRequests: Array<{
+        input: {
+          kind: string;
+          reason: string;
+          requestId: string;
+          syncAliases: string[];
+          workflowId: string;
+          workspaceId: string;
+        };
+        reason: string;
+        successorToolId: string;
+        toolId: string;
+      }>;
+    };
+    expect(runningDependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [
+        expect.objectContaining({
+          lastError: "transient coordinator failure",
+          operatorAction: "retry_backfill",
+          staleRunning: true,
+          status: "running"
+        })
+      ],
+      backfillJobsByStatus: {
+        running: 1
+      },
+      failedBackfillJobCount: 1,
+      maintenanceState: "attention_required",
+      pendingBackfillJobCount: 1,
+      resumableBackfillJobCount: 1,
+      runningBackfillJobCount: 1,
+      totalBackfillProcessedCount: 2
+    });
+    expect(runningDependencyBody.suggestedMaintenanceRequests).toEqual([
+      {
+        input: {
+          kind: "backfill",
+          reason: "manual",
+          requestId: "workflow-sync-maintenance:wf_sync_manual:backfill:manual",
+          syncAliases: ["destination:fld_source_status:fld_account_status"],
+          workflowId: "wf_sync_manual",
+          workspaceId: "ws_1"
+        },
+        reason: "attention_required_backfill",
+        successorToolId: "requestWorkflowSyncMaintenance",
+        toolId: "prepareWorkflowSyncMaintenance"
+      }
+    ]);
+
+    db.inner
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = ?,
+             last_error = ?,
+             updated_at = ?
+         WHERE workspace_id = ? AND workflow_id = ?`
+      )
+      .run("failed", null, "2026-06-06T00:13:00.000Z", "ws_1", "wf_sync_manual");
+
+    const failedDependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_sync_manual/dependencies?workspaceId=ws_1&principalId=ops_sync&permissionScopeHash=scope:table:tbl_1&policyRevision=31"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(failedDependencyResponse.status).toBe(200);
+    const failedDependencyBody = (await failedDependencyResponse.json()) as {
+      summary: {
+        attentionRequiredBackfillJobs: Array<{
+          lastError: string | null;
+          operatorAction: string;
+          staleRunning: boolean;
+          status: string;
+        }>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+        pendingBackfillJobCount: number;
+      };
+      suggestedMaintenanceRequests: Array<{
+        input: {
+          kind: string;
+          reason: string;
+          requestId: string;
+          syncAliases: string[];
+          workflowId: string;
+          workspaceId: string;
+        };
+        reason: string;
+        successorToolId: string;
+        toolId: string;
+      }>;
+    };
+    expect(failedDependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [
+        expect.objectContaining({
+          lastError: null,
+          operatorAction: "retry_backfill",
+          staleRunning: false,
+          status: "failed"
+        })
+      ],
+      failedBackfillJobCount: 1,
+      maintenanceState: "attention_required",
+      pendingBackfillJobCount: 0
+    });
+    expect(failedDependencyBody.suggestedMaintenanceRequests).toEqual([
+      {
+        input: {
+          kind: "backfill",
+          reason: "manual",
+          requestId: "workflow-sync-maintenance:wf_sync_manual:backfill:manual",
+          syncAliases: ["destination:fld_source_status:fld_account_status"],
+          workflowId: "wf_sync_manual",
+          workspaceId: "ws_1"
+        },
+        reason: "attention_required_backfill",
+        successorToolId: "requestWorkflowSyncMaintenance",
+        toolId: "prepareWorkflowSyncMaintenance"
+      }
+    ]);
+
+    const prepareSuggestedSyncMaintenance = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: failedDependencyBody.suggestedMaintenanceRequests[0]!.input,
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 31,
+          principalId: "ops_sync",
+          toolId: failedDependencyBody.suggestedMaintenanceRequests[0]!.toolId,
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(prepareSuggestedSyncMaintenance.status).toBe(200);
+    const prepareSuggestedSyncMaintenanceBody = (await prepareSuggestedSyncMaintenance.json()) as {
+      output: {
+        kind: string;
+        successorInvocation: {
+          input: {
+            kind: string;
+            reason: string;
+            requestId: string;
+            syncAliases: string[];
+            workflowId: string;
+            workspaceId: string;
+          };
+          toolId: string;
+        };
+      };
+      tool: {
+        id: string;
+        phase: string;
+        successorToolId: string | null;
+      };
+    };
+    expect(prepareSuggestedSyncMaintenanceBody.tool).toMatchObject({
+      id: "prepareWorkflowSyncMaintenance",
+      phase: "preview",
+      successorToolId: "requestWorkflowSyncMaintenance"
+    });
+    expect(prepareSuggestedSyncMaintenanceBody.output).toMatchObject({
+      kind: "workflow-maintenance-draft",
+      successorInvocation: {
+        input: failedDependencyBody.suggestedMaintenanceRequests[0]!.input,
+        toolId: "requestWorkflowSyncMaintenance"
+      }
+    });
+
+    const executeSuggestedSyncMaintenance = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: prepareSuggestedSyncMaintenanceBody.output.successorInvocation.input,
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 31,
+          principalId: "ops_sync",
+          toolId: prepareSuggestedSyncMaintenanceBody.output.successorInvocation.toolId,
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(executeSuggestedSyncMaintenance.status).toBe(200);
+    expect((await executeSuggestedSyncMaintenance.json()) as {
+      output: {
+        aliases: string[];
+        dependencyKind: string;
+        kind: string;
+        requestId: string;
+        status: string;
+        workflowId: string;
+        workflowVersionId: string;
+      };
+      tool: {
+        id: string;
+        phase: string;
+      };
+    }).toMatchObject({
+      output: {
+        aliases: ["destination:fld_source_status:fld_account_status"],
+        dependencyKind: "sync",
+        kind: "workflow-maintenance-request",
+        requestId: "workflow-sync-maintenance:wf_sync_manual:backfill:manual",
+        status: "enqueued",
+        workflowId: "wf_sync_manual",
+        workflowVersionId: "wf_sync_manual:v1"
+      },
+      tool: {
+        id: "requestWorkflowSyncMaintenance",
+        phase: "execute"
+      }
+    });
+    expect(aggregateQueue.sent).toHaveLength(2);
+    expect(aggregateQueue.sent[1]).toMatchObject({
+      kind: "aggregate-maintenance",
+      payload: {
+        sync: {
+          alias: "destination:fld_source_status:fld_account_status"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "manual"
+        },
+        workflowId: "wf_sync_manual",
+        workflowVersionId: "wf_sync_manual:v1"
+      },
+      workspaceId: "ws_1"
+    });
+
+    const targetScopedRecompute = await handleFetch(
+      new Request("https://example.test/v1/workflows/wf_sync_manual/sync-maintenance", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          changedFieldIds: ["fld_account"],
+          kind: "recompute",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 31,
+          principalId: "ops_sync",
+          recordId: null,
+          requestId: "manual-sync-target-recompute-1",
+          targetRecordId: "rec_account_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(targetScopedRecompute.status).toBe(202);
+    expect((await targetScopedRecompute.json()) as {
+      kind: string;
+      requestId: string;
+      status: string;
+      syncAliases: string[];
+      targetRecordId?: string;
+      workflowId: string;
+      workflowVersionId: string;
+    }).toMatchObject({
+      kind: "recompute",
+      requestId: "manual-sync-target-recompute-1",
+      status: "enqueued",
+      syncAliases: ["destination:fld_source_status:fld_account_status"],
+      targetRecordId: "rec_account_1",
+      workflowId: "wf_sync_manual",
+      workflowVersionId: "wf_sync_manual:v1"
+    });
+    expect(aggregateQueue.sent).toHaveLength(3);
+    expect(aggregateQueue.sent[2]).toMatchObject({
+      eventId: "manual-sync-recompute:manual-sync-target-recompute-1",
+      kind: "aggregate-maintenance",
+      payload: {
+        trigger: {
+          changedFieldIds: ["fld_account"],
+          eventId: "manual-sync-recompute:manual-sync-target-recompute-1",
+          eventType: "workflow.sync.manual_recompute",
+          kind: "recompute",
+          recordId: null,
+          targetRecordId: "rec_account_1"
+        }
+      },
+      workspaceId: "ws_1"
+    });
+
     const duplicate = await request();
     expect(duplicate.status).toBe(409);
     expect((await duplicate.json()) as { message: string }).toMatchObject({
       message:
         "Sync maintenance request manual-sync-backfill-1 was already accepted for workflow wf_sync_manual."
+    });
+
+    db.inner
+      .prepare(
+        `INSERT INTO workflow_backfill_jobs (
+           id,
+           workspace_id,
+           workflow_id,
+           workflow_version_id,
+           dependency_kind,
+           dependency_alias,
+           reason,
+           status,
+           chunk_size,
+           cursor_json,
+           processed_count,
+           attempt_count,
+           last_error,
+           created_at,
+           updated_at,
+           completed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "wbf:ws_1:wf_sync_manual:v1:sync:destination:fld_source_status:fld_account_status:manual-replacement",
+        "ws_1",
+        "wf_sync_manual",
+        "wf_sync_manual:v1",
+        "sync",
+        "destination:fld_source_status:fld_account_status",
+        "manual-replacement",
+        "queued",
+        250,
+        null,
+        0,
+        0,
+        null,
+        "2026-06-06T00:14:00.000Z",
+        "2026-06-06T00:14:00.000Z",
+        null
+      );
+
+    const supersedeResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_sync_manual/backfill-jobs/wbf:ws_1:wf_sync_manual:v1:sync:destination:fld_source_status:fld_account_status:manual/disposition",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            disposition: "superseded",
+            permissionScopeHash: "scope:table:tbl_1",
+            policyRevision: 31,
+            principalId: "ops_sync",
+            reason: "replacement backfill covers the same dependency after recipe edit",
+            supersededByJobId:
+              "wbf:ws_1:wf_sync_manual:v1:sync:destination:fld_source_status:fld_account_status:manual-replacement",
+            workspaceId: "ws_1"
+          })
+        }
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(supersedeResponse.status).toBe(202);
+    expect((await supersedeResponse.json()) as {
+      status: string;
+      supersededByJobId: string;
+    }).toMatchObject({
+      status: "superseded",
+      supersededByJobId:
+        "wbf:ws_1:wf_sync_manual:v1:sync:destination:fld_source_status:fld_account_status:manual-replacement"
+    });
+
+    const supersededDependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_sync_manual/dependencies?workspaceId=ws_1&principalId=ops_sync&permissionScopeHash=scope:table:tbl_1&policyRevision=31"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(supersededDependencyResponse.status).toBe(200);
+    const supersededDependencyBody = (await supersededDependencyResponse.json()) as {
+      summary: {
+        attentionRequiredBackfillJobs: unknown[];
+        intentionallyClosedBackfillJobs: Array<{
+          operatorAction: string;
+          operatorActorPrincipalId: string;
+          operatorReason: string;
+          status: string;
+          supersededByJobId: string;
+        }>;
+        pendingBackfillJobCount: number;
+        supersededBackfillJobCount: number;
+      };
+      suggestedMaintenanceRequests: unknown[];
+    };
+    expect(supersededDependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [],
+      intentionallyClosedBackfillJobs: [
+        expect.objectContaining({
+          operatorAction: "superseded_backfill",
+          operatorActorPrincipalId: "ops_sync",
+          operatorReason: "replacement backfill covers the same dependency after recipe edit",
+          status: "superseded",
+          supersededByJobId:
+            "wbf:ws_1:wf_sync_manual:v1:sync:destination:fld_source_status:fld_account_status:manual-replacement"
+        })
+      ],
+      pendingBackfillJobCount: 2,
+      supersededBackfillJobCount: 1
+    });
+    expect(supersededDependencyBody.suggestedMaintenanceRequests).toEqual([]);
+  });
+
+  it("enqueues manual lookup backfill requests through workflow operator ingress with service identity and idempotency", async () => {
+    const { aggregateQueue, db, env } = createEnv();
+    insertAccountsLookupMaintenanceSchema(db);
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "rec_account_1"
+    });
+    insertCellCurrent(db, {
+      fieldId: "fld_account_name",
+      fieldKey: "account_name",
+      fieldType: "text.single_line",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts",
+      value: "Acme"
+    });
+    insertWorkflow(db, {
+      definition: createLookupMaintenanceWorkflowDefinition({
+        workflowId: "wf_lookup_manual"
+      }),
+      name: "Lookup Manual",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_lookup_manual",
+      workflowKey: "lookup-manual"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_lookup_ops",
+      workspaceId: "ws_1",
+      principalId: "ops_lookup",
+      policyRevision: 33,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_lookup_service",
+      workspaceId: "ws_1",
+      principalId: "wf_lookup_manual_service",
+      policyRevision: 33,
+      schemaEpoch: 0,
+      scopeHash: "scope:wf:lookup-manual",
+      commandTypes: ["cell.set"],
+      fields: {
+        fld_ticket_account_name: {
+          agent: false,
+          fieldId: "fld_ticket_account_name",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const request = async (requestId: string) =>
+      handleFetch(
+        new Request("https://example.test/v1/workflows/wf_lookup_manual/lookup-maintenance", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            kind: "backfill",
+            lookupAliases: ["ticket_account_name"],
+            permissionScopeHash: "scope:table:tbl_1",
+            policyRevision: 33,
+            principalId: "ops_lookup",
+            reason: "manual",
+            requestId,
+            workspaceId: "ws_1"
+          })
+        }),
+        env,
+        {} as ExecutionContext
+      );
+
+    const first = await request("manual-lookup-backfill-1");
+    expect(first.status).toBe(202);
+    expect((await first.json()) as {
+      kind: string;
+      lookupAliases: string[];
+      requestId: string;
+      status: string;
+      workflowId: string;
+      workflowVersionId: string;
+    }).toMatchObject({
+      kind: "backfill",
+      lookupAliases: ["ticket_account_name"],
+      requestId: "manual-lookup-backfill-1",
+      status: "enqueued",
+      workflowId: "wf_lookup_manual",
+      workflowVersionId: "wf_lookup_manual:v1"
+    });
+
+    expect(aggregateQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent[0]).toMatchObject({
+      kind: "aggregate-maintenance",
+      payload: {
+        lookup: {
+          alias: "ticket_account_name",
+          dependencyFieldIds: ["fld_account"],
+          lookupSource: {
+            kind: "related_record",
+            resolverAlias: "account_lookup",
+            sourceFieldId: "fld_account"
+          },
+          resolver: {
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          },
+          sourceTableId: "tbl_1",
+          targetFieldId: "fld_ticket_account_name",
+          valueFieldId: "fld_account_name"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "manual"
+        },
+        workflowId: "wf_lookup_manual",
+        workflowVersionId: "wf_lookup_manual:v1"
+      },
+      workspaceId: "ws_1"
+    });
+
+    const receipt = db.inner
+      .prepare(
+        `SELECT receipt_json
+         FROM idempotency_receipts
+         WHERE scope_key = ? AND idempotency_key = ?`
+      )
+      .get(
+        "workflow.lookup-maintenance:ws_1:wf_lookup_manual",
+        "manual-lookup-backfill-1"
+      ) as { receipt_json: string };
+    expect(JSON.parse(receipt.receipt_json)).toMatchObject({
+      kind: "backfill",
+      lookupAliases: ["ticket_account_name"],
+      requestedBy: "ops_lookup",
+      workflowId: "wf_lookup_manual"
+    });
+
+    const backfillJob = db.inner
+      .prepare(
+        `SELECT dependency_alias, dependency_kind, reason, status
+         FROM workflow_backfill_jobs
+         WHERE workspace_id = ? AND workflow_id = ?`
+      )
+      .get("ws_1", "wf_lookup_manual") as {
+      dependency_alias: string;
+      dependency_kind: string;
+      reason: string;
+      status: string;
+    };
+    expect(backfillJob).toMatchObject({
+      dependency_alias: "ticket_account_name",
+      dependency_kind: "lookup",
+      reason: "manual",
+      status: "queued"
+    });
+
+    db.inner
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = ?,
+             last_error = ?,
+             updated_at = ?
+         WHERE workspace_id = ? AND workflow_id = ?`
+      )
+      .run(
+        "failed",
+        "lookup coordinator failed",
+        "2026-06-06T00:13:00.000Z",
+        "ws_1",
+        "wf_lookup_manual"
+      );
+
+    const failedDependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_lookup_manual/dependencies?workspaceId=ws_1&principalId=ops_lookup&permissionScopeHash=scope:table:tbl_1&policyRevision=33"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(failedDependencyResponse.status).toBe(200);
+    const failedDependencyBody = (await failedDependencyResponse.json()) as {
+      summary: {
+        attentionRequiredBackfillJobs: Array<{
+          dependencyAlias: string;
+          dependencyKind: string;
+          lastError: string | null;
+          operatorAction: string;
+          reason: string;
+          staleRunning: boolean;
+          status: string;
+        }>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+        pendingBackfillJobCount: number;
+      };
+      suggestedMaintenanceRequests: Array<{
+        input: {
+          kind: string;
+          lookupAliases: string[];
+          reason: string;
+          requestId: string;
+          workflowId: string;
+          workspaceId: string;
+        };
+        reason: string;
+        successorToolId: string;
+        toolId: string;
+      }>;
+    };
+    expect(failedDependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [
+        expect.objectContaining({
+          dependencyAlias: "ticket_account_name",
+          dependencyKind: "lookup",
+          lastError: "lookup coordinator failed",
+          operatorAction: "retry_backfill",
+          reason: "manual",
+          staleRunning: false,
+          status: "failed"
+        })
+      ],
+      failedBackfillJobCount: 1,
+      maintenanceState: "attention_required",
+      pendingBackfillJobCount: 0
+    });
+    expect(failedDependencyBody.suggestedMaintenanceRequests).toEqual([
+      {
+        input: {
+          kind: "backfill",
+          lookupAliases: ["ticket_account_name"],
+          reason: "manual",
+          requestId: "workflow-lookup-maintenance:wf_lookup_manual:backfill:manual",
+          workflowId: "wf_lookup_manual",
+          workspaceId: "ws_1"
+        },
+        reason: "attention_required_backfill",
+        successorToolId: "requestWorkflowLookupMaintenance",
+        toolId: "prepareWorkflowLookupMaintenance"
+      }
+    ]);
+
+    db.inner
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = ?,
+             last_error = NULL,
+             updated_at = ?
+         WHERE workspace_id = ? AND workflow_id = ?`
+      )
+      .run("queued", "2026-06-06T00:14:00.000Z", "ws_1", "wf_lookup_manual");
+
+    await handleQueueBatch(
+      createBatch([aggregateQueue.sent[0]!]).batch as never,
+      env,
+      {} as ExecutionContext
+    );
+    const lookupCell = db.inner
+      .prepare(
+        `SELECT value_json
+         FROM cell_current
+         WHERE workspace_id = ? AND table_id = ? AND record_id = ? AND field_id = ?`
+      )
+      .get("ws_1", "tbl_1", "rec_ticket_1", "fld_ticket_account_name") as {
+      value_json: string;
+    };
+    expect(JSON.parse(lookupCell.value_json)).toMatchObject({
+      raw: "Acme",
+      valueType: "computed.readonly"
+    });
+    const ledgerRow = db.inner
+      .prepare(
+        `SELECT metadata_json
+         FROM event_ledger
+         WHERE workspace_id = ? AND table_id = ? AND command_id LIKE ?
+         ORDER BY created_at DESC
+         LIMIT 1`
+      )
+      .get("ws_1", "tbl_1", "cmd:lookup-maintenance:%") as { metadata_json: string };
+    expect(JSON.parse(ledgerRow.metadata_json)).toMatchObject({
+      actor: {
+        mode: "workflow",
+        principalId: "wf_lookup_manual_service"
+      },
+      coordinatorOwnedMutation: true,
+      permissionScopeHash: "scope:wf:lookup-manual",
+      permissionsVersion: 33,
+      schemaEpoch: 0
+    });
+
+    const executeTool = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            kind: "backfill",
+            lookupAliases: ["ticket_account_name"],
+            reason: "manual",
+            requestId: "manual-lookup-backfill-tool-1",
+            workflowId: "wf_lookup_manual",
+            workspaceId: "ws_1"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 33,
+          principalId: "ops_lookup",
+          toolId: "requestWorkflowLookupMaintenance",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(executeTool.status).toBe(200);
+    expect((await executeTool.json()) as {
+      output: {
+        aliases: string[];
+        dependencyKind: string;
+        kind: string;
+        requestId: string;
+        status: string;
+        workflowId: string;
+        workflowVersionId: string;
+      };
+      tool: {
+        id: string;
+        phase: string;
+      };
+    }).toMatchObject({
+      output: {
+        aliases: ["ticket_account_name"],
+        dependencyKind: "lookup",
+        kind: "workflow-maintenance-request",
+        requestId: "manual-lookup-backfill-tool-1",
+        status: "enqueued",
+        workflowId: "wf_lookup_manual",
+        workflowVersionId: "wf_lookup_manual:v1"
+      },
+      tool: {
+        id: "requestWorkflowLookupMaintenance",
+        phase: "execute"
+      }
+    });
+    expect(aggregateQueue.sent).toHaveLength(2);
+
+    const duplicate = await request("manual-lookup-backfill-1");
+    expect(duplicate.status).toBe(409);
+    expect((await duplicate.json()) as { message: string }).toMatchObject({
+      message:
+        "Lookup maintenance request manual-lookup-backfill-1 was already accepted for workflow wf_lookup_manual."
+    });
+  });
+
+  it("rejects manual lookup-maintenance ingress for invalid input, unauthorized operators, missing identity, and paused workflows", async () => {
+    const { db, env } = createEnv();
+    insertAccountsLookupMaintenanceSchema(db);
+    insertWorkflow(db, {
+      definition: createLookupMaintenanceWorkflowDefinition({
+        workflowId: "wf_lookup_validation"
+      }),
+      name: "Lookup Validation",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_lookup_validation",
+      workflowKey: "lookup-validation"
+    });
+    insertWorkflow(db, {
+      definition: createLookupMaintenanceWorkflowDefinition({
+        omitPrincipal: true,
+        workflowId: "wf_lookup_missing_principal"
+      }),
+      name: "Lookup Missing Principal",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_lookup_missing_principal",
+      workflowKey: "lookup-missing-principal"
+    });
+    insertWorkflow(db, {
+      definition: createLookupMaintenanceWorkflowDefinition({
+        status: "paused",
+        workflowId: "wf_lookup_paused"
+      }),
+      name: "Lookup Paused",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_lookup_paused",
+      workflowKey: "lookup-paused"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_lookup_validation",
+      workspaceId: "ws_1",
+      principalId: "ops_lookup_validation",
+      policyRevision: 34,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_lookup_denied",
+      workspaceId: "ws_1",
+      principalId: "ops_lookup_denied",
+      policyRevision: 34,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["record.create"],
+      fields: {}
+    });
+
+    const request = (workflowId: string, body: Record<string, unknown>) =>
+      handleFetch(
+        new Request(`https://example.test/v1/workflows/${workflowId}/lookup-maintenance`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            kind: "backfill",
+            permissionScopeHash: "scope:table:tbl_1",
+            policyRevision: 34,
+            principalId: "ops_lookup_validation",
+            workspaceId: "ws_1",
+            ...body
+          })
+        }),
+        env,
+        {} as ExecutionContext
+      );
+
+    const invalidKind = await request("wf_lookup_validation", {
+      kind: "repair",
+      requestId: "manual-lookup-invalid-kind"
+    });
+    expect(invalidKind.status).toBe(400);
+    expect((await invalidKind.json()) as { message: string }).toMatchObject({
+      message: "kind must be either backfill or recompute."
+    });
+
+    const invalidAliasShape = await request("wf_lookup_validation", {
+      lookupAliases: "ticket_account_name",
+      requestId: "manual-lookup-invalid-alias-shape"
+    });
+    expect(invalidAliasShape.status).toBe(400);
+    expect((await invalidAliasShape.json()) as { message: string }).toMatchObject({
+      message: "lookupAliases must be an array of strings when provided."
+    });
+
+    const invalidAliasEntry = await request("wf_lookup_validation", {
+      lookupAliases: ["ticket_account_name", ""],
+      requestId: "manual-lookup-invalid-alias-entry"
+    });
+    expect(invalidAliasEntry.status).toBe(400);
+    expect((await invalidAliasEntry.json()) as { message: string }).toMatchObject({
+      message: "lookupAliases entries must all be non-empty strings."
+    });
+
+    const missingAlias = await request("wf_lookup_validation", {
+      lookupAliases: ["missing_lookup"],
+      requestId: "manual-lookup-missing-alias"
+    });
+    expect(missingAlias.status).toBe(400);
+    expect((await missingAlias.json()) as { message: string }).toMatchObject({
+      message: "Workflow wf_lookup_validation does not define lookup alias missing_lookup."
+    });
+
+    const invalidTargetRecordScope = await request("wf_lookup_validation", {
+      requestId: "manual-lookup-backfill-target-scope",
+      targetRecordId: "rec_account_1"
+    });
+    expect(invalidTargetRecordScope.status).toBe(400);
+    expect((await invalidTargetRecordScope.json()) as { message: string }).toMatchObject({
+      message: "targetRecordId can only be provided for recompute lookup maintenance."
+    });
+
+    const missingPrincipal = await request("wf_lookup_missing_principal", {
+      requestId: "manual-lookup-missing-principal"
+    });
+    expect(missingPrincipal.status).toBe(400);
+    expect((await missingPrincipal.json()) as { message: string }).toMatchObject({
+      message:
+        "Workflow wf_lookup_missing_principal version wf_lookup_missing_principal:v1 is missing explicit workflow service identity metadata."
+    });
+
+    const paused = await request("wf_lookup_paused", {
+      requestId: "manual-lookup-paused"
+    });
+    expect(paused.status).toBe(400);
+    expect((await paused.json()) as { message: string }).toMatchObject({
+      message: "Workflow wf_lookup_paused is paused and cannot accept lookup maintenance requests."
+    });
+
+    const denied = await request("wf_lookup_validation", {
+      principalId: "ops_lookup_denied",
+      requestId: "manual-lookup-denied"
+    });
+    expect(denied.status).toBe(403);
+    expect((await denied.json()) as { error: string }).toMatchObject({
+      error: "forbidden"
+    });
+  });
+
+  it("rejects manual sync-maintenance ingress for undefined aliases, missing service identity, and paused workflows", async () => {
+    const { db, env } = createEnv();
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id,
+           workspace_id,
+           app_id,
+           slug,
+           name,
+           schema_epoch,
+           current_schema_version,
+           created_at,
+           updated_at,
+           archived_at,
+           last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        "2026-06-06T00:00:00.000Z",
+        "2026-06-06T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      fieldId: "fld_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1",
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      }
+    });
+    insertField(db, {
+      fieldId: "fld_source_status",
+      fieldKey: "source_status",
+      fieldType: "text.single_line",
+      label: "Source Status",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_status",
+      fieldKey: "account_status",
+      fieldType: "text.single_line",
+      label: "Account Status",
+      tableId: "tbl_accounts"
+    });
+
+    const syncDefinition = (overrides: Record<string, unknown> = {}) => ({
+      actions: [
+        {
+          input: {
+            resolverAlias: "destination",
+            sourceFieldId: "fld_source_status",
+            targetFieldId: "fld_account_status"
+          },
+          operatorId: "sync_related_field"
+        }
+      ],
+      conditions: [],
+      metadata: {
+        relatedTableResolvers: [
+          {
+            alias: "destination",
+            sourceFieldId: "fld_account",
+            strategy: "single_relation",
+            targetTableId: "tbl_accounts"
+          }
+        ],
+        status: "published",
+        tableId: "tbl_1"
+      },
+      principal: {
+        policyRevision: 32,
+        principalId: "wf_sync_validation_service",
+        schemaEpoch: 0,
+        scopeHash: "scope:wf:sync-validation"
+      },
+      trigger: {
+        match: {
+          tableId: "tbl_1"
+        },
+        operatorId: "field_changed"
+      },
+      workflowId: "wf_sync_validation",
+      ...overrides
+    });
+
+    insertWorkflow(db, {
+      definition: syncDefinition(),
+      name: "Sync Invalid Alias",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_sync_invalid_alias",
+      workflowKey: "sync-invalid-alias"
+    });
+    insertWorkflow(db, {
+      definition: syncDefinition({
+        principal: undefined,
+        workflowId: "wf_sync_missing_principal"
+      }),
+      name: "Sync Missing Principal",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_sync_missing_principal",
+      workflowKey: "sync-missing-principal"
+    });
+    insertWorkflow(db, {
+      definition: syncDefinition({
+        metadata: {
+          relatedTableResolvers: [
+            {
+              alias: "destination",
+              sourceFieldId: "fld_account",
+              strategy: "single_relation",
+              targetTableId: "tbl_accounts"
+            }
+          ],
+          status: "paused",
+          tableId: "tbl_1"
+        },
+        workflowId: "wf_sync_paused"
+      }),
+      name: "Sync Paused",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_sync_paused",
+      workflowKey: "sync-paused"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_sync_validation",
+      workspaceId: "ws_1",
+      principalId: "ops_sync_validation",
+      policyRevision: 32,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+
+    const request = (workflowId: string, body: Record<string, unknown>) =>
+      handleFetch(
+        new Request(`https://example.test/v1/workflows/${workflowId}/sync-maintenance`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            kind: "backfill",
+            permissionScopeHash: "scope:table:tbl_1",
+            policyRevision: 32,
+            principalId: "ops_sync_validation",
+            workspaceId: "ws_1",
+            ...body
+          })
+        }),
+        env,
+        {} as ExecutionContext
+      );
+
+    const invalidAliasShape = await request("wf_sync_invalid_alias", {
+      requestId: "manual-sync-invalid-alias-shape",
+      syncAliases: "destination:fld_source_status:fld_account_status"
+    });
+    expect(invalidAliasShape.status).toBe(400);
+    expect((await invalidAliasShape.json()) as { message: string }).toMatchObject({
+      message: "syncAliases must be an array of strings when provided."
+    });
+
+    const invalidAliasEntry = await request("wf_sync_invalid_alias", {
+      requestId: "manual-sync-invalid-alias-entry",
+      syncAliases: ["destination:fld_source_status:fld_account_status", ""]
+    });
+    expect(invalidAliasEntry.status).toBe(400);
+    expect((await invalidAliasEntry.json()) as { message: string }).toMatchObject({
+      message: "syncAliases entries must all be non-empty strings."
+    });
+
+    const invalidAlias = await request("wf_sync_invalid_alias", {
+      requestId: "manual-sync-invalid-alias",
+      syncAliases: ["missing_sync"]
+    });
+    expect(invalidAlias.status).toBe(400);
+    expect((await invalidAlias.json()) as { message: string }).toMatchObject({
+      message: "Workflow wf_sync_invalid_alias does not define sync alias missing_sync."
+    });
+
+    const invalidTargetRecordScope = await request("wf_sync_invalid_alias", {
+      requestId: "manual-sync-backfill-target-scope",
+      targetRecordId: "rec_account_1"
+    });
+    expect(invalidTargetRecordScope.status).toBe(400);
+    expect((await invalidTargetRecordScope.json()) as { message: string }).toMatchObject({
+      message: "targetRecordId can only be provided for recompute sync maintenance."
+    });
+
+    const missingPrincipal = await request("wf_sync_missing_principal", {
+      requestId: "manual-sync-missing-principal"
+    });
+    expect(missingPrincipal.status).toBe(400);
+    expect((await missingPrincipal.json()) as { message: string }).toMatchObject({
+      message:
+        "Workflow wf_sync_missing_principal version wf_sync_missing_principal:v1 is missing explicit workflow service identity metadata."
+    });
+
+    const paused = await request("wf_sync_paused", {
+      requestId: "manual-sync-paused"
+    });
+    expect(paused.status).toBe(400);
+    expect((await paused.json()) as { message: string }).toMatchObject({
+      message: "Workflow wf_sync_paused is paused and cannot accept sync maintenance requests."
     });
   });
 
@@ -3045,6 +4967,54 @@ describe("cloudtable runtime ingress", () => {
       env,
       {} as ExecutionContext
     );
+
+    const invalidAliasShape = await handleFetch(
+      new Request("https://example.test/v1/workflows/wf_aggregate_invalid/aggregate-maintenance", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          aggregateAliases: "open_ticket_count",
+          kind: "recompute",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 27,
+          principalId: "ops_aggregate",
+          requestId: "manual-recompute-invalid-alias-shape",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invalidAliasShape.status).toBe(400);
+    expect((await invalidAliasShape.json()) as { message: string }).toMatchObject({
+      message: "aggregateAliases must be an array of strings when provided."
+    });
+
+    const invalidAliasEntry = await handleFetch(
+      new Request("https://example.test/v1/workflows/wf_aggregate_invalid/aggregate-maintenance", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          aggregateAliases: ["open_ticket_count", ""],
+          kind: "recompute",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 27,
+          principalId: "ops_aggregate",
+          requestId: "manual-recompute-invalid-alias-entry",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invalidAliasEntry.status).toBe(400);
+    expect((await invalidAliasEntry.json()) as { message: string }).toMatchObject({
+      message: "aggregateAliases entries must all be non-empty strings."
+    });
 
     expect(response.status).toBe(400);
     expect((await response.json()) as { message: string }).toMatchObject({
@@ -4309,6 +6279,637 @@ describe("cloudtable runtime ingress", () => {
       {} as ExecutionContext
     );
     expect(unauthorizedExecute.status).toBe(403);
+  });
+
+  it("exposes workflow backfill dispositions through preview and execute agent-tool ingress", async () => {
+    const { db, env } = createEnv();
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [],
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "field_changed"
+        },
+        workflowId: "wf_backfill_disposition_tool"
+      },
+      name: "Backfill Disposition Tool",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_backfill_disposition_tool",
+      workflowKey: "backfill-disposition-tool"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_backfill_disposition_tool",
+      workspaceId: "ws_1",
+      principalId: "ops_backfill_tool",
+      policyRevision: 26,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+    insertWorkflowBackfillJob(db, {
+      dependencyAlias: "ticket_rollup",
+      dependencyKind: "aggregate",
+      jobId: "wbf_failed_disposition_tool",
+      lastError: "aggregate worker failed",
+      status: "failed",
+      updatedAt: "2026-06-06T00:13:00.000Z",
+      workflowId: "wf_backfill_disposition_tool"
+    });
+    insertWorkflowBackfillJob(db, {
+      cursor: {
+        lastRecordId: "rec_1"
+      },
+      dependencyAlias: "ticket_sync",
+      dependencyKind: "sync",
+      jobId: "wbf_stale_disposition_tool",
+      processedCount: 2,
+      status: "running",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_backfill_disposition_tool"
+    });
+    insertWorkflowBackfillJob(db, {
+      dependencyAlias: "ticket_sync",
+      dependencyKind: "sync",
+      jobId: "wbf_replacement_disposition_tool",
+      reason: "manual-replacement",
+      status: "queued",
+      updatedAt: "2026-06-06T00:14:00.000Z",
+      workflowId: "wf_backfill_disposition_tool"
+    });
+
+    const dependenciesBefore = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            workflowId: "wf_backfill_disposition_tool"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: "readWorkflowDependencies",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(dependenciesBefore.status).toBe(200);
+    const dependenciesBeforeBody = (await dependenciesBefore.json()) as {
+      output: {
+        dependencies: {
+          summary: {
+            attentionRequiredBackfillJobs: Array<{
+              operatorAction: string;
+              staleRunning: boolean;
+              status: string;
+            }>;
+            failedBackfillJobCount: number;
+            staleRunningBackfillJobCount: number;
+          };
+        };
+      };
+    };
+    expect(dependenciesBeforeBody.output.dependencies.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [
+        expect.objectContaining({
+          operatorAction: "retry_backfill",
+          staleRunning: false,
+          status: "failed"
+        }),
+        expect.objectContaining({
+          operatorAction: "retry_backfill",
+          staleRunning: true,
+          status: "running"
+        })
+      ],
+      failedBackfillJobCount: 2,
+      staleRunningBackfillJobCount: 1
+    });
+
+    const missingReasonPreview = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            disposition: "abandoned",
+            jobId: "wbf_failed_disposition_tool",
+            workflowId: "wf_backfill_disposition_tool"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: "prepareWorkflowBackfillDisposition",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(missingReasonPreview.status).toBe(400);
+    expect((await missingReasonPreview.json()) as { message: string }).toMatchObject({
+      message: "reason is required for this agent tool."
+    });
+
+    const missingSupersedeTargetPreview = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            disposition: "superseded",
+            jobId: "wbf_stale_disposition_tool",
+            reason: "replacement backfill is queued",
+            workflowId: "wf_backfill_disposition_tool"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: "prepareWorkflowBackfillDisposition",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(missingSupersedeTargetPreview.status).toBe(400);
+    expect((await missingSupersedeTargetPreview.json()) as { message: string }).toMatchObject({
+      message: "supersededByJobId is required when superseding a backfill job."
+    });
+
+    const executeOnlyToolPreview = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            disposition: "abandoned",
+            jobId: "wbf_failed_disposition_tool",
+            reason: "workflow definition replaced before retry",
+            workflowId: "wf_backfill_disposition_tool"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: "requestWorkflowBackfillDisposition",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(executeOnlyToolPreview.status).toBe(400);
+    expect((await executeOnlyToolPreview.json()) as { message: string }).toMatchObject({
+      message: "Execution-phase agent tools are not exposed on the preview ingress."
+    });
+
+    const previewOnlyToolExecute = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            disposition: "abandoned",
+            jobId: "wbf_failed_disposition_tool",
+            reason: "workflow definition replaced before retry",
+            workflowId: "wf_backfill_disposition_tool"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: "prepareWorkflowBackfillDisposition",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(previewOnlyToolExecute.status).toBe(400);
+    expect((await previewOnlyToolExecute.json()) as { message: string }).toMatchObject({
+      message: "Only execution-phase agent tools are exposed on the execution ingress."
+    });
+
+    const abandonPreview = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            disposition: "abandoned",
+            jobId: "wbf_failed_disposition_tool",
+            reason: "workflow definition replaced before retry",
+            workflowId: "wf_backfill_disposition_tool"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: "prepareWorkflowBackfillDisposition",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(abandonPreview.status).toBe(200);
+    const abandonPreviewBody = (await abandonPreview.json()) as {
+      output: {
+        kind: string;
+        request: {
+          disposition: string;
+          jobId: string;
+          reason: string;
+          workflowId: string;
+        };
+        successorInvocation: {
+          input: Record<string, unknown>;
+          toolId: string;
+        };
+      };
+      tool: {
+        id: string;
+        phase: string;
+        successorToolId: string | null;
+      };
+    };
+    expect(abandonPreviewBody.tool).toEqual({
+      id: "prepareWorkflowBackfillDisposition",
+      phase: "preview",
+      scope: "workflow",
+      successorToolId: "requestWorkflowBackfillDisposition"
+    });
+    expect(abandonPreviewBody.output).toMatchObject({
+      kind: "workflow-backfill-disposition-draft",
+      request: {
+        disposition: "abandoned",
+        jobId: "wbf_failed_disposition_tool",
+        reason: "workflow definition replaced before retry",
+        workflowId: "wf_backfill_disposition_tool"
+      },
+      successorInvocation: {
+        toolId: "requestWorkflowBackfillDisposition"
+      }
+    });
+
+    const abandonExecute = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: abandonPreviewBody.output.successorInvocation.input,
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: abandonPreviewBody.output.successorInvocation.toolId,
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(abandonExecute.status).toBe(200);
+    expect((await abandonExecute.json()) as {
+      output: {
+        jobId: string;
+        kind: string;
+        operatorReason: string;
+        status: string;
+        supersededByJobId: string | null;
+      };
+      tool: {
+        id: string;
+        phase: string;
+      };
+    }).toMatchObject({
+      output: {
+        jobId: "wbf_failed_disposition_tool",
+        kind: "workflow-backfill-disposition",
+        operatorReason: "workflow definition replaced before retry",
+        status: "abandoned",
+        supersededByJobId: null
+      },
+      tool: {
+        id: "requestWorkflowBackfillDisposition",
+        phase: "execute"
+      }
+    });
+
+    const supersedePreview = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            disposition: "superseded",
+            jobId: "wbf_stale_disposition_tool",
+            reason: "replacement backfill covers the same dependency",
+            supersededByJobId: "wbf_replacement_disposition_tool",
+            workflowId: "wf_backfill_disposition_tool"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: "prepareWorkflowBackfillDisposition",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(supersedePreview.status).toBe(200);
+    const supersedePreviewBody = (await supersedePreview.json()) as {
+      output: {
+        request: {
+          disposition: string;
+          supersededByJobId: string;
+        };
+        successorInvocation: {
+          input: Record<string, unknown>;
+          toolId: string;
+        };
+      };
+    };
+    expect(supersedePreviewBody.output.request).toMatchObject({
+      disposition: "superseded",
+      supersededByJobId: "wbf_replacement_disposition_tool"
+    });
+
+    const supersedeExecute = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: supersedePreviewBody.output.successorInvocation.input,
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: supersedePreviewBody.output.successorInvocation.toolId,
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(supersedeExecute.status).toBe(200);
+    expect((await supersedeExecute.json()) as {
+      output: {
+        jobId: string;
+        kind: string;
+        operatorReason: string;
+        status: string;
+        supersededByJobId: string | null;
+      };
+    }).toMatchObject({
+      output: {
+        jobId: "wbf_stale_disposition_tool",
+        kind: "workflow-backfill-disposition",
+        operatorReason: "replacement backfill covers the same dependency",
+        status: "superseded",
+        supersededByJobId: "wbf_replacement_disposition_tool"
+      }
+    });
+
+    const duplicateAbandonExecute = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: abandonPreviewBody.output.successorInvocation.input,
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: "requestWorkflowBackfillDisposition",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(duplicateAbandonExecute.status).toBe(409);
+    expect((await duplicateAbandonExecute.json()) as {
+      output: {
+        kind: string;
+        reason: string;
+        status: string;
+      };
+    }).toMatchObject({
+      output: {
+        kind: "workflow-backfill-disposition",
+        reason: "backfill_job_terminal",
+        status: "rejected"
+      }
+    });
+
+    const dependenciesAfter = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: {
+            workflowId: "wf_backfill_disposition_tool"
+          },
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 26,
+          principalId: "ops_backfill_tool",
+          toolId: "readWorkflowDependencies",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(dependenciesAfter.status).toBe(200);
+    const dependenciesAfterBody = (await dependenciesAfter.json()) as {
+      output: {
+        dependencies: {
+          summary: {
+            abandonedBackfillJobCount: number;
+            attentionRequiredBackfillJobs: unknown[];
+            failedBackfillJobCount: number;
+            intentionallyClosedBackfillJobs: Array<{
+              operatorAction: string;
+              operatorActorPrincipalId: string;
+              operatorReason: string;
+              status: string;
+              supersededByJobId: string | null;
+            }>;
+            staleRunningBackfillJobCount: number;
+            supersededBackfillJobCount: number;
+          };
+          suggestedMaintenanceRequests: unknown[];
+        };
+      };
+    };
+    expect(dependenciesAfterBody.output.dependencies.summary).toMatchObject({
+      abandonedBackfillJobCount: 1,
+      attentionRequiredBackfillJobs: [],
+      failedBackfillJobCount: 0,
+      intentionallyClosedBackfillJobs: expect.arrayContaining([
+        expect.objectContaining({
+          operatorAction: "abandoned_backfill",
+          operatorActorPrincipalId: "ops_backfill_tool",
+          operatorReason: "workflow definition replaced before retry",
+          status: "abandoned",
+          supersededByJobId: null
+        }),
+        expect.objectContaining({
+          operatorAction: "superseded_backfill",
+          operatorActorPrincipalId: "ops_backfill_tool",
+          operatorReason: "replacement backfill covers the same dependency",
+          status: "superseded",
+          supersededByJobId: "wbf_replacement_disposition_tool"
+        })
+      ]),
+      staleRunningBackfillJobCount: 0,
+      supersededBackfillJobCount: 1
+    });
+    expect(dependenciesAfterBody.output.dependencies.suggestedMaintenanceRequests).toEqual([]);
+  });
+
+  it("rejects malformed workflow maintenance alias arrays on agent-tool ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertWorkflow(db, {
+      definition: {
+        actions: [],
+        conditions: [],
+        principal: {
+          permissionScopeHash: "scope:wf:maintenance-alias-tool",
+          permissionsVersion: 41,
+          principalId: "wf_maintenance_alias_tool_service",
+          schemaEpoch: 0
+        },
+        trigger: {
+          match: {
+            tableId: "tbl_1"
+          },
+          operatorId: "manual"
+        },
+        workflowId: "wf_maintenance_alias_tool"
+      },
+      name: "Maintenance Alias Tool",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_maintenance_alias_tool",
+      workflowKey: "maintenance-alias-tool"
+    });
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_maintenance_alias_tool",
+      workspaceId: "ws_1",
+      principalId: "ops_maintenance_alias_tool",
+      policyRevision: 41,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+
+    const cases: Array<{
+      aliasKey: "aggregateAliases" | "lookupAliases" | "syncAliases";
+      aliases: unknown;
+      endpoint: "preview" | "execute";
+      message: string;
+      toolId: string;
+    }> = [
+      {
+        aliasKey: "aggregateAliases",
+        aliases: "total",
+        endpoint: "preview",
+        message: "aggregateAliases must be an array for this agent tool.",
+        toolId: "prepareWorkflowAggregateMaintenance"
+      },
+      {
+        aliasKey: "aggregateAliases",
+        aliases: ["total", ""],
+        endpoint: "execute",
+        message: "aggregateAliases[1] is required for this agent tool.",
+        toolId: "requestWorkflowAggregateMaintenance"
+      },
+      {
+        aliasKey: "lookupAliases",
+        aliases: "lookup_account_name",
+        endpoint: "preview",
+        message: "lookupAliases must be an array for this agent tool.",
+        toolId: "prepareWorkflowLookupMaintenance"
+      },
+      {
+        aliasKey: "lookupAliases",
+        aliases: ["lookup_account_name", 42],
+        endpoint: "execute",
+        message: "lookupAliases[1] is required for this agent tool.",
+        toolId: "requestWorkflowLookupMaintenance"
+      },
+      {
+        aliasKey: "syncAliases",
+        aliases: "sync_status",
+        endpoint: "preview",
+        message: "syncAliases must be an array for this agent tool.",
+        toolId: "prepareWorkflowSyncMaintenance"
+      },
+      {
+        aliasKey: "syncAliases",
+        aliases: ["sync_status", null],
+        endpoint: "execute",
+        message: "syncAliases[1] is required for this agent tool.",
+        toolId: "requestWorkflowSyncMaintenance"
+      }
+    ];
+
+    for (const testCase of cases) {
+      const response = await handleFetch(
+        new Request(`https://example.test/v1/agent-tools/${testCase.endpoint}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            input: {
+              [testCase.aliasKey]: testCase.aliases,
+              kind: "recompute",
+              workflowId: "wf_maintenance_alias_tool"
+            },
+            permissionScopeHash: "scope:table:tbl_1",
+            policyRevision: 41,
+            principalId: "ops_maintenance_alias_tool",
+            toolId: testCase.toolId,
+            workspaceId: "ws_1"
+          })
+        }),
+        env,
+        {} as ExecutionContext
+      );
+
+      expect(response.status).toBe(400);
+      expect((await response.json()) as { message: string }).toMatchObject({
+        message: testCase.message
+      });
+    }
   });
 
   it("returns rejected command results for invalid field references on set-cell routes", async () => {
@@ -9848,11 +12449,180 @@ describe("cloudtable runtime ingress", () => {
     });
   });
 
+  it("lists current-user tenants and admin-only workspace memberships", async () => {
+    const { env } = createEnv();
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_admin_identity",
+      roleKey: "workspace.admin",
+      userId: "user_admin_identity"
+    });
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_member_identity",
+      roleKey: "workspace.member",
+      userId: "user_member_identity"
+    });
+
+    const adminCookie = await createAuthenticatedCookie(env, "user_admin_identity", {
+      activeWorkspaceId: "ws_1"
+    });
+    const tenantResponse = await handleFetch(
+      new Request("https://example.test/v1/tenants", {
+        headers: {
+          cookie: adminCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(tenantResponse.status).toBe(200);
+    expect(
+      (await tenantResponse.json()) as {
+        tenants: Array<{ admin: boolean; workspace: { name: string; slug: string } }>;
+      }
+    ).toMatchObject({
+      tenants: [
+        {
+          admin: true,
+          workspace: {
+            name: "Workspace 1",
+            slug: "workspace-1"
+          }
+        }
+      ]
+    });
+
+    const listResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/memberships", {
+        headers: {
+          cookie: adminCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(listResponse.status).toBe(200);
+    expect(
+      (await listResponse.json()) as {
+        memberships: Array<{ principalId: string; workspaceRoleKey: string }>;
+      }
+    ).toMatchObject({
+      memberships: expect.arrayContaining([
+        expect.objectContaining({
+          principalId: "usr_admin_identity",
+          workspaceRoleKey: "workspace.admin"
+        }),
+        expect.objectContaining({
+          principalId: "usr_member_identity",
+          workspaceRoleKey: "workspace.member"
+        })
+      ])
+    });
+
+    const memberCookie = await createAuthenticatedCookie(env, "user_member_identity");
+    const forbiddenListResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/memberships", {
+        headers: {
+          cookie: memberCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(forbiddenListResponse.status).toBe(403);
+  });
+
+  it("requires workspace admins, valid roles, and no duplicate pending invitations", async () => {
+    const { env } = createEnv();
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_member_inviter",
+      roleKey: "workspace.member",
+      userId: "user_member_inviter"
+    });
+    const memberCookie = await createAuthenticatedCookie(env, "user_member_inviter");
+    const memberInviteResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: memberCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(memberInviteResponse.status).toBe(403);
+
+    await provisionWorkspaceMembershipIdentity(env, {
+      principalId: "usr_admin_inviter",
+      roleKey: "workspace.admin",
+      userId: "user_admin_inviter"
+    });
+    const adminCookie = await createAuthenticatedCookie(env, "user_admin_inviter");
+    const invalidRoleResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable",
+          roleKey: "workspace.owner"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invalidRoleResponse.status).toBe(400);
+
+    const firstInviteResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(firstInviteResponse.status).toBe(201);
+
+    const duplicateInviteResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: adminCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "INVITEE@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(duplicateInviteResponse.status).toBe(409);
+  });
+
   it("issues invitations for an authenticated member and accepts them through Google callback", async () => {
     const { db, env } = createEnv();
 
     await provisionWorkspaceMembershipIdentity(env, {
       principalId: "usr_inviter",
+      roleKey: "workspace.admin",
       userId: "user_inviter"
     });
     const inviterCookie = await createAuthenticatedCookie(env, "user_inviter");
@@ -10013,6 +12783,7 @@ describe("cloudtable runtime ingress", () => {
 
     await provisionWorkspaceMembershipIdentity(env, {
       principalId: "usr_inviter",
+      roleKey: "workspace.admin",
       userId: "user_inviter"
     });
     const inviterCookie = await createAuthenticatedCookie(env, "user_inviter");
@@ -10432,6 +13203,7 @@ describe("cloudtable runtime ingress", () => {
 
     await provisionWorkspaceMembershipIdentity(env, {
       principalId: "usr_inviter",
+      roleKey: "workspace.admin",
       userId: "user_inviter"
     });
     const inviterCookie = await createAuthenticatedCookie(env, "user_inviter");
@@ -10834,6 +13606,159 @@ describe("cloudtable runtime ingress", () => {
     });
   });
 
+  it("reports auth runtime readiness without exposing secret values", async () => {
+    const { env } = createEnv();
+    delete env.AUTH_ALLOWED_REDIRECT_ORIGINS;
+    env.AUTH_SESSION_TTL_SECONDS = "invalid";
+
+    const response = await handleFetch(
+      new Request("https://example.test/readyz"),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(503);
+    expect((await response.json()) as Record<string, unknown>).toMatchObject({
+      auth: {
+        invalid: ["AUTH_SESSION_TTL_SECONDS"],
+        missing: ["AUTH_ALLOWED_REDIRECT_ORIGINS"],
+        ok: false
+      },
+      ok: false
+    });
+  });
+
+  it("rejects unsafe absolute Google OAuth redirect targets in production config", async () => {
+    const { env } = createEnv();
+
+    const response = await handleFetch(
+      new Request(
+        "https://example.test/v1/auth/google/login?redirectTo=https%3A%2F%2Fevil.example.test%2Fcloudtable"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toContain("redirectTo is required");
+  });
+
+  it("allows configured absolute and relative Google OAuth redirect targets", async () => {
+    const { env } = createEnv();
+
+    const absoluteResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/auth/google/login?redirectTo=https%3A%2F%2Fapp.example.test%2Fcloudtable"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(absoluteResponse.status).toBe(302);
+    expect(new URL(absoluteResponse.headers.get("location") ?? "").searchParams.get("state")).toBeTruthy();
+
+    const relativeResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/google/login?redirectTo=%2Fcloudtable%3Ftab%3Dhome"),
+      env,
+      {} as ExecutionContext
+    );
+    expect(relativeResponse.status).toBe(302);
+    expect(new URL(relativeResponse.headers.get("location") ?? "").searchParams.get("state")).toBeTruthy();
+  });
+
+  it("bootstraps a first-time Google user into a new tenant only through explicit onboarding", async () => {
+    const { env } = createEnv();
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "founder@example.com",
+            name: "Founder",
+            sub: "google-oauth2|founder"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const rejectedLoginResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/auth/google/login?redirectTo=https%3A%2F%2Fapp.example.test%2Fcloudtable"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    const rejectedState = new URL(rejectedLoginResponse.headers.get("location") ?? "").searchParams.get("state");
+    const rejectedCallbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(rejectedState ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(rejectedCallbackResponse.status).toBe(403);
+
+    const loginResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/auth/google/login?redirectTo=https%3A%2F%2Fapp.example.test%2Fcloudtable&onboarding=tenant_bootstrap&organizationName=Founder%20Org&workspaceName=Founder%20Workspace"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(loginResponse.status).toBe(302);
+    const state = new URL(loginResponse.headers.get("location") ?? "").searchParams.get("state");
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(302);
+    const founderCookie = readCookieHeaderFromSetCookie(callbackResponse.headers.get("set-cookie") ?? "");
+
+    const tenantResponse = await handleFetch(
+      new Request("https://example.test/v1/tenants", {
+        headers: {
+          cookie: founderCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(tenantResponse.status).toBe(200);
+    expect(
+      (await tenantResponse.json()) as {
+        tenants: Array<{
+          admin: boolean;
+          organization: { name: string };
+          workspace: { name: string };
+        }>;
+      }
+    ).toMatchObject({
+      tenants: [
+        {
+          admin: true,
+          organization: { name: "Founder Org" },
+          workspace: { name: "Founder Workspace" }
+        }
+      ]
+    });
+  });
+
   it("links a Google identity by email, establishes a session, and hydrates workspace ingress without principalId", async () => {
     const { db, env } = createEnv();
 
@@ -10892,6 +13817,9 @@ describe("cloudtable runtime ingress", () => {
     expect(callbackResponse.headers.get("location")).toBe("https://app.example.test/cloudtable");
     const sessionCookie = callbackResponse.headers.get("set-cookie");
     expect(sessionCookie).toContain("cloudtable_session=");
+    expect(sessionCookie).toContain("HttpOnly");
+    expect(sessionCookie).toContain("SameSite=Lax");
+    expect(sessionCookie).toContain("Secure");
 
     const cookieHeader = readCookieHeaderFromSetCookie(sessionCookie ?? "");
     const sessionResponse = await handleFetch(
@@ -11003,6 +13931,174 @@ describe("cloudtable runtime ingress", () => {
       command: { actor: { principalId: string } };
     };
     expect(commandBody.command.actor.principalId).toBe("usr_google_member");
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_google_accounts",
+        "ws_1",
+        "app_1",
+        "google-accounts",
+        "Google Accounts",
+        0,
+        1,
+        "2026-06-10T00:00:00.000Z",
+        "2026-06-10T00:00:00.000Z",
+        null,
+        null
+      );
+    insertField(db, {
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_google_accounts"
+      },
+      fieldId: "fld_google_related_account",
+      fieldKey: "google_related_account",
+      fieldType: "relation.record",
+      label: "Google Related Account",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_google_source_status",
+      fieldKey: "google_source_status",
+      fieldType: "text.single_line",
+      label: "Google Source Status",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_google_target_status",
+      fieldKey: "google_target_status",
+      fieldType: "text.single_line",
+      label: "Google Target Status",
+      tableId: "tbl_google_accounts"
+    });
+    for (const field of [
+      { fieldId: "fld_google_related_account", fieldType: "relation.record" },
+      { fieldId: "fld_google_source_status", fieldType: "text.single_line" },
+      { fieldId: "fld_google_target_status", fieldType: "text.single_line" }
+    ]) {
+      setFieldPrincipalPermission(db, {
+        fieldId: field.fieldId,
+        permission: {
+          agent: true,
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        principalId: "usr_google_member"
+      });
+    }
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_google_workflow_recipe",
+      workspaceId: "ws_1",
+      principalId: "usr_google_member",
+      policyRevision: 63,
+      schemaEpoch: 0,
+      scopeHash: "scope:table:tbl_1",
+      commandTypes: ["workflow.create", "workflow.publish"],
+      fields: {
+        fld_google_related_account: {
+          agent: true,
+          fieldId: "fld_google_related_account",
+          fieldType: "relation.record",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_google_source_status: {
+          agent: true,
+          fieldId: "fld_google_source_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        },
+        fld_google_target_status: {
+          agent: true,
+          fieldId: "fld_google_target_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      }
+    });
+
+    const recipePreviewResponse = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes/preview", {
+        method: "POST",
+        headers: {
+          cookie: cookieHeader,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          businessRule: "Sync Google-authored status changes.",
+          name: "Google session status sync",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 63,
+          recipeType: "direct_sync",
+          relatedSourceFieldId: "fld_google_related_account",
+          syncSourceFieldId: "fld_google_source_status",
+          syncTargetFieldId: "fld_google_target_status",
+          workflowId: "wf_google_session_recipe_preview",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(recipePreviewResponse.status).toBe(200);
+    const recipePreviewBody = (await recipePreviewResponse.json()) as {
+      output: { command: { actor: { principalId: string } } };
+    };
+    expect(recipePreviewBody.output.command.actor.principalId).toBe("usr_google_member");
+
+    const recipeCreateResponse = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes", {
+        method: "POST",
+        headers: {
+          cookie: cookieHeader,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          businessRule: "Sync Google-authored status changes.",
+          commandId: "cmd_google_session_recipe_create",
+          idempotencyKey: "idem_google_session_recipe_create",
+          name: "Google session status sync",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 63,
+          publish: {
+            commandId: "cmd_google_session_recipe_publish",
+            idempotencyKey: "idem_google_session_recipe_publish"
+          },
+          recipeType: "direct_sync",
+          relatedSourceFieldId: "fld_google_related_account",
+          syncSourceFieldId: "fld_google_source_status",
+          syncTargetFieldId: "fld_google_target_status",
+          workflowId: "wf_google_session_recipe_create",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    const recipeCreateBody = (await recipeCreateResponse.json()) as Record<string, unknown>;
+    expect(recipeCreateResponse.status, JSON.stringify(recipeCreateBody)).toBe(200);
+    expect(recipeCreateBody).toMatchObject({
+      publish: {
+        result: {
+          accepted: true
+        }
+      },
+      recipeType: "direct_sync",
+      status: "published",
+      workflowId: "wf_google_session_recipe_create"
+    });
   });
 
   it("rejects Google callback linkage when the external identity belongs to a different canonical user", async () => {
@@ -11334,6 +14430,92 @@ describe("cloudtable runtime ingress", () => {
     expect(response.status).toBe(403);
     expect((await response.json()) as { error: string }).toMatchObject({
       error: "forbidden"
+    });
+  });
+
+  it("returns workflow recipe authoring metadata through the worker read ingress", async () => {
+    const { db, env } = createEnv();
+
+    insertPermissionSnapshot(db, {
+      snapshotId: "snap_workflow_recipe_catalog_read",
+      workspaceId: "ws_1",
+      principalId: "ops_workflow_recipe_catalog",
+      policyRevision: 44,
+      schemaEpoch: 0,
+      scopeHash: "scope:workspace",
+      commandTypes: ["workflow.publish"],
+      fields: {}
+    });
+
+    const response = await handleFetch(
+      new Request(
+        "https://example.test/v1/workspaces/ws_1/workflow-recipes?principalId=ops_workflow_recipe_catalog&permissionScopeHash=scope:workspace&policyRevision=44"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      catalog: {
+        recipeTypes: string[];
+        recipes: Record<string, Record<string, unknown>>;
+      };
+      permissionScope: {
+        policyRevision: number;
+        principalId: string;
+        scopeHash: string;
+        workspaceId: string;
+      };
+      workspaceId: string;
+    };
+
+    expect(body.workspaceId).toBe("ws_1");
+    expect(body.permissionScope).toEqual({
+      policyRevision: 44,
+      principalId: "ops_workflow_recipe_catalog",
+      scopeHash: "scope:workspace",
+      workspaceId: "ws_1"
+    });
+    expect(body.catalog.recipeTypes).toEqual(["direct_sync", "grouped_rollup"]);
+    expect(body.catalog.recipes.direct_sync).toMatchObject({
+      fixedTriggerId: "field_changed",
+      maintenance: {
+        kinds: ["backfill", "recompute"],
+        queuedMessage: "Sync maintenance is queued after publish and runs asynchronously.",
+        route: {
+          method: "POST",
+          pathTemplate: "/v1/workflows/{workflowId}/sync-maintenance"
+        }
+      },
+      matchStrategies: ["single_relation", "value_match"],
+      previewRoute: {
+        method: "POST",
+        pathTemplate: "/v1/tables/{tableId}/workflow-recipes/preview"
+      },
+      publishRoute: {
+        method: "POST",
+        pathTemplate: "/v1/workflows/{workflowId}/publish"
+      },
+      recipeType: "direct_sync",
+      statusValues: ["draft", "published", "paused"]
+    });
+    expect(body.catalog.recipes.grouped_rollup).toMatchObject({
+      aggregateOperations: [
+        expect.objectContaining({ id: "count_records" }),
+        expect.objectContaining({ id: "sum_numbers" }),
+        expect.objectContaining({ id: "max_number" }),
+        expect.objectContaining({ id: "min_number" }),
+        expect.objectContaining({ id: "average_numbers" })
+      ],
+      fixedTriggerId: "field_changed",
+      maintenance: {
+        route: {
+          method: "POST",
+          pathTemplate: "/v1/workflows/{workflowId}/aggregate-maintenance"
+        }
+      },
+      recipeType: "grouped_rollup"
     });
   });
 
@@ -15822,25 +19004,20 @@ describe("cloudtable runtime ingress", () => {
     });
 
     const previewResponse = await handleFetch(
-      new Request("https://example.test/v1/agent-tools/preview", {
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes/preview", {
         method: "POST",
         headers: {
           "content-type": "application/json"
         },
         body: JSON.stringify({
-          input: {
-            actionIds: ["set_cell"],
-            businessRule: "Roll ticket amount into account revenue.",
-            name: "Ticket revenue rollup",
-            rollupFieldIds: ["fld_account_revenue_rollup"],
-            tableId: "tbl_1",
-            triggerId: "field_changed",
-            workflowId: "wf_ticket_revenue_rollup_execute"
-          },
+          businessRule: "Roll ticket amount into account revenue.",
           permissionScopeHash: "scope:table:tbl_1",
           policyRevision: 52,
           principalId: "agt_rollup_workflow_execute",
-          toolId: "proposeWorkflow",
+          name: "Ticket revenue rollup",
+          recipeType: "grouped_rollup",
+          rollupFieldIds: ["fld_account_revenue_rollup"],
+          workflowId: "wf_ticket_revenue_rollup_execute",
           workspaceId: "ws_1"
         })
       }),
@@ -15923,56 +19100,48 @@ describe("cloudtable runtime ingress", () => {
       }
     });
 
-    const executeResponse = await handleFetch(
-      new Request("https://example.test/v1/agent-tools/execute", {
+    const createResponse = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes", {
         method: "POST",
         headers: {
           "content-type": "application/json"
         },
         body: JSON.stringify({
-          input: {
-            command: previewBody.output.command
-          },
+          businessRule: "Roll ticket amount into account revenue.",
+          commandId: "cmd_create_rollup_workflow_recipe",
+          idempotencyKey: "idem_create_rollup_workflow_recipe",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 52,
           principalId: "agt_rollup_workflow_execute",
-          toolId: "executeCommand",
+          name: "Ticket revenue rollup",
+          publish: true,
+          publishCommandId: "cmd_publish_rollup_workflow_recipe",
+          publishIdempotencyKey: "idem_publish_rollup_workflow_recipe",
+          recipeType: "grouped_rollup",
+          rollupFieldIds: ["fld_account_revenue_rollup"],
+          workflowId: "wf_ticket_revenue_rollup_execute",
           workspaceId: "ws_1"
         })
       }),
       env,
       {} as ExecutionContext
     );
-    expect(executeResponse.status).toBe(200);
-    expect((await executeResponse.json()) as { output: { result: { accepted: boolean } } }).toMatchObject({
-      output: {
+    expect(createResponse.status).toBe(200);
+    expect((await createResponse.json()) as Record<string, unknown>).toMatchObject({
+      create: {
         result: {
           accepted: true
         }
-      }
+      },
+      publish: {
+        result: {
+          accepted: true
+        }
+      },
+      recipeType: "grouped_rollup",
+      status: "published",
+      workflowId: "wf_ticket_revenue_rollup_execute"
     });
-
-    const publishResponse = await handleFetch(
-      new Request("https://example.test/v1/workflows/wf_ticket_revenue_rollup_execute/publish", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify(
-          createRouteBody({
-            actor: {
-              mode: "user",
-              principalId: "agt_rollup_workflow_execute"
-            },
-            commandId: "cmd_publish_rollup_workflow_execute",
-            idempotencyKey: "idem_publish_rollup_workflow_execute",
-            permissionScopeHash: "scope:table:tbl_1",
-            permissionsVersion: 52
-          })
-        )
-      }),
-      env,
-      {} as ExecutionContext
-    );
-    expect(publishResponse.status).toBe(200);
 
     await handleQueueBatch(
       createBatch([eventFanoutQueue.sent.at(-1)!]).batch as never,
@@ -15995,6 +19164,83 @@ describe("cloudtable runtime ingress", () => {
         workflowId: "wf_ticket_revenue_rollup_execute"
       },
       workspaceId: "ws_1"
+    });
+
+    const dependencyResponse = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_ticket_revenue_rollup_execute/dependencies?workspaceId=ws_1&principalId=agt_rollup_workflow_execute&permissionScopeHash=scope:table:tbl_1&policyRevision=52"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(dependencyResponse.status).toBe(200);
+    const dependencyBody = (await dependencyResponse.json()) as {
+      backfillJobs: Array<{
+        dependencyAlias: string;
+        dependencyKind: string;
+        reason: string;
+        status: string;
+      }>;
+      dependencies: Array<{
+        alias: string;
+        dependencyFieldIds: string[];
+        kind: string;
+        sourceTableId: string | null;
+        status: string;
+        targetTableId: string | null;
+      }>;
+      summary: {
+        attentionRequiredBackfillJobs: unknown[];
+        backfillJobsByStatus: Record<string, number>;
+        completedBackfillJobCount: number;
+        dependenciesByKind: Record<string, number>;
+        dependenciesByStatus: Record<string, number>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+        pendingBackfillJobCount: number;
+        resumableBackfillJobCount: number;
+        runningBackfillJobCount: number;
+        totalBackfillProcessedCount: number;
+        totalBackfillJobCount: number;
+      };
+    };
+    expect(dependencyBody.dependencies).toContainEqual(
+      expect.objectContaining({
+        alias: "fld_account_revenue_rollup",
+        dependencyFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+        kind: "aggregate",
+        sourceTableId: "tbl_1",
+        status: "published",
+        targetTableId: "tbl_accounts"
+      })
+    );
+    expect(dependencyBody.backfillJobs).toContainEqual(
+      expect.objectContaining({
+        dependencyAlias: "fld_account_revenue_rollup",
+        dependencyKind: "aggregate",
+        reason: "workflow_published",
+        status: "queued"
+      })
+    );
+    expect(dependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [],
+      backfillJobsByStatus: {
+        queued: 1
+      },
+      completedBackfillJobCount: 0,
+      dependenciesByKind: expect.objectContaining({
+        aggregate: 1
+      }),
+      dependenciesByStatus: expect.objectContaining({
+        published: expect.any(Number)
+      }),
+      failedBackfillJobCount: 0,
+      maintenanceState: "active",
+      pendingBackfillJobCount: 1,
+      resumableBackfillJobCount: 0,
+      runningBackfillJobCount: 0,
+      totalBackfillProcessedCount: 0,
+      totalBackfillJobCount: 1
     });
 
     const definitionResponse = await handleFetch(
@@ -16569,27 +19815,22 @@ describe("cloudtable runtime ingress", () => {
     });
 
     const previewResponse = await handleFetch(
-      new Request("https://example.test/v1/agent-tools/preview", {
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes/preview", {
         method: "POST",
         headers: {
           "content-type": "application/json"
         },
         body: JSON.stringify({
-          input: {
-            actionIds: ["sync_related_field"],
-            businessRule: "Sync ticket status into the linked account status.",
-            name: "Ticket status sync",
-            relatedSourceFieldId: "fld_ticket_account",
-            syncSourceFieldId: "fld_ticket_status",
-            syncTargetFieldId: "fld_account_status",
-            tableId: "tbl_1",
-            triggerId: "field_changed",
-            workflowId: "wf_ticket_status_sync_execute"
-          },
+          businessRule: "Sync ticket status into the linked account status.",
           permissionScopeHash: "scope:table:tbl_1",
           policyRevision: 53,
           principalId: "agt_sync_workflow_execute",
-          toolId: "proposeWorkflow",
+          name: "Ticket status sync",
+          recipeType: "direct_sync",
+          relatedSourceFieldId: "fld_ticket_account",
+          syncSourceFieldId: "fld_ticket_status",
+          syncTargetFieldId: "fld_account_status",
+          workflowId: "wf_ticket_status_sync_execute",
           workspaceId: "ws_1"
         })
       }),
@@ -16648,56 +19889,42 @@ describe("cloudtable runtime ingress", () => {
       }
     });
 
-    const executeResponse = await handleFetch(
-      new Request("https://example.test/v1/agent-tools/execute", {
+    const createResponse = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes", {
         method: "POST",
         headers: {
           "content-type": "application/json"
         },
         body: JSON.stringify({
-          input: {
-            command: previewBody.output.command
-          },
+          businessRule: "Sync ticket status into the linked account status.",
+          commandId: "cmd_create_sync_workflow_recipe",
+          idempotencyKey: "idem_create_sync_workflow_recipe",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 53,
           principalId: "agt_sync_workflow_execute",
-          toolId: "executeCommand",
+          name: "Ticket status sync",
+          recipeType: "direct_sync",
+          relatedSourceFieldId: "fld_ticket_account",
+          syncSourceFieldId: "fld_ticket_status",
+          syncTargetFieldId: "fld_account_status",
+          workflowId: "wf_ticket_status_sync_execute",
           workspaceId: "ws_1"
         })
       }),
       env,
       {} as ExecutionContext
     );
-    expect(executeResponse.status).toBe(200);
-    expect((await executeResponse.json()) as { output: { result: { accepted: boolean } } }).toMatchObject({
-      output: {
+    expect(createResponse.status).toBe(200);
+    expect((await createResponse.json()) as Record<string, unknown>).toMatchObject({
+      create: {
         result: {
           accepted: true
         }
-      }
+      },
+      recipeType: "direct_sync",
+      status: "draft",
+      workflowId: "wf_ticket_status_sync_execute"
     });
-
-    const publishResponse = await handleFetch(
-      new Request("https://example.test/v1/workflows/wf_ticket_status_sync_execute/publish", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify(
-          createRouteBody({
-            actor: {
-              mode: "user",
-              principalId: "agt_sync_workflow_execute"
-            },
-            commandId: "cmd_publish_sync_workflow_execute",
-            idempotencyKey: "idem_publish_sync_workflow_execute",
-            permissionScopeHash: "scope:table:tbl_1",
-            permissionsVersion: 53
-          })
-        )
-      }),
-      env,
-      {} as ExecutionContext
-    );
-    expect(publishResponse.status).toBe(200);
 
     const definitionResponse = await handleFetch(
       new Request(

@@ -118,6 +118,7 @@ function createRouteBody(overrides: Partial<CommandEnvelope> = {}): Partial<Comm
 }
 
 function createEnv(): {
+  aggregateQueue: FakeQueue;
   db: SqliteD1Database;
   env: CloudTableEnv;
   eventFanoutQueue: FakeQueue;
@@ -169,6 +170,7 @@ function createEnv(): {
   };
 
   return {
+    aggregateQueue,
     db,
     env,
     eventFanoutQueue,
@@ -471,6 +473,225 @@ function insertView(
       }),
       "2026-06-06T00:00:00.000Z",
       "usr_owner",
+      null
+    );
+}
+
+function insertLookupMaintenanceSchema(db: SqliteD1Database): void {
+  db.inner
+    .prepare(
+      `INSERT INTO tables (
+         id,
+         workspace_id,
+         app_id,
+         slug,
+         name,
+         schema_epoch,
+         current_schema_version,
+         created_at,
+         updated_at,
+         archived_at,
+         last_event_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      "tbl_accounts",
+      "ws_1",
+      "app_1",
+      "accounts",
+      "Accounts",
+      0,
+      1,
+      "2026-06-06T00:00:00.000Z",
+      "2026-06-06T00:00:00.000Z",
+      null,
+      null
+    );
+
+  insertField(db, {
+    config: {
+      allowMultiple: false,
+      targetTableId: "tbl_accounts"
+    },
+    fieldId: "fld_account",
+    fieldKey: "account",
+    fieldType: "relation.record",
+    label: "Account",
+    tableId: "tbl_1"
+  });
+  insertField(db, {
+    config: {
+      lookup: {
+        sourceFieldId: "fld_account",
+        targetFieldId: "fld_account_name"
+      }
+    },
+    fieldId: "fld_ticket_account_name",
+    fieldKey: "ticket_account_name",
+    fieldType: "computed.readonly",
+    label: "Ticket Account Name",
+    tableId: "tbl_1"
+  });
+  insertField(db, {
+    fieldId: "fld_account_name",
+    fieldKey: "account_name",
+    fieldType: "text.single_line",
+    label: "Account Name",
+    tableId: "tbl_accounts"
+  });
+}
+
+function lookupMaintenanceWorkflowDefinition(workflowId: string): Record<string, unknown> {
+  return {
+    actions: [],
+    conditions: [],
+    metadata: {
+      lookupDefinitions: [
+        {
+          alias: "ticket_account_name",
+          dependencyFieldIds: ["fld_account"],
+          lookupSource: {
+            kind: "related_record",
+            resolverAlias: "account_lookup"
+          },
+          sourceRelationPath: "relatedTables.account_lookup",
+          targetFieldId: "fld_ticket_account_name",
+          valueFieldId: "fld_account_name"
+        }
+      ],
+      relatedTableResolvers: [
+        {
+          alias: "account_lookup",
+          sourceFieldId: "fld_account",
+          strategy: "single_relation",
+          targetTableId: "tbl_accounts"
+        }
+      ],
+      status: "published",
+      tableId: "tbl_1"
+    },
+    principal: {
+      policyRevision: 33,
+      principalId: "wf_lookup_recovery_service",
+      schemaEpoch: 0,
+      scopeHash: "scope:wf:lookup-recovery"
+    },
+    trigger: {
+      match: {
+        tableId: "tbl_1"
+      },
+      operatorId: "field_changed"
+    },
+    workflowId
+  };
+}
+
+function insertWorkflow(
+  db: SqliteD1Database,
+  input: {
+    definition: Record<string, unknown>;
+    name: string;
+    publishedAt: string | null;
+    workflowId: string;
+    workflowKey: string;
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO workflows (
+        id,
+        workspace_id,
+        workflow_key,
+        name,
+        current_version,
+        created_at,
+        updated_at,
+        archived_at,
+        last_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.workflowId,
+      "ws_1",
+      input.workflowKey,
+      input.name,
+      1,
+      "2026-06-06T00:00:00.000Z",
+      "2026-06-06T00:00:00.000Z",
+      null,
+      null
+    );
+  db.inner
+    .prepare(
+      `INSERT INTO workflow_versions (
+        id,
+        workspace_id,
+        workflow_id,
+        version,
+        definition_json,
+        published_at,
+        last_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      `${input.workflowId}:v1`,
+      "ws_1",
+      input.workflowId,
+      1,
+      JSON.stringify(input.definition),
+      input.publishedAt,
+      null
+    );
+}
+
+function insertLookupBackfillJob(
+  db: SqliteD1Database,
+  input: {
+    jobId: string;
+    lastError?: string | null;
+    reason: string;
+    status: string;
+    updatedAt?: string;
+    workflowId: string;
+  }
+): void {
+  db.inner
+    .prepare(
+      `INSERT INTO workflow_backfill_jobs (
+        id,
+        workspace_id,
+        workflow_id,
+        workflow_version_id,
+        dependency_kind,
+        dependency_alias,
+        reason,
+        status,
+        chunk_size,
+        cursor_json,
+        processed_count,
+        attempt_count,
+        last_error,
+        created_at,
+        updated_at,
+        completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      input.jobId,
+      "ws_1",
+      input.workflowId,
+      `${input.workflowId}:v1`,
+      "lookup",
+      "ticket_account_name",
+      input.reason,
+      input.status,
+      250,
+      null,
+      0,
+      1,
+      input.lastError ?? null,
+      "2026-06-06T00:00:00.000Z",
+      input.updatedAt ?? "2026-06-06T00:00:00.000Z",
       null
     );
 }
@@ -2674,6 +2895,215 @@ describe("cloudtable runtime smoke", () => {
         record_id: "rec_1"
       }
     ]);
+  });
+
+  it("surfaces and executes lookup maintenance recovery suggestions through the smoke runtime path", async () => {
+    const { aggregateQueue, db, env } = createEnv();
+    insertLookupMaintenanceSchema(db);
+    insertWorkflow(db, {
+      definition: lookupMaintenanceWorkflowDefinition("wf_lookup_recovery"),
+      name: "Lookup Recovery",
+      publishedAt: "2026-06-06T00:00:00.000Z",
+      workflowId: "wf_lookup_recovery",
+      workflowKey: "lookup-recovery"
+    });
+    insertLookupBackfillJob(db, {
+      jobId: "wbf:ws_1:wf_lookup_recovery:v1:lookup:ticket_account_name:manual",
+      lastError: "transient lookup backfill failure",
+      reason: "manual",
+      status: "failed",
+      workflowId: "wf_lookup_recovery"
+    });
+    insertPermissionSnapshot(db, {
+      commandTypes: ["workflow.publish"],
+      fields: {},
+      policyRevision: 33,
+      principalId: "ops_lookup",
+      scopeHash: "scope:table:tbl_1",
+      snapshotId: "snap_lookup_recovery_ops"
+    });
+
+    const dependencies = await handleFetch(
+      new Request(
+        "https://example.test/v1/workflows/wf_lookup_recovery/dependencies?workspaceId=ws_1&principalId=ops_lookup&permissionScopeHash=scope:table:tbl_1&policyRevision=33"
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(dependencies.status).toBe(200);
+    const dependencyBody = (await dependencies.json()) as {
+      suggestedMaintenanceRequests: Array<{
+        input: {
+          kind: string;
+          lookupAliases: string[];
+          reason: string;
+          requestId: string;
+          workflowId: string;
+          workspaceId: string;
+        };
+        reason: string;
+        successorToolId: string;
+        toolId: string;
+      }>;
+      summary: {
+        attentionRequiredBackfillJobs: Array<{
+          dependencyAlias: string;
+          dependencyKind: string;
+          lastError: string | null;
+          operatorAction: string;
+          status: string;
+        }>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+      };
+    };
+    expect(dependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [
+        expect.objectContaining({
+          dependencyAlias: "ticket_account_name",
+          dependencyKind: "lookup",
+          lastError: "transient lookup backfill failure",
+          operatorAction: "retry_backfill",
+          status: "failed"
+        })
+      ],
+      failedBackfillJobCount: 1,
+      maintenanceState: "attention_required"
+    });
+    expect(dependencyBody.suggestedMaintenanceRequests).toEqual([
+      {
+        input: {
+          kind: "backfill",
+          lookupAliases: ["ticket_account_name"],
+          reason: "manual",
+          requestId: "workflow-lookup-maintenance:wf_lookup_recovery:backfill:manual",
+          workflowId: "wf_lookup_recovery",
+          workspaceId: "ws_1"
+        },
+        reason: "attention_required_backfill",
+        successorToolId: "requestWorkflowLookupMaintenance",
+        toolId: "prepareWorkflowLookupMaintenance"
+      }
+    ]);
+
+    const prepareRecovery = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/preview", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: dependencyBody.suggestedMaintenanceRequests[0]!.input,
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 33,
+          principalId: "ops_lookup",
+          toolId: dependencyBody.suggestedMaintenanceRequests[0]!.toolId,
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(prepareRecovery.status).toBe(200);
+    const prepareBody = (await prepareRecovery.json()) as {
+      output: {
+        kind: string;
+        successorInvocation: {
+          input: {
+            kind: string;
+            lookupAliases: string[];
+            reason: string;
+            requestId: string;
+            workflowId: string;
+            workspaceId: string;
+          };
+          toolId: string;
+        };
+      };
+      tool: {
+        id: string;
+        phase: string;
+        successorToolId: string | null;
+      };
+    };
+    expect(prepareBody.tool).toMatchObject({
+      id: "prepareWorkflowLookupMaintenance",
+      phase: "preview",
+      successorToolId: "requestWorkflowLookupMaintenance"
+    });
+    expect(prepareBody.output).toMatchObject({
+      kind: "workflow-maintenance-draft",
+      successorInvocation: {
+        input: dependencyBody.suggestedMaintenanceRequests[0]!.input,
+        toolId: "requestWorkflowLookupMaintenance"
+      }
+    });
+
+    const executeRecovery = await handleFetch(
+      new Request("https://example.test/v1/agent-tools/execute", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          input: prepareBody.output.successorInvocation.input,
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 33,
+          principalId: "ops_lookup",
+          toolId: prepareBody.output.successorInvocation.toolId,
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(executeRecovery.status).toBe(200);
+    expect((await executeRecovery.json()) as {
+      output: {
+        aliases: string[];
+        dependencyKind: string;
+        kind: string;
+        requestId: string;
+        status: string;
+        workflowId: string;
+        workflowVersionId: string;
+      };
+      tool: {
+        id: string;
+        phase: string;
+      };
+    }).toMatchObject({
+      output: {
+        aliases: ["ticket_account_name"],
+        dependencyKind: "lookup",
+        kind: "workflow-maintenance-request",
+        requestId: "workflow-lookup-maintenance:wf_lookup_recovery:backfill:manual",
+        status: "enqueued",
+        workflowId: "wf_lookup_recovery",
+        workflowVersionId: "wf_lookup_recovery:v1"
+      },
+      tool: {
+        id: "requestWorkflowLookupMaintenance",
+        phase: "execute"
+      }
+    });
+    expect(aggregateQueue.sent).toHaveLength(1);
+    expect(aggregateQueue.sent[0]).toMatchObject({
+      kind: "aggregate-maintenance",
+      payload: {
+        lookup: {
+          alias: "ticket_account_name",
+          targetFieldId: "fld_ticket_account_name"
+        },
+        trigger: {
+          kind: "backfill",
+          reason: "manual"
+        },
+        workflowId: "wf_lookup_recovery",
+        workflowVersionId: "wf_lookup_recovery:v1"
+      },
+      workspaceId: "ws_1"
+    });
   });
 
   it("recovers queued outbox work after a post-commit publish failure", async () => {

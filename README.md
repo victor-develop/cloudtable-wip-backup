@@ -93,6 +93,37 @@ Typecheck:
 npm run typecheck
 ```
 
+## Production OAuth and Session Config
+
+CloudTable's Worker fails `/readyz` when required OAuth/session config is
+missing or malformed. The readiness response lists only env var names, not
+secret values.
+
+Set these non-secret Worker vars in `wrangler.jsonc` or the Cloudflare
+dashboard:
+
+```text
+AUTH_ALLOWED_REDIRECT_ORIGINS=https://app.example.com
+AUTH_COOKIE_NAME=cloudtable_session
+AUTH_SESSION_TTL_SECONDS=604800
+GOOGLE_CLIENT_ID=<google-oauth-client-id>
+GOOGLE_OAUTH_REDIRECT_URI=https://<worker-host>/v1/auth/google/callback
+```
+
+Set these as Cloudflare secrets:
+
+```bash
+wrangler secret put AUTH_SESSION_SECRET
+wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+Google OAuth must register the exact callback URL from
+`GOOGLE_OAUTH_REDIRECT_URI`. Production post-login redirects accept relative
+paths and absolute URLs whose origin is listed in
+`AUTH_ALLOWED_REDIRECT_ORIGINS`; arbitrary absolute redirect targets are
+rejected. The auth session cookie name is stable, uses `HttpOnly` and
+`SameSite=Lax`, and adds `Secure` on HTTPS requests.
+
 ## Next Implementation Slices
 
 - Replace placeholder handlers with real command ingress and read paths.

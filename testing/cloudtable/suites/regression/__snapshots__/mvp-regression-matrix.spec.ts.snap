@@ -6522,6 +6522,13 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
           "allowed": true,
           "hiddenFieldIds": [],
           "reason": null,
+          "toolId": "readWorkflowDependencies",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
           "toolId": "readWorkflowRunDetail",
           "visibleFieldIds": []
         },
@@ -6537,6 +6544,62 @@ exports[`cloudtable MVP regression matrix > covers the deterministic MVP semanti
           "hiddenFieldIds": [],
           "reason": null,
           "toolId": "requestWorkflowDeadLetterReplay",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "prepareWorkflowAggregateMaintenance",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "requestWorkflowAggregateMaintenance",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "prepareWorkflowLookupMaintenance",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "requestWorkflowLookupMaintenance",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "prepareWorkflowSyncMaintenance",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "requestWorkflowSyncMaintenance",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "prepareWorkflowBackfillDisposition",
+          "visibleFieldIds": []
+        },
+        {
+          "allowed": true,
+          "hiddenFieldIds": [],
+          "reason": null,
+          "toolId": "requestWorkflowBackfillDisposition",
           "visibleFieldIds": []
         },
         {

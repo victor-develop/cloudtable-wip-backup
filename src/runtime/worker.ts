@@ -28,11 +28,16 @@ import type {
   QueryViewToolInput,
   ReadActivityHistoryToolInput,
   ReadAppActivityHistoryToolInput,
+  ReadWorkflowDependenciesToolInput,
   ReorderFieldsToolInput,
   ReadWorkspaceActivityHistoryToolInput,
   ReadWorkflowHistoryToolInput,
   ReadWorkflowRunDetailToolInput,
+  WorkflowAggregateMaintenanceToolInput,
+  WorkflowBackfillDispositionToolInput,
   WorkflowDeadLetterReplayToolInput,
+  WorkflowLookupMaintenanceToolInput,
+  WorkflowSyncMaintenanceToolInput,
   ProposeWorkflowToolInput,
   RunWorkflowToolInput,
   UpdateCellToolInput,
@@ -73,9 +78,11 @@ import { readViewQuery } from "./view-query-read";
 import {
   readWorkflowHistoryForRun,
   readWorkflowHistoryForWorkflow,
+  readWorkflowDependencyOperations,
   readWorkflowIdForDeadLetter,
   readWorkflowIdForRun,
   readWorkflowTriggerTableIdForWorkflow,
+  requestWorkflowBackfillJobDisposition,
   requestWorkflowDeadLetterReplay,
   workflowOperationsAuthorized
 } from "./workflow-operations";
@@ -87,14 +94,17 @@ import {
   enqueueScheduledWorkflowDispatches,
   previewWorkflowTestRun,
   requestManualAggregateMaintenance,
+  requestManualLookupMaintenance,
   requestManualSyncMaintenance
 } from "./workflow-runtime";
+import { ensureWorkflowDependencyIndexForWorkflow } from "./workflow-dependency-index";
 import {
   readWorkflowDefinitionMetadata,
   readWorkflowExecutionCandidate,
   readWorkflowTriggerTableId
 } from "./workflow-definition";
 import { createWorkspaceInspector } from "./workspace-inspector";
+import { buildWorkflowRecipeAuthoringCatalog } from "../core/workflows/authoring";
 import { serializeWorkflowOperatorManifest } from "../core/workflows/manifest";
 import { createWorkflowOperatorRegistry } from "../core/workflows/operator-registry";
 import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
@@ -119,8 +129,30 @@ type GoogleUserInfo = {
 type SignedTokenPayload = {
   invitationToken?: string;
   issuedAt: string;
+  onboarding?: {
+    intent: "tenant_bootstrap";
+    organizationName?: string;
+    organizationSlug?: string;
+    workspaceName?: string;
+    workspaceSlug?: string;
+  };
   redirectTo: string;
   workspaceId?: string;
+};
+
+type AuthRuntimeConfig = {
+  allowedRedirectOrigins: Set<string>;
+  cookieName: string;
+  googleClientId: string;
+  googleClientSecret: string;
+  googleOAuthRedirectUri: string;
+  sessionSecret: string;
+  sessionTtlSeconds: number;
+};
+
+type AuthRuntimeConfigError = {
+  invalid: string[];
+  missing: string[];
 };
 
 export async function handleFetch(
@@ -145,6 +177,36 @@ export async function handleFetch(
     });
   }
 
+  if (request.method === "GET" && url.pathname === "/readyz") {
+    const authConfig = readAuthRuntimeConfig(env);
+    if (!authConfig.ok) {
+      return json(
+        {
+          auth: {
+            invalid: authConfig.error.invalid,
+            missing: authConfig.error.missing,
+            ok: false
+          },
+          ok: false,
+          service: "cloudtable-platform"
+        },
+        { status: 503 }
+      );
+    }
+
+    return json({
+      auth: {
+        cookieName: authConfig.config.cookieName,
+        redirectOrigins: Array.from(authConfig.config.allowedRedirectOrigins).sort(),
+        sameSite: "Lax",
+        sessionTtlSeconds: authConfig.config.sessionTtlSeconds,
+        ok: true
+      },
+      ok: true,
+      service: "cloudtable-platform"
+    });
+  }
+
   if (request.method === "GET" && url.pathname === "/internal/scaffold") {
     return json({
       aggregateOperations: runtime.aggregateOperationRegistry
@@ -157,13 +219,17 @@ export async function handleFetch(
   }
 
   if (request.method === "GET" && url.pathname === "/v1/auth/google/login") {
-    const redirectTo = sanitizeRedirectTarget(url.searchParams.get("redirectTo"));
-    if (!redirectTo) {
-      return badRequest("redirectTo is required for Google login ingress.");
+    const authConfig = readAuthRuntimeConfig(env);
+    if (!authConfig.ok) {
+      return invalidAuthRuntimeConfig(authConfig.error);
     }
 
-    if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_OAUTH_REDIRECT_URI || !env.AUTH_SESSION_SECRET) {
-      return badRequest("Google auth ingress is not configured.");
+    const redirectTo = sanitizeRedirectTarget(
+      url.searchParams.get("redirectTo"),
+      authConfig.config
+    );
+    if (!redirectTo) {
+      return badRequest("redirectTo is required for Google login ingress.");
     }
 
     const state = await encodeSignedToken(
@@ -172,16 +238,19 @@ export async function handleFetch(
           ? { invitationToken: readNonEmptyString(url.searchParams.get("invitationToken"))! }
           : {}),
         issuedAt: new Date().toISOString(),
+        ...(readOnboardingState(url.searchParams)
+          ? { onboarding: readOnboardingState(url.searchParams)! }
+          : {}),
         redirectTo,
         ...(readNonEmptyString(url.searchParams.get("workspaceId"))
           ? { workspaceId: readNonEmptyString(url.searchParams.get("workspaceId"))! }
           : {})
       },
-      env.AUTH_SESSION_SECRET
+      authConfig.config.sessionSecret
     );
     const redirectUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    redirectUrl.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
-    redirectUrl.searchParams.set("redirect_uri", env.GOOGLE_OAUTH_REDIRECT_URI);
+    redirectUrl.searchParams.set("client_id", authConfig.config.googleClientId);
+    redirectUrl.searchParams.set("redirect_uri", authConfig.config.googleOAuthRedirectUri);
     redirectUrl.searchParams.set("response_type", "code");
     redirectUrl.searchParams.set("scope", "openid email profile");
     redirectUrl.searchParams.set("state", state);
@@ -202,6 +271,10 @@ export async function handleFetch(
     return handleSessionIngress(request, env);
   }
 
+  if (request.method === "GET" && url.pathname === "/v1/tenants") {
+    return handleTenantListIngress(request, env);
+  }
+
   if (request.method === "POST" && url.pathname === "/v1/auth/session/selection") {
     return handleSessionSelectionIngress(request, env);
   }
@@ -216,6 +289,14 @@ export async function handleFetch(
   const workspaceMembershipCollectionMatch = url.pathname.match(
     /^\/v1\/workspaces\/([^/]+)\/memberships$/
   );
+  if (workspaceMembershipCollectionMatch && request.method === "GET") {
+    return handleWorkspaceMembershipListIngress(
+      request,
+      env,
+      workspaceMembershipCollectionMatch[1]!
+    );
+  }
+
   if (workspaceMembershipCollectionMatch && request.method === "POST") {
     let body: Record<string, unknown>;
     try {
@@ -515,6 +596,40 @@ export async function handleFetch(
     });
   }
 
+  const workflowRecipeCatalogMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([^/]+)\/workflow-recipes$/
+  );
+  if (workflowRecipeCatalogMatch) {
+    if (request.method !== "GET") {
+      return methodNotAllowed(request.method, ["GET"]);
+    }
+
+    const workspaceId = workflowRecipeCatalogMatch[1]!;
+    const auth = await resolveWorkspaceCatalogAccess(request, env, {
+      permissionScopeHash: url.searchParams.get("permissionScopeHash"),
+      policyRevisionValue: url.searchParams.get("policyRevision"),
+      principalId: url.searchParams.get("principalId"),
+      workspaceId
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    return json({
+      catalog: buildWorkflowRecipeAuthoringCatalog({
+        aggregateOperationRegistry: runtime.aggregateOperationRegistry,
+        workflowOperatorRegistry: runtime.workflowOperatorRegistry
+      }),
+      permissionScope: {
+        policyRevision: auth.snapshot.policyRevision,
+        principalId: auth.snapshot.principalId,
+        scopeHash: auth.snapshot.scopeHash,
+        workspaceId: auth.snapshot.workspaceId
+      },
+      workspaceId
+    });
+  }
+
   const fieldTypeCatalogMatch = url.pathname.match(/^\/v1\/workspaces\/([^/]+)\/field-types$/);
   if (fieldTypeCatalogMatch) {
     if (request.method !== "GET") {
@@ -736,6 +851,20 @@ export async function handleFetch(
     return handleAgentToolIngress(request, env, "execute");
   }
 
+  const workflowRecipePreviewMatch = url.pathname.match(
+    /^\/v1\/tables\/([^/]+)\/workflow-recipes\/preview$/
+  );
+  if (workflowRecipePreviewMatch) {
+    return handleWorkflowRecipePreviewIngress(request, env, workflowRecipePreviewMatch[1]!);
+  }
+
+  const workflowRecipeCreateMatch = url.pathname.match(
+    /^\/v1\/tables\/([^/]+)\/workflow-recipes$/
+  );
+  if (workflowRecipeCreateMatch) {
+    return handleWorkflowRecipeCreateIngress(request, env, workflowRecipeCreateMatch[1]!);
+  }
+
   if (url.pathname === "/v1/permissions/explain") {
     return handlePermissionExplainIngress(request, env);
   }
@@ -818,6 +947,91 @@ export async function handleFetch(
     }
 
     return json(await readWorkflowHistoryForWorkflow(env.DB, auth.workspaceId, auth.workflowId));
+  }
+
+  const workflowDependenciesMatch = url.pathname.match(/^\/v1\/workflows\/([^/]+)\/dependencies$/);
+  if (workflowDependenciesMatch) {
+    if (request.method !== "GET") {
+      return methodNotAllowed(request.method, ["GET"]);
+    }
+
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
+      principalId: url.searchParams.get("principalId"),
+      workflowId: workflowDependenciesMatch[1] ?? null,
+      workspaceId: url.searchParams.get("workspaceId"),
+      permissionScopeHash: url.searchParams.get("permissionScopeHash"),
+      policyRevisionValue: url.searchParams.get("policyRevision")
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    await ensureWorkflowDependencyIndexForWorkflow(env.DB, {
+      workflowId: auth.workflowId,
+      workspaceId: auth.workspaceId
+    });
+
+    return json(await readWorkflowDependencyOperations(env.DB, auth.workspaceId, auth.workflowId));
+  }
+
+  const workflowBackfillJobDispositionMatch = url.pathname.match(
+    /^\/v1\/workflows\/([^/]+)\/backfill-jobs\/([^/]+)\/disposition$/
+  );
+  if (workflowBackfillJobDispositionMatch) {
+    if (request.method !== "POST") {
+      return methodNotAllowed(request.method, ["POST"]);
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      return badRequest("Workflow backfill-job disposition body must be valid JSON.");
+    }
+
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
+      principalId: readNonEmptyString(body.principalId),
+      workflowId: workflowBackfillJobDispositionMatch[1] ?? null,
+      workspaceId: readNonEmptyString(body.workspaceId),
+      permissionScopeHash: readNonEmptyString(body.permissionScopeHash),
+      policyRevisionValue:
+        typeof body.policyRevision === "number" ? String(body.policyRevision) : null
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    const disposition = readNonEmptyString(body.disposition);
+    if (disposition !== "abandoned" && disposition !== "superseded") {
+      return badRequest("disposition must be either abandoned or superseded.");
+    }
+
+    const reason = readNonEmptyString(body.reason);
+    if (!reason) {
+      return badRequest("reason is required to abandon or supersede a backfill job.");
+    }
+
+    const result = await requestWorkflowBackfillJobDisposition(env.DB, {
+      disposition,
+      jobId: workflowBackfillJobDispositionMatch[2]!,
+      operatorPrincipalId: auth.principalId,
+      reason,
+      supersededByJobId: readNonEmptyString(body.supersededByJobId),
+      workflowId: workflowBackfillJobDispositionMatch[1]!,
+      workspaceId: auth.workspaceId
+    });
+
+    if (!result.ok) {
+      if (result.reason === "backfill_job_not_found") {
+        return notFound(result.message);
+      }
+      if (result.reason === "backfill_job_terminal") {
+        return conflict(result.message);
+      }
+      return badRequest(result.message);
+    }
+
+    return json(result, { status: 202 });
   }
 
   const workflowAggregateMaintenanceMatch = url.pathname.match(
@@ -925,6 +1139,127 @@ export async function handleFetch(
     );
   }
 
+  const workflowLookupMaintenanceMatch = url.pathname.match(
+    /^\/v1\/workflows\/([^/]+)\/lookup-maintenance$/
+  );
+  if (workflowLookupMaintenanceMatch) {
+    if (request.method !== "POST") {
+      return methodNotAllowed(request.method, ["POST"]);
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      return badRequest("Workflow lookup-maintenance body must be valid JSON.");
+    }
+
+    const auth = await resolveWorkflowOperationsAccess(request, env, {
+      principalId: readNonEmptyString(body.principalId),
+      workflowId: workflowLookupMaintenanceMatch[1] ?? null,
+      workspaceId: readNonEmptyString(body.workspaceId),
+      permissionScopeHash: readNonEmptyString(body.permissionScopeHash),
+      policyRevisionValue:
+        typeof body.policyRevision === "number" ? String(body.policyRevision) : null
+    });
+    if ("response" in auth) {
+      return auth.response;
+    }
+
+    const kind = readNonEmptyString(body.kind);
+    if (kind !== "backfill" && kind !== "recompute") {
+      return badRequest("kind must be either backfill or recompute.");
+    }
+
+    const lookupAliasesValue = body.lookupAliases;
+    if (lookupAliasesValue !== undefined && !Array.isArray(lookupAliasesValue)) {
+      return badRequest("lookupAliases must be an array of strings when provided.");
+    }
+    const lookupAliases = Array.isArray(lookupAliasesValue)
+      ? Array.from(
+          new Set(
+            lookupAliasesValue.filter(
+              (entry): entry is string => typeof entry === "string" && entry.length > 0
+            )
+          )
+        )
+      : undefined;
+    if (Array.isArray(lookupAliasesValue) && lookupAliases?.length !== lookupAliasesValue.length) {
+      return badRequest("lookupAliases entries must all be non-empty strings.");
+    }
+
+    const changedFieldIdsValue = body.changedFieldIds;
+    if (changedFieldIdsValue !== undefined && !Array.isArray(changedFieldIdsValue)) {
+      return badRequest("changedFieldIds must be an array of strings when provided.");
+    }
+    const changedFieldIds = Array.isArray(changedFieldIdsValue)
+      ? Array.from(
+          new Set(
+            changedFieldIdsValue.filter(
+              (entry): entry is string => typeof entry === "string" && entry.length > 0
+            )
+          )
+        )
+      : undefined;
+    if (Array.isArray(changedFieldIdsValue) && changedFieldIds?.length !== changedFieldIdsValue.length) {
+      return badRequest("changedFieldIds entries must all be non-empty strings.");
+    }
+
+    const targetRecordIdValue = body.targetRecordId;
+    if (
+      targetRecordIdValue !== undefined &&
+      targetRecordIdValue !== null &&
+      (typeof targetRecordIdValue !== "string" || targetRecordIdValue.length === 0)
+    ) {
+      return badRequest("targetRecordId must be a non-empty string when provided.");
+    }
+    if (kind === "backfill" && targetRecordIdValue !== undefined && targetRecordIdValue !== null) {
+      return badRequest("targetRecordId can only be provided for recompute lookup maintenance.");
+    }
+    const targetRecordId =
+      typeof targetRecordIdValue === "string" ? targetRecordIdValue : undefined;
+
+    const requestId =
+      readNonEmptyString(body.requestId) ??
+      readNonEmptyString(body.idempotencyKey) ??
+      `workflow-lookup-maintenance:${workflowLookupMaintenanceMatch[1]!}:${kind}`;
+    const result = await requestManualLookupMaintenance(env, {
+      changedFieldIds,
+      kind,
+      principalId: auth.principalId,
+      reason: readNonEmptyString(body.reason) ?? undefined,
+      recordId: readNonEmptyString(body.recordId),
+      requestId,
+      lookupAliases,
+      targetRecordId,
+      workflowId: workflowLookupMaintenanceMatch[1]!,
+      workspaceId: auth.workspaceId
+    });
+
+    if (!result.ok) {
+      if (result.reason === "workflow_not_found") {
+        return notFound(result.message);
+      }
+      if (result.reason === "already_requested") {
+        return conflict(result.message);
+      }
+      return badRequest(result.message);
+    }
+
+    return json(
+      {
+        kind,
+        lookupAliases: result.lookupAliases,
+        requestId,
+        status: result.status,
+        ...(targetRecordId ? { targetRecordId } : {}),
+        workflowId: workflowLookupMaintenanceMatch[1]!,
+        workflowVersionId: result.workflowVersionId
+      },
+      { status: 202 }
+    );
+  }
+
   const workflowSyncMaintenanceMatch = url.pathname.match(
     /^\/v1\/workflows\/([^/]+)\/sync-maintenance$/
   );
@@ -991,6 +1326,20 @@ export async function handleFetch(
       return badRequest("changedFieldIds entries must all be non-empty strings.");
     }
 
+    const targetRecordIdValue = body.targetRecordId;
+    if (
+      targetRecordIdValue !== undefined &&
+      targetRecordIdValue !== null &&
+      (typeof targetRecordIdValue !== "string" || targetRecordIdValue.length === 0)
+    ) {
+      return badRequest("targetRecordId must be a non-empty string when provided.");
+    }
+    if (kind === "backfill" && targetRecordIdValue !== undefined && targetRecordIdValue !== null) {
+      return badRequest("targetRecordId can only be provided for recompute sync maintenance.");
+    }
+    const targetRecordId =
+      typeof targetRecordIdValue === "string" ? targetRecordIdValue : undefined;
+
     const requestId =
       readNonEmptyString(body.requestId) ??
       readNonEmptyString(body.idempotencyKey) ??
@@ -1003,6 +1352,7 @@ export async function handleFetch(
       recordId: readNonEmptyString(body.recordId),
       requestId,
       syncAliases,
+      targetRecordId,
       workflowId: workflowSyncMaintenanceMatch[1]!,
       workspaceId: auth.workspaceId
     });
@@ -1023,6 +1373,7 @@ export async function handleFetch(
         requestId,
         status: result.status,
         syncAliases: result.syncAliases,
+        ...(targetRecordId ? { targetRecordId } : {}),
         workflowId: workflowSyncMaintenanceMatch[1]!,
         workflowVersionId: result.workflowVersionId
       },
@@ -1613,13 +1964,9 @@ export async function handleScheduled(
 }
 
 async function handleGoogleAuthCallback(request: Request, env: CloudTableEnv): Promise<Response> {
-  if (
-    !env.GOOGLE_CLIENT_ID ||
-    !env.GOOGLE_CLIENT_SECRET ||
-    !env.GOOGLE_OAUTH_REDIRECT_URI ||
-    !env.AUTH_SESSION_SECRET
-  ) {
-    return badRequest("Google auth ingress is not configured.");
+  const authConfig = readAuthRuntimeConfig(env);
+  if (!authConfig.ok) {
+    return invalidAuthRuntimeConfig(authConfig.error);
   }
 
   const url = new URL(request.url);
@@ -1629,12 +1976,18 @@ async function handleGoogleAuthCallback(request: Request, env: CloudTableEnv): P
     return badRequest("Google auth callback requires code and state.");
   }
 
-  const decodedState = await decodeSignedToken<SignedTokenPayload>(state, env.AUTH_SESSION_SECRET);
-  if (!decodedState || !sanitizeRedirectTarget(decodedState.redirectTo)) {
+  const decodedState = await decodeSignedToken<SignedTokenPayload>(
+    state,
+    authConfig.config.sessionSecret
+  );
+  const redirectTo = decodedState
+    ? sanitizeRedirectTarget(decodedState.redirectTo, authConfig.config)
+    : null;
+  if (!decodedState || !redirectTo) {
     return badRequest("Google auth callback state is invalid.");
   }
 
-  const googleIdentity = await exchangeGoogleCodeForUserInfo(env, code);
+  const googleIdentity = await exchangeGoogleCodeForUserInfo(authConfig.config, code);
   if (!googleIdentity.ok) {
     return googleIdentity.response;
   }
@@ -1690,9 +2043,55 @@ async function handleGoogleAuthCallback(request: Request, env: CloudTableEnv): P
   }
 
   let canonicalUser = existingLinkedUser ?? emailMatchedUser;
+  if (!canonicalUser && !invitation && decodedState.onboarding?.intent === "tenant_bootstrap") {
+    const timestamp = new Date().toISOString();
+    const organizationName =
+      decodedState.onboarding.organizationName ?? googleIdentity.user.name ?? googleIdentity.user.email;
+    const workspaceName = decodedState.onboarding.workspaceName ?? "Workspace";
+    const bootstrapMembership = await repository.provisionWorkspaceMembershipIdentity({
+      externalIdentity: {
+        email: googleIdentity.user.email,
+        externalSubject: googleIdentity.user.subject,
+        id: `ext_google_${googleIdentity.user.subject}`,
+        providerKey: "google"
+      },
+      membership: {
+        organizationMembershipId: generateStableIdentifier("orgmem"),
+        principalId: generateStableIdentifier("usr"),
+        roleKey: "workspace.admin",
+        workspaceMembershipId: generateStableIdentifier("wsmem")
+      },
+      organization: {
+        id: generateStableIdentifier("org"),
+        name: organizationName,
+        slug:
+          decodedState.onboarding.organizationSlug ??
+          `${slugifyIdentifier(organizationName)}-${generateStableIdentifier("org").slice(-8)}`
+      },
+      timestamp,
+      user: {
+        displayName: googleIdentity.user.name,
+        email: googleIdentity.user.email,
+        id: generateStableIdentifier("user")
+      },
+      workspace: {
+        id: generateStableIdentifier("ws"),
+        name: workspaceName,
+        slug:
+          decodedState.onboarding.workspaceSlug ??
+          `${slugifyIdentifier(workspaceName)}-${generateStableIdentifier("ws").slice(-8)}`
+      }
+    });
+    canonicalUser = {
+      displayName: bootstrapMembership.userDisplayName,
+      primaryEmail: bootstrapMembership.userEmail,
+      userId: bootstrapMembership.userId
+    };
+  }
+
   if (!canonicalUser && !invitation) {
     return forbidden(
-      `No canonical CloudTable user is linked to ${googleIdentity.user.email}. Invitation acceptance is not available on this ingress yet.`
+      `No canonical CloudTable user is linked to ${googleIdentity.user.email}. Use an invitation or explicit tenant bootstrap onboarding.`
     );
   }
 
@@ -1751,7 +2150,7 @@ async function handleGoogleAuthCallback(request: Request, env: CloudTableEnv): P
     );
   }
 
-  const sessionTtlSeconds = readSessionTtlSeconds(env);
+  const sessionTtlSeconds = authConfig.config.sessionTtlSeconds;
   const issuedAt = new Date();
   const expiresAt = new Date(issuedAt.getTime() + sessionTtlSeconds * 1000);
   const session = await repository.createAuthSession({
@@ -1768,14 +2167,14 @@ async function handleGoogleAuthCallback(request: Request, env: CloudTableEnv): P
   });
   const sessionCookie = await encodeSignedToken(
     { sessionId: session.sessionId },
-    env.AUTH_SESSION_SECRET
+    authConfig.config.sessionSecret
   );
 
   return new Response(null, {
     status: 302,
     headers: {
-      "set-cookie": serializeSessionCookie(env, sessionCookie, expiresAt),
-      location: decodedState.redirectTo
+      "set-cookie": serializeSessionCookie(authConfig.config, request, sessionCookie, expiresAt),
+      location: redirectTo
     }
   });
 }
@@ -1802,7 +2201,15 @@ async function handleInvitationIssuance(
     return badRequest("email is required for invitation issuance.");
   }
 
-  const redirectTo = sanitizeRedirectTarget(readNonEmptyString(body.redirectTo));
+  const authConfig = readAuthRuntimeConfig(env);
+  if (!authConfig.ok) {
+    return invalidAuthRuntimeConfig(authConfig.error);
+  }
+
+  const redirectTo = sanitizeRedirectTarget(
+    readNonEmptyString(body.redirectTo),
+    authConfig.config
+  );
   if (!redirectTo) {
     return badRequest("redirectTo is required for invitation issuance.");
   }
@@ -1822,6 +2229,29 @@ async function handleInvitationIssuance(
       `Authenticated user ${authSession.session.userId} is not an active workspace member for ${workspaceId}.`
     );
   }
+  if (!isWorkspaceAdminRole(inviterMembership.workspaceRoleKey)) {
+    return forbidden(
+      `Authenticated user ${authSession.session.userId} is not a workspace admin for ${workspaceId}.`
+    );
+  }
+
+  const roleKey = readNonEmptyString(body.roleKey) ?? "workspace.member";
+  if (!isSupportedWorkspaceInviteRole(roleKey)) {
+    return badRequest(`roleKey must be one of ${SUPPORTED_WORKSPACE_INVITE_ROLES.join(", ")}.`);
+  }
+
+  const duplicateInvitation = await repository.findPendingInvitationForWorkspaceEmail({
+    invitedEmail,
+    workspaceId
+  });
+  if (duplicateInvitation && Date.parse(duplicateInvitation.expiresAt) > Date.now()) {
+    return conflict(
+      `A pending invitation already exists for ${invitedEmail} in workspace ${workspaceId}.`,
+      {
+        invitationId: duplicateInvitation.id
+      }
+    );
+  }
 
   const rawToken = `${crypto.randomUUID()}.${crypto.randomUUID()}`;
   const invitation = await repository.createInvitation({
@@ -1829,7 +2259,7 @@ async function handleInvitationIssuance(
     id: generateStableIdentifier("inv"),
     invitedByUserId: authSession.session.userId,
     invitedEmail,
-    roleKey: readNonEmptyString(body.roleKey) ?? "workspace.member",
+    roleKey,
     timestamp: new Date().toISOString(),
     tokenHash: await sha256Hex(rawToken),
     workspaceId
@@ -1883,6 +2313,70 @@ async function handleSessionIngress(request: Request, env: CloudTableEnv): Promi
     memberships,
     session: authSession.session,
     ...(selectedMembership ? { workspaceMembership: selectedMembership } : {})
+  });
+}
+
+async function handleTenantListIngress(request: Request, env: CloudTableEnv): Promise<Response> {
+  const authSession = await resolveAuthenticatedSession(request, env);
+  if ("response" in authSession) {
+    return authSession.response;
+  }
+
+  const repository = createCloudTableD1Repository(env.DB, createRuntime(env).fieldTypeRegistry);
+  const memberships = await repository.listWorkspaceMembershipIdentitiesForUser(authSession.session.userId);
+  return json({
+    tenants: memberships.map((membership) => ({
+      admin: isWorkspaceAdminRole(membership.workspaceRoleKey),
+      organization: {
+        id: membership.organizationId,
+        name: membership.organizationName,
+        slug: membership.organizationSlug
+      },
+      principalId: membership.principalId,
+      roleKey: membership.workspaceRoleKey,
+      workspace: {
+        id: membership.workspaceId,
+        name: membership.workspaceName,
+        slug: membership.workspaceSlug
+      },
+      workspaceId: membership.workspaceId
+    })),
+    memberships,
+    session: authSession.session
+  });
+}
+
+async function handleWorkspaceMembershipListIngress(
+  request: Request,
+  env: CloudTableEnv,
+  workspaceId: string
+): Promise<Response> {
+  const authSession = await resolveAuthenticatedSession(request, env);
+  if ("response" in authSession) {
+    return authSession.response;
+  }
+
+  const repository = createCloudTableD1Repository(env.DB, createRuntime(env).fieldTypeRegistry);
+  const requesterMembership = await repository.readWorkspaceMembershipIdentityForUser({
+    userId: authSession.session.userId,
+    workspaceId
+  });
+  if (!requesterMembership) {
+    return forbidden(
+      `Authenticated user ${authSession.session.userId} is not an active workspace member for ${workspaceId}.`
+    );
+  }
+  if (!isWorkspaceAdminRole(requesterMembership.workspaceRoleKey)) {
+    return forbidden(
+      `Authenticated user ${authSession.session.userId} is not a workspace admin for ${workspaceId}.`
+    );
+  }
+
+  const memberships = await repository.listWorkspaceMembershipIdentitiesForWorkspace(workspaceId);
+  return json({
+    memberships,
+    requester: requesterMembership,
+    workspaceId
   });
 }
 
@@ -1944,7 +2438,7 @@ async function handleSessionSelectionIngress(
 }
 
 async function exchangeGoogleCodeForUserInfo(
-  env: CloudTableEnv,
+  config: AuthRuntimeConfig,
   code: string
 ): Promise<{ ok: true; user: GoogleUserInfo } | { ok: false; response: Response }> {
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
@@ -1953,11 +2447,11 @@ async function exchangeGoogleCodeForUserInfo(
       "content-type": "application/x-www-form-urlencoded"
     },
     body: new URLSearchParams({
-      client_id: env.GOOGLE_CLIENT_ID!,
-      client_secret: env.GOOGLE_CLIENT_SECRET!,
+      client_id: config.googleClientId,
+      client_secret: config.googleClientSecret,
       code,
       grant_type: "authorization_code",
-      redirect_uri: env.GOOGLE_OAUTH_REDIRECT_URI!
+      redirect_uri: config.googleOAuthRedirectUri
     }).toString()
   });
   if (!tokenResponse.ok) {
@@ -2121,19 +2615,196 @@ function selectWorkspaceMembership(input: {
   return null;
 }
 
-function sanitizeRedirectTarget(value: string | null): string | null {
+const SUPPORTED_WORKSPACE_INVITE_ROLES = ["workspace.admin", "workspace.member"] as const;
+
+function isSupportedWorkspaceInviteRole(roleKey: string): boolean {
+  return SUPPORTED_WORKSPACE_INVITE_ROLES.includes(
+    roleKey as (typeof SUPPORTED_WORKSPACE_INVITE_ROLES)[number]
+  );
+}
+
+function isWorkspaceAdminRole(roleKey: string | null | undefined): boolean {
+  return roleKey === "workspace.admin";
+}
+
+function readOnboardingState(
+  searchParams: URLSearchParams
+): SignedTokenPayload["onboarding"] | null {
+  const intent = readNonEmptyString(searchParams.get("onboarding"));
+  if (!intent) {
+    return null;
+  }
+
+  if (intent !== "tenant_bootstrap") {
+    return null;
+  }
+
+  return {
+    intent,
+    ...(readNonEmptyString(searchParams.get("organizationName"))
+      ? { organizationName: readNonEmptyString(searchParams.get("organizationName"))! }
+      : {}),
+    ...(readNonEmptyString(searchParams.get("organizationSlug"))
+      ? { organizationSlug: slugifyIdentifier(readNonEmptyString(searchParams.get("organizationSlug"))!) }
+      : {}),
+    ...(readNonEmptyString(searchParams.get("workspaceName"))
+      ? { workspaceName: readNonEmptyString(searchParams.get("workspaceName"))! }
+      : {}),
+    ...(readNonEmptyString(searchParams.get("workspaceSlug"))
+      ? { workspaceSlug: slugifyIdentifier(readNonEmptyString(searchParams.get("workspaceSlug"))!) }
+      : {})
+  };
+}
+
+function slugifyIdentifier(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "cloudtable";
+}
+
+function readAuthRuntimeConfig(
+  env: CloudTableEnv
+): { ok: true; config: AuthRuntimeConfig } | { ok: false; error: AuthRuntimeConfigError } {
+  const missing: string[] = [];
+  const invalid: string[] = [];
+  const googleClientId = readRequiredEnvString(env.GOOGLE_CLIENT_ID, "GOOGLE_CLIENT_ID", missing);
+  const googleClientSecret = readRequiredEnvString(
+    env.GOOGLE_CLIENT_SECRET,
+    "GOOGLE_CLIENT_SECRET",
+    missing
+  );
+  const googleOAuthRedirectUri = readRequiredEnvString(
+    env.GOOGLE_OAUTH_REDIRECT_URI,
+    "GOOGLE_OAUTH_REDIRECT_URI",
+    missing
+  );
+  const sessionSecret = readRequiredEnvString(
+    env.AUTH_SESSION_SECRET,
+    "AUTH_SESSION_SECRET",
+    missing
+  );
+  const rawRedirectOrigins = readRequiredEnvString(
+    env.AUTH_ALLOWED_REDIRECT_ORIGINS,
+    "AUTH_ALLOWED_REDIRECT_ORIGINS",
+    missing
+  );
+  const sessionTtlSeconds = readSessionTtlSeconds(env, invalid);
+  const allowedRedirectOrigins = parseAllowedRedirectOrigins(rawRedirectOrigins, invalid);
+
+  if (googleOAuthRedirectUri) {
+    try {
+      const redirectUri = new URL(googleOAuthRedirectUri);
+      if (redirectUri.protocol !== "https:" && redirectUri.hostname !== "localhost") {
+        invalid.push("GOOGLE_OAUTH_REDIRECT_URI");
+      }
+    } catch {
+      invalid.push("GOOGLE_OAUTH_REDIRECT_URI");
+    }
+  }
+
+  if (missing.length > 0 || invalid.length > 0) {
+    return {
+      error: {
+        invalid: Array.from(new Set(invalid)).sort(),
+        missing: Array.from(new Set(missing)).sort()
+      },
+      ok: false
+    };
+  }
+
+  return {
+    config: {
+      allowedRedirectOrigins,
+      cookieName: sessionCookieName(env),
+      googleClientId: googleClientId!,
+      googleClientSecret: googleClientSecret!,
+      googleOAuthRedirectUri: googleOAuthRedirectUri!,
+      sessionSecret: sessionSecret!,
+      sessionTtlSeconds
+    },
+    ok: true
+  };
+}
+
+function invalidAuthRuntimeConfig(error: AuthRuntimeConfigError): Response {
+  return badRequest("CloudTable auth runtime config is invalid.", {
+    invalid: error.invalid,
+    missing: error.missing
+  });
+}
+
+function readRequiredEnvString(
+  value: string | undefined,
+  name: string,
+  missing: string[]
+): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    missing.push(name);
+    return null;
+  }
+
+  return trimmed;
+}
+
+function parseAllowedRedirectOrigins(
+  raw: string | null,
+  invalid: string[]
+): Set<string> {
+  const origins = new Set<string>();
+  if (!raw) {
+    return origins;
+  }
+
+  for (const entry of raw.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      invalid.push("AUTH_ALLOWED_REDIRECT_ORIGINS");
+      continue;
+    }
+
+    try {
+      const parsed = new URL(trimmed);
+      if (
+        parsed.pathname !== "/" ||
+        parsed.search !== "" ||
+        parsed.hash !== "" ||
+        (parsed.protocol !== "https:" && parsed.hostname !== "localhost")
+      ) {
+        invalid.push("AUTH_ALLOWED_REDIRECT_ORIGINS");
+        continue;
+      }
+      origins.add(parsed.origin);
+    } catch {
+      invalid.push("AUTH_ALLOWED_REDIRECT_ORIGINS");
+    }
+  }
+
+  return origins;
+}
+
+function sanitizeRedirectTarget(value: string | null, config: AuthRuntimeConfig): string | null {
   if (!value) {
     return null;
   }
 
+  if (value.startsWith("/") && !value.startsWith("//") && !value.includes("\\")) {
+    return value;
+  }
+
   try {
     const url = new URL(value);
+    if (url.protocol !== "https:" && url.hostname !== "localhost") {
+      return null;
+    }
+    if (!config.allowedRedirectOrigins.has(url.origin)) {
+      return null;
+    }
     return url.toString();
   } catch {
-    if (value.startsWith("/")) {
-      return value;
-    }
-
     return null;
   }
 }
@@ -2142,18 +2813,39 @@ function sessionCookieName(env: CloudTableEnv): string {
   return env.AUTH_COOKIE_NAME?.trim() || "cloudtable_session";
 }
 
-function readSessionTtlSeconds(env: CloudTableEnv): number {
+function readSessionTtlSeconds(env: CloudTableEnv, invalid: string[]): number {
   const raw = env.AUTH_SESSION_TTL_SECONDS?.trim();
   if (!raw) {
     return 60 * 60 * 24 * 7;
   }
 
   const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 60 * 60 * 24 * 7;
+  if (!Number.isFinite(parsed) || parsed <= 0 || Math.floor(parsed) !== parsed) {
+    invalid.push("AUTH_SESSION_TTL_SECONDS");
+    return 60 * 60 * 24 * 7;
+  }
+
+  return parsed;
 }
 
-function serializeSessionCookie(env: CloudTableEnv, value: string, expiresAt: Date): string {
-  return `${sessionCookieName(env)}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Expires=${expiresAt.toUTCString()}`;
+function serializeSessionCookie(
+  config: AuthRuntimeConfig,
+  request: Request,
+  value: string,
+  expiresAt: Date
+): string {
+  const attributes = [
+    `${config.cookieName}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Expires=${expiresAt.toUTCString()}`
+  ];
+  if (new URL(request.url).protocol === "https:") {
+    attributes.push("Secure");
+  }
+
+  return attributes.join("; ");
 }
 
 function readCookie(request: Request, name: string): string | null {
@@ -3433,6 +4125,8 @@ function buildAgentToolInvocation(
       mode: "agent" as const,
       principalId: context.principalId
     },
+    commandId: readOptionalAgentToolString(input.commandId) ?? undefined,
+    idempotencyKey: readOptionalAgentToolString(input.idempotencyKey) ?? undefined,
     permissionScopeHash: context.permissionScopeHash,
     permissionsVersion: context.policyRevision,
     schemaEpoch:
@@ -3586,6 +4280,14 @@ function buildAgentToolInvocation(
         } as ReadWorkflowHistoryToolInput,
         toolId
       };
+    case "readWorkflowDependencies":
+      return {
+        input: {
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId"),
+          workspaceId: context.workspaceId
+        } as ReadWorkflowDependenciesToolInput,
+        toolId
+      };
     case "readWorkflowRunDetail":
       return {
         input: {
@@ -3615,6 +4317,142 @@ function buildAgentToolInvocation(
         } as WorkflowDeadLetterReplayToolInput,
         toolId
       };
+    case "prepareWorkflowAggregateMaintenance":
+      return {
+        input: {
+          ...commandContext,
+          aggregateAliases: readOptionalAgentToolStringArray(input.aggregateAliases, "aggregateAliases"),
+          changedFieldIds: readOptionalAgentToolStringArray(input.changedFieldIds, "changedFieldIds"),
+          kind: readWorkflowMaintenanceKind(input.kind),
+          reason: readOptionalAgentToolString(input.reason) ?? undefined,
+          recordId: readOptionalAgentToolString(input.recordId) ?? undefined,
+          requestId: readOptionalAgentToolString(input.requestId) ?? undefined,
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as WorkflowAggregateMaintenanceToolInput,
+        toolId
+      };
+    case "requestWorkflowAggregateMaintenance":
+      if (ingress !== "execute") {
+        throw new Error("Execution-phase agent tools are not allowed on the preview ingress.");
+      }
+      return {
+        input: {
+          ...commandContext,
+          aggregateAliases: readOptionalAgentToolStringArray(input.aggregateAliases, "aggregateAliases"),
+          changedFieldIds: readOptionalAgentToolStringArray(input.changedFieldIds, "changedFieldIds"),
+          kind: readWorkflowMaintenanceKind(input.kind),
+          reason: readOptionalAgentToolString(input.reason) ?? undefined,
+          recordId: readOptionalAgentToolString(input.recordId) ?? undefined,
+          requestId: readOptionalAgentToolString(input.requestId) ?? undefined,
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as WorkflowAggregateMaintenanceToolInput,
+        toolId
+      };
+    case "prepareWorkflowLookupMaintenance":
+      return {
+        input: {
+          ...commandContext,
+          changedFieldIds: readOptionalAgentToolStringArray(input.changedFieldIds, "changedFieldIds"),
+          kind: readWorkflowMaintenanceKind(input.kind),
+          lookupAliases: readOptionalAgentToolStringArray(input.lookupAliases, "lookupAliases"),
+          reason: readOptionalAgentToolString(input.reason) ?? undefined,
+          recordId: readOptionalAgentToolString(input.recordId) ?? undefined,
+          requestId: readOptionalAgentToolString(input.requestId) ?? undefined,
+          targetRecordId: readOptionalAgentToolString(input.targetRecordId) ?? undefined,
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as WorkflowLookupMaintenanceToolInput,
+        toolId
+      };
+    case "requestWorkflowLookupMaintenance":
+      if (ingress !== "execute") {
+        throw new Error("Execution-phase agent tools are not allowed on the preview ingress.");
+      }
+      return {
+        input: {
+          ...commandContext,
+          changedFieldIds: readOptionalAgentToolStringArray(input.changedFieldIds, "changedFieldIds"),
+          kind: readWorkflowMaintenanceKind(input.kind),
+          lookupAliases: readOptionalAgentToolStringArray(input.lookupAliases, "lookupAliases"),
+          reason: readOptionalAgentToolString(input.reason) ?? undefined,
+          recordId: readOptionalAgentToolString(input.recordId) ?? undefined,
+          requestId: readOptionalAgentToolString(input.requestId) ?? undefined,
+          targetRecordId: readOptionalAgentToolString(input.targetRecordId) ?? undefined,
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as WorkflowLookupMaintenanceToolInput,
+        toolId
+      };
+    case "prepareWorkflowSyncMaintenance":
+      return {
+        input: {
+          ...commandContext,
+          changedFieldIds: readOptionalAgentToolStringArray(input.changedFieldIds, "changedFieldIds"),
+          kind: readWorkflowMaintenanceKind(input.kind),
+          reason: readOptionalAgentToolString(input.reason) ?? undefined,
+          recordId: readOptionalAgentToolString(input.recordId) ?? undefined,
+          requestId: readOptionalAgentToolString(input.requestId) ?? undefined,
+          syncAliases: readOptionalAgentToolStringArray(input.syncAliases, "syncAliases"),
+          targetRecordId: readOptionalAgentToolString(input.targetRecordId) ?? undefined,
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as WorkflowSyncMaintenanceToolInput,
+        toolId
+      };
+    case "requestWorkflowSyncMaintenance":
+      if (ingress !== "execute") {
+        throw new Error("Execution-phase agent tools are not allowed on the preview ingress.");
+      }
+      return {
+        input: {
+          ...commandContext,
+          changedFieldIds: readOptionalAgentToolStringArray(input.changedFieldIds, "changedFieldIds"),
+          kind: readWorkflowMaintenanceKind(input.kind),
+          reason: readOptionalAgentToolString(input.reason) ?? undefined,
+          recordId: readOptionalAgentToolString(input.recordId) ?? undefined,
+          requestId: readOptionalAgentToolString(input.requestId) ?? undefined,
+          syncAliases: readOptionalAgentToolStringArray(input.syncAliases, "syncAliases"),
+          targetRecordId: readOptionalAgentToolString(input.targetRecordId) ?? undefined,
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as WorkflowSyncMaintenanceToolInput,
+        toolId
+      };
+    case "prepareWorkflowBackfillDisposition": {
+      const disposition = readWorkflowBackfillDisposition(input.disposition);
+      const supersededByJobId = readOptionalAgentToolString(input.supersededByJobId) ?? undefined;
+      if (disposition === "superseded" && !supersededByJobId) {
+        throw new Error("supersededByJobId is required when superseding a backfill job.");
+      }
+      return {
+        input: {
+          ...commandContext,
+          disposition,
+          jobId: readRequiredAgentToolString(input.jobId, "jobId"),
+          reason: readRequiredAgentToolString(input.reason, "reason"),
+          supersededByJobId,
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as WorkflowBackfillDispositionToolInput,
+        toolId
+      };
+    }
+    case "requestWorkflowBackfillDisposition": {
+      if (ingress !== "execute") {
+        throw new Error("Execution-phase agent tools are not allowed on the preview ingress.");
+      }
+      const disposition = readWorkflowBackfillDisposition(input.disposition);
+      const supersededByJobId = readOptionalAgentToolString(input.supersededByJobId) ?? undefined;
+      if (disposition === "superseded" && !supersededByJobId) {
+        throw new Error("supersededByJobId is required when superseding a backfill job.");
+      }
+      return {
+        input: {
+          ...commandContext,
+          disposition,
+          jobId: readRequiredAgentToolString(input.jobId, "jobId"),
+          reason: readRequiredAgentToolString(input.reason, "reason"),
+          supersededByJobId,
+          workflowId: readRequiredAgentToolString(input.workflowId, "workflowId")
+        } as WorkflowBackfillDispositionToolInput,
+        toolId
+      };
+    }
     case "createApp":
       return {
         input: {
@@ -3901,9 +4739,18 @@ async function handleAgentToolIngress(
     toolId === "inspectWorkflowDefinition" ||
     toolId === "previewWorkflowTest" ||
     toolId === "readWorkflowHistory" ||
+    toolId === "readWorkflowDependencies" ||
     toolId === "readWorkflowRunDetail" ||
     toolId === "prepareWorkflowDeadLetterReplay" ||
-    toolId === "requestWorkflowDeadLetterReplay";
+    toolId === "requestWorkflowDeadLetterReplay" ||
+    toolId === "prepareWorkflowAggregateMaintenance" ||
+    toolId === "requestWorkflowAggregateMaintenance" ||
+    toolId === "prepareWorkflowLookupMaintenance" ||
+    toolId === "requestWorkflowLookupMaintenance" ||
+    toolId === "prepareWorkflowSyncMaintenance" ||
+    toolId === "requestWorkflowSyncMaintenance" ||
+    toolId === "prepareWorkflowBackfillDisposition" ||
+    toolId === "requestWorkflowBackfillDisposition";
   const workflowOperationsAccess = workflowOperationsTool
     ? await resolveWorkflowOperationsAccess(request, env, {
         deadLetterId:
@@ -3917,7 +4764,16 @@ async function handleAgentToolIngress(
         workflowId:
           toolId === "inspectWorkflowDefinition" ||
           toolId === "previewWorkflowTest" ||
-          toolId === "readWorkflowHistory"
+          toolId === "readWorkflowHistory" ||
+          toolId === "readWorkflowDependencies" ||
+          toolId === "prepareWorkflowAggregateMaintenance" ||
+          toolId === "requestWorkflowAggregateMaintenance" ||
+          toolId === "prepareWorkflowLookupMaintenance" ||
+          toolId === "requestWorkflowLookupMaintenance" ||
+          toolId === "prepareWorkflowSyncMaintenance" ||
+          toolId === "requestWorkflowSyncMaintenance" ||
+          toolId === "prepareWorkflowBackfillDisposition" ||
+          toolId === "requestWorkflowBackfillDisposition"
             ? readNonEmptyString(input.workflowId)
             : null,
         workflowRunId:
@@ -4068,10 +4924,13 @@ async function handleAgentToolIngress(
   const serializedResult = serializeAgentToolResult(result);
   const sanitizedOutput =
     tool.id === "readWorkflowHistory" ||
+    tool.id === "readWorkflowDependencies" ||
     tool.id === "readWorkflowRunDetail" ||
     tool.id === "previewWorkflowTest" ||
     tool.id === "prepareWorkflowDeadLetterReplay" ||
-    tool.id === "requestWorkflowDeadLetterReplay"
+    tool.id === "requestWorkflowDeadLetterReplay" ||
+    tool.id === "prepareWorkflowBackfillDisposition" ||
+    tool.id === "requestWorkflowBackfillDisposition"
       ? {
           diagnostics: [] as string[],
           hiddenFieldIds: [] as string[],
@@ -4086,6 +4945,12 @@ async function handleAgentToolIngress(
         : result.reason === "already_requested"
           ? 409
           : 400
+      : result.kind === "workflow-backfill-disposition" && result.status === "rejected"
+        ? result.reason === "backfill_job_not_found"
+          ? 404
+          : result.reason === "backfill_job_terminal"
+            ? 409
+            : 400
       : 200;
 
   return json({
@@ -4107,6 +4972,337 @@ async function handleAgentToolIngress(
       successorToolId: tool.successorToolId ?? null
     }
   }, { status });
+}
+
+async function handleWorkflowRecipePreviewIngress(
+  request: Request,
+  env: CloudTableEnv,
+  tableId: string
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return methodNotAllowed(request.method, ["POST"]);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return badRequest("Workflow recipe preview body must be valid JSON.");
+  }
+
+  const built = buildWorkflowRecipeProposeInput(body, tableId, "preview");
+  if ("response" in built) {
+    return built.response;
+  }
+
+  const context = await resolveWorkflowRecipeIngressContext(request, env, body);
+  if ("response" in context) {
+    return context.response;
+  }
+
+  return handleAgentToolIngress(
+    buildWorkflowRecipeAgentToolRequest(request, body, context, "proposeWorkflow", built.input),
+    env,
+    "preview"
+  );
+}
+
+async function handleWorkflowRecipeCreateIngress(
+  request: Request,
+  env: CloudTableEnv,
+  tableId: string
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return methodNotAllowed(request.method, ["POST"]);
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return badRequest("Workflow recipe create body must be valid JSON.");
+  }
+
+  const built = buildWorkflowRecipeProposeInput(body, tableId, "create");
+  if ("response" in built) {
+    return built.response;
+  }
+
+  const context = await resolveWorkflowRecipeIngressContext(request, env, body);
+  if ("response" in context) {
+    return context.response;
+  }
+
+  const commandId = readNonEmptyString(body.commandId);
+  const idempotencyKey = readNonEmptyString(body.idempotencyKey);
+  if (!commandId || !idempotencyKey) {
+    return badRequest("commandId and idempotencyKey are required for workflow recipe create.");
+  }
+
+  const proposalResponse = await handleAgentToolIngress(
+    buildWorkflowRecipeAgentToolRequest(request, body, context, "proposeWorkflow", {
+      ...built.input,
+      commandId,
+      idempotencyKey
+    }),
+    env,
+    "preview"
+  );
+  if (!proposalResponse.ok) {
+    return proposalResponse;
+  }
+
+  const proposalBody = (await proposalResponse.json()) as {
+    output?: {
+      command?: unknown;
+      diagnostics?: unknown;
+      proposal?: {
+        metadata?: unknown;
+      };
+    };
+    outputDiagnostics?: unknown;
+    permissionScope?: {
+      policyRevision?: number;
+      principalId?: string;
+      scopeHash?: string;
+      workspaceId?: string;
+    };
+  };
+  const command = isRecord(proposalBody.output?.command) ? proposalBody.output.command : null;
+  if (!command) {
+    return badRequest("Workflow recipe proposal did not produce a workflow.create command.");
+  }
+
+  const createResponse = await handleAgentToolIngress(
+    buildWorkflowRecipeAgentToolRequest(request, body, context, "executeCommand", {
+      command
+    }),
+    env,
+    "execute"
+  );
+  const createBody = (await createResponse.json()) as Record<string, unknown>;
+  const createOutput = isRecord(createBody.output) ? createBody.output : {};
+  const createSummary = {
+    aggregate: createBody.aggregate ?? null,
+    command: createOutput.command ?? null,
+    outputDiagnostics: createBody.outputDiagnostics ?? [],
+    result: createOutput.result ?? createBody.result ?? null
+  };
+  const proposalDiagnostics = Array.isArray(proposalBody.output?.diagnostics)
+    ? proposalBody.output?.diagnostics
+    : [];
+  const outputDiagnostics = Array.isArray(proposalBody.outputDiagnostics)
+    ? proposalBody.outputDiagnostics
+    : [];
+
+  if (!createResponse.ok) {
+    return json(
+      {
+        create: createSummary,
+        diagnostics: [...proposalDiagnostics, ...outputDiagnostics],
+        recipeType: built.recipeType,
+        status: "rejected",
+        workflowId: built.workflowId
+      },
+      { status: createResponse.status }
+    );
+  }
+
+  const publishRequested = body.publish === true || isRecord(body.publish);
+  if (!publishRequested) {
+    return json({
+      create: createSummary,
+      diagnostics: [...proposalDiagnostics, ...outputDiagnostics],
+      metadata: proposalBody.output?.proposal?.metadata ?? null,
+      permissionScope: proposalBody.permissionScope ?? null,
+      recipeType: built.recipeType,
+      status: "draft",
+      workflowId: built.workflowId
+    });
+  }
+
+  const publishOptions = isRecord(body.publish) ? body.publish : {};
+  const publishCommandId =
+    readNonEmptyString(publishOptions.commandId) ?? readNonEmptyString(body.publishCommandId);
+  const publishIdempotencyKey =
+    readNonEmptyString(publishOptions.idempotencyKey) ?? readNonEmptyString(body.publishIdempotencyKey);
+  if (!publishCommandId || !publishIdempotencyKey) {
+    return badRequest(
+      "publish.commandId and publish.idempotencyKey are required when workflow recipe create requests publish."
+    );
+  }
+
+  const publishResponse = await handleFetch(
+    new Request(new URL(`/v1/workflows/${built.workflowId}/publish`, request.url), {
+      body: JSON.stringify({
+        actor: {
+          mode: "agent",
+          principalId: context.principalId
+        },
+        commandId: publishCommandId,
+        idempotencyKey: publishIdempotencyKey,
+        permissionScopeHash: body.permissionScopeHash,
+        permissionsVersion: body.policyRevision,
+        workspaceId: context.workspaceId
+      }),
+      headers: {
+        "content-type": "application/json"
+      },
+      method: "POST"
+    }),
+    env,
+    {} as ExecutionContext
+  );
+  const publishBody = (await publishResponse.json()) as Record<string, unknown>;
+
+  return json(
+    {
+      create: createSummary,
+      diagnostics: [...proposalDiagnostics, ...outputDiagnostics],
+      metadata: proposalBody.output?.proposal?.metadata ?? null,
+      permissionScope: proposalBody.permissionScope ?? null,
+      publish: publishBody,
+      recipeType: built.recipeType,
+      status: publishResponse.ok ? "published" : "publish_rejected",
+      workflowId: built.workflowId
+    },
+    { status: publishResponse.ok ? 200 : publishResponse.status }
+  );
+}
+
+function buildWorkflowRecipeAgentToolRequest(
+  request: Request,
+  body: Record<string, unknown>,
+  context: {
+    principalId: string;
+    workspaceId: string;
+  },
+  toolId: "executeCommand" | "proposeWorkflow",
+  input: Record<string, unknown>
+): Request {
+  return new Request(new URL(`/v1/agent-tools/${toolId === "executeCommand" ? "execute" : "preview"}`, request.url), {
+    body: JSON.stringify({
+      input,
+      permissionScopeHash: body.permissionScopeHash,
+      policyRevision: body.policyRevision,
+      principalId: context.principalId,
+      toolId,
+      workspaceId: context.workspaceId
+    }),
+    headers: {
+      "content-type": "application/json"
+    },
+    method: "POST"
+  });
+}
+
+async function resolveWorkflowRecipeIngressContext(
+  request: Request,
+  env: CloudTableEnv,
+  body: Record<string, unknown>
+): Promise<{ principalId: string; workspaceId: string } | { response: Response }> {
+  const workspaceId = readNonEmptyString(body.workspaceId);
+  if (!workspaceId) {
+    return {
+      response: badRequest("workspaceId is required for workflow recipe ingress.")
+    };
+  }
+
+  const bodyPrincipalId = readNonEmptyString(body.principalId);
+  if (bodyPrincipalId) {
+    return {
+      principalId: bodyPrincipalId,
+      workspaceId
+    };
+  }
+
+  const sessionPrincipal = await resolveSessionPrincipalForWorkspace(request, env, workspaceId);
+  if ("response" in sessionPrincipal) {
+    return {
+      response: sessionPrincipal.response
+    };
+  }
+
+  return {
+    principalId: sessionPrincipal.principalId,
+    workspaceId
+  };
+}
+
+function buildWorkflowRecipeProposeInput(
+  body: Record<string, unknown>,
+  tableId: string,
+  ingressName: "create" | "preview"
+): { input: Record<string, unknown>; recipeType: "direct_sync" | "grouped_rollup"; workflowId: string } | { response: Response } {
+  const recipeType = readNonEmptyString(body.recipeType);
+  if (recipeType !== "direct_sync" && recipeType !== "grouped_rollup") {
+    return { response: badRequest("recipeType must be either direct_sync or grouped_rollup.") };
+  }
+
+  const workflowId = readNonEmptyString(body.workflowId);
+  const name = readNonEmptyString(body.name);
+  if (!workflowId || !name) {
+    return { response: badRequest(`workflowId and name are required for workflow recipe ${ingressName}.`) };
+  }
+
+  const businessRule =
+    readNonEmptyString(body.businessRule) ??
+    (recipeType === "direct_sync"
+      ? "Sync source field changes into matching target records."
+      : "Recompute grouped rollup fields when source fields change.");
+  const input: Record<string, unknown> = {
+    businessRule,
+    name,
+    tableId,
+    triggerId: "field_changed",
+    workflowId
+  };
+
+  if (recipeType === "direct_sync") {
+    const syncSourceFieldId = readNonEmptyString(body.syncSourceFieldId);
+    const syncTargetFieldId = readNonEmptyString(body.syncTargetFieldId);
+    const relatedSourceFieldId = readNonEmptyString(body.relatedSourceFieldId);
+    if (!syncSourceFieldId || !syncTargetFieldId || !relatedSourceFieldId) {
+      return {
+        response: badRequest(
+          `syncSourceFieldId, syncTargetFieldId, and relatedSourceFieldId are required for direct_sync recipe ${ingressName}.`
+        )
+      };
+    }
+
+    input.actionIds = ["sync_related_field"];
+    input.relatedSourceFieldId = relatedSourceFieldId;
+    input.syncSourceFieldId = syncSourceFieldId;
+    input.syncTargetFieldId = syncTargetFieldId;
+
+    const relatedTargetFieldId = readNonEmptyString(body.relatedTargetFieldId);
+    if (relatedTargetFieldId) {
+      input.relatedTargetFieldId = relatedTargetFieldId;
+    }
+  } else {
+    if (!Array.isArray(body.rollupFieldIds) || body.rollupFieldIds.length === 0) {
+      return {
+        response: badRequest(`rollupFieldIds must be a non-empty array for grouped_rollup recipe ${ingressName}.`)
+      };
+    }
+
+    try {
+      input.actionIds = ["set_cell"];
+      input.rollupFieldIds = readRequiredAgentToolStringArray(body.rollupFieldIds, "rollupFieldIds");
+    } catch (error) {
+      return {
+        response: badRequest(
+          error instanceof Error ? error.message : `rollupFieldIds were invalid for grouped_rollup recipe ${ingressName}.`
+        )
+      };
+    }
+  }
+
+  return {
+    input,
+    recipeType,
+    workflowId
+  };
 }
 
 async function handlePermissionExplainIngress(
@@ -4585,6 +5781,36 @@ function readRequiredAgentToolString(value: unknown, key: string): string {
 
 function readOptionalAgentToolString(value: unknown): string | null {
   return readNonEmptyString(value);
+}
+
+function readWorkflowMaintenanceKind(value: unknown): "backfill" | "recompute" {
+  if (value !== "backfill" && value !== "recompute") {
+    throw new Error("kind must be either backfill or recompute for this agent tool.");
+  }
+
+  return value;
+}
+
+function readWorkflowBackfillDisposition(value: unknown): "abandoned" | "superseded" {
+  if (value !== "abandoned" && value !== "superseded") {
+    throw new Error("disposition must be either abandoned or superseded for this agent tool.");
+  }
+
+  return value;
+}
+
+function readOptionalAgentToolStringArray(value: unknown, key: string): string[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`${key} must be an array for this agent tool.`);
+  }
+
+  return value.map((entry, index) =>
+    readRequiredAgentToolString(entry, `${key}[${index}]`)
+  );
 }
 
 function readRequiredAgentToolStringArray(value: unknown, key: string): string[] {
@@ -5241,6 +6467,7 @@ async function resolveWorkspaceCatalogAccess(
 ): Promise<
   | {
       principalId: string;
+      snapshot: EffectivePermissionSnapshot;
       workspaceId: string;
     }
   | {
@@ -5317,6 +6544,7 @@ async function resolveWorkspaceCatalogAccess(
 
   return {
     principalId,
+    snapshot: resolvedSnapshot.snapshot,
     workspaceId: input.workspaceId
   };
 }

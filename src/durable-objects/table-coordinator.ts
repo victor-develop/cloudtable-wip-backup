@@ -8,9 +8,10 @@ import {
 } from "../core/commands/transcript";
 import { createEventLedger } from "../core/events/event-ledger";
 import { createCloudTableD1Repository } from "../core/persistence/cloudtable-d1-repository";
-import { createRuntime } from "../runtime/bootstrap";
+import { createRuntime, createRuntimeWithSnapshot } from "../runtime/bootstrap";
 import type { CloudTableEnv } from "../runtime/env";
 import { badRequest, json } from "../runtime/http";
+import { readLatestPermissionSnapshotForScope } from "../runtime/permission-snapshot";
 import { publishOutboxEntries } from "../runtime/queue-publisher";
 
 type DurableObjectContextLike = DurableObjectState;
@@ -147,15 +148,27 @@ export class TableCoordinatorDurableObject {
     }
 
     const eventId = crypto.randomUUID();
+    const snapshot = await readLatestPermissionSnapshotForScope(this.env.DB, {
+      permissionScopeHash: command.permissionScopeHash ?? null,
+      principalId: command.actor.principalId,
+      workspaceId: command.workspaceId
+    });
+    const permissionDecision = createRuntimeWithSnapshot(
+      this.env,
+      snapshot
+    ).permissionEngine.evaluateCommand(command);
+    if (!permissionDecision.allowed) {
+      throw new Error(
+        `Coordinator-owned cell set denied: ${permissionDecision.reasons.join(", ")}`
+      );
+    }
+
     const event = buildAcceptedEvent(command, eventId);
     const result: CommandResult = {
       accepted: true,
       diagnostics: [],
       events: [event],
-      permission: {
-        allowed: true,
-        reasons: []
-      },
+      permission: permissionDecision,
       replayProjection: toReplayProjection(logicalTime, []),
       sideEffects: buildAcceptedSideEffects(command, eventId),
       status: "accepted"

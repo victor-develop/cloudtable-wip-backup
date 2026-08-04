@@ -5,6 +5,13 @@
   "observability": {
     "enabled": true
   },
+  "vars": {
+    "AUTH_ALLOWED_REDIRECT_ORIGINS": "https://app.example.com",
+    "AUTH_COOKIE_NAME": "cloudtable_session",
+    "AUTH_SESSION_TTL_SECONDS": "604800",
+    "GOOGLE_CLIENT_ID": "replace-with-google-oauth-client-id",
+    "GOOGLE_OAUTH_REDIRECT_URI": "https://cloudtable.example.com/v1/auth/google/callback"
+  },
   "d1_databases": [
     {
       "binding": "DB",

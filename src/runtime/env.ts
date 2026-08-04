@@ -29,6 +29,7 @@ export type CloudTableEnv = {
   DB: D1Database;
   ARTIFACTS_BUCKET: R2Bucket;
   AUTH_SESSION_SECRET?: string;
+  AUTH_ALLOWED_REDIRECT_ORIGINS?: string;
   AUTH_COOKIE_NAME?: string;
   AUTH_SESSION_TTL_SECONDS?: string;
   EVENT_FANOUT_QUEUE: Queue<CloudTableQueueMessage>;

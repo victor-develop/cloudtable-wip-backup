@@ -19,12 +19,20 @@ import { readRecordDetail, readRecordFields } from "./direct-record-read";
 import type { PermissionProjectionInput } from "../core/permissions/types";
 import { readViewQuery } from "./view-query-read";
 import {
+  readWorkflowDependencyOperations,
   readWorkflowHistoryForRun,
   readWorkflowHistoryForWorkflow,
+  requestWorkflowBackfillJobDisposition,
   requestWorkflowDeadLetterReplay
 } from "./workflow-operations";
+import { ensureWorkflowDependencyIndexForWorkflow } from "./workflow-dependency-index";
 import { readWorkflowDefinitionMetadata } from "./workflow-definition";
-import { previewWorkflowTestRun } from "./workflow-runtime";
+import {
+  previewWorkflowTestRun,
+  requestManualAggregateMaintenance,
+  requestManualLookupMaintenance,
+  requestManualSyncMaintenance
+} from "./workflow-runtime";
 import { createAppInspector } from "./app-inspector";
 import {
   readTableSchemaMetadata,
@@ -641,6 +649,15 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
       return readWorkflowHistoryForWorkflow(env.DB, input.workspaceId, input.workflowId);
     }
   };
+  const workflowDependencyOperationsReader = {
+    async read(input: { workflowId: string; workspaceId: string }) {
+      await ensureWorkflowDependencyIndexForWorkflow(env.DB, {
+        workflowId: input.workflowId,
+        workspaceId: input.workspaceId
+      });
+      return readWorkflowDependencyOperations(env.DB, input.workspaceId, input.workflowId);
+    }
+  };
   const workflowRunReader = {
     read(input: { workflowRunId: string; workspaceId: string }) {
       return readWorkflowHistoryForRun(env.DB, input.workspaceId, input.workflowRunId);
@@ -680,6 +697,188 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
               reason: result.reason,
               replayRequestId,
               status: "rejected" as const
+          }
+      );
+    }
+  };
+  const workflowAggregateMaintenanceRequester = {
+    requestMaintenance(input: {
+      actor: {
+        mode: "agent";
+        principalId: string;
+      };
+      aggregateAliases?: string[];
+      changedFieldIds?: string[];
+      kind: "backfill" | "recompute";
+      reason?: string;
+      recordId?: string;
+      requestId?: string;
+      workflowId: string;
+      workspaceId: string;
+    }) {
+      const requestId =
+        input.requestId ?? `workflow-aggregate-maintenance:${input.workflowId}:${input.kind}`;
+      return requestManualAggregateMaintenance(env, {
+        aggregateAliases: input.aggregateAliases,
+        changedFieldIds: input.changedFieldIds,
+        kind: input.kind,
+        principalId: input.actor.principalId,
+        reason: input.reason,
+        recordId: input.recordId,
+        requestId,
+        workflowId: input.workflowId,
+        workspaceId: input.workspaceId
+      }).then((result) =>
+        result.ok
+          ? {
+              aliases: result.aggregateAliases,
+              requestId,
+              status: result.status,
+              workflowId: input.workflowId,
+              workflowVersionId: result.workflowVersionId
+            }
+          : {
+              message: result.message,
+              reason: result.reason,
+              requestId,
+              status: "rejected" as const,
+              workflowId: input.workflowId
+            }
+      );
+    }
+  };
+  const workflowBackfillDispositionRequester = {
+    requestDisposition(input: {
+      actor: {
+        mode: "agent";
+        principalId: string;
+      };
+      disposition: "abandoned" | "superseded";
+      jobId: string;
+      reason: string;
+      supersededByJobId?: string;
+      workflowId: string;
+      workspaceId: string;
+    }) {
+      return requestWorkflowBackfillJobDisposition(env.DB, {
+        disposition: input.disposition,
+        jobId: input.jobId,
+        operatorPrincipalId: input.actor.principalId,
+        reason: input.reason,
+        supersededByJobId: input.supersededByJobId,
+        workflowId: input.workflowId,
+        workspaceId: input.workspaceId
+      }).then((result) =>
+        result.ok
+          ? {
+              jobId: result.jobId,
+              operatorReason: result.operatorReason,
+              status: result.status,
+              supersededByJobId: result.supersededByJobId,
+              workflowId: result.workflowId
+            }
+          : {
+              jobId: input.jobId,
+              message: result.message,
+              reason: result.reason,
+              status: "rejected" as const,
+              workflowId: input.workflowId
+            }
+      );
+    }
+  };
+  const workflowLookupMaintenanceRequester = {
+    requestMaintenance(input: {
+      actor: {
+        mode: "agent";
+        principalId: string;
+      };
+      changedFieldIds?: string[];
+      kind: "backfill" | "recompute";
+      lookupAliases?: string[];
+      reason?: string;
+      recordId?: string;
+      requestId?: string;
+      targetRecordId?: string;
+      workflowId: string;
+      workspaceId: string;
+    }) {
+      const requestId =
+        input.requestId ?? `workflow-lookup-maintenance:${input.workflowId}:${input.kind}`;
+      return requestManualLookupMaintenance(env, {
+        changedFieldIds: input.changedFieldIds,
+        kind: input.kind,
+        principalId: input.actor.principalId,
+        reason: input.reason,
+        recordId: input.recordId,
+        requestId,
+        lookupAliases: input.lookupAliases,
+        targetRecordId: input.targetRecordId,
+        workflowId: input.workflowId,
+        workspaceId: input.workspaceId
+      }).then((result) =>
+        result.ok
+          ? {
+              aliases: result.lookupAliases,
+              requestId,
+              status: result.status,
+              workflowId: input.workflowId,
+              workflowVersionId: result.workflowVersionId
+            }
+          : {
+              message: result.message,
+              reason: result.reason,
+              requestId,
+              status: "rejected" as const,
+              workflowId: input.workflowId
+            }
+      );
+    }
+  };
+  const workflowSyncMaintenanceRequester = {
+    requestMaintenance(input: {
+      actor: {
+        mode: "agent";
+        principalId: string;
+      };
+      changedFieldIds?: string[];
+      kind: "backfill" | "recompute";
+      reason?: string;
+      recordId?: string;
+      requestId?: string;
+      syncAliases?: string[];
+      targetRecordId?: string;
+      workflowId: string;
+      workspaceId: string;
+    }) {
+      const requestId =
+        input.requestId ?? `workflow-sync-maintenance:${input.workflowId}:${input.kind}`;
+      return requestManualSyncMaintenance(env, {
+        changedFieldIds: input.changedFieldIds,
+        kind: input.kind,
+        principalId: input.actor.principalId,
+        reason: input.reason,
+        recordId: input.recordId,
+        requestId,
+        syncAliases: input.syncAliases,
+        targetRecordId: input.targetRecordId,
+        workflowId: input.workflowId,
+        workspaceId: input.workspaceId
+      }).then((result) =>
+        result.ok
+          ? {
+              aliases: result.syncAliases,
+              requestId,
+              status: result.status,
+              workflowId: input.workflowId,
+              workflowVersionId: result.workflowVersionId
+            }
+          : {
+              message: result.message,
+              reason: result.reason,
+              requestId,
+              status: "rejected" as const,
+              workflowId: input.workflowId
             }
       );
     }
@@ -748,6 +947,8 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
     activityHistoryReader,
     commandBus,
     workflowTestPreviewReader,
+    workflowAggregateMaintenanceRequester,
+    workflowBackfillDispositionRequester,
     permissionPersonaPreviewReader,
     permissionEngine,
     tableSchemaInspector,
@@ -757,6 +958,9 @@ export function createRuntime(env: CloudTableEnv): CloudTableRuntime {
     viewPlanner,
     viewQueryReader,
     workflowDeadLetterReplayRequester,
+    workflowLookupMaintenanceRequester,
+    workflowSyncMaintenanceRequester,
+    workflowDependencyOperationsReader,
     workflowHistoryReader,
     workflowRunReader,
     workflowOperatorRegistry,
@@ -815,6 +1019,15 @@ export function createRuntimeWithSnapshot(
       return readWorkflowHistoryForWorkflow(env.DB, input.workspaceId, input.workflowId);
     }
   };
+  const workflowDependencyOperationsReader = {
+    async read(input: { workflowId: string; workspaceId: string }) {
+      await ensureWorkflowDependencyIndexForWorkflow(env.DB, {
+        workflowId: input.workflowId,
+        workspaceId: input.workspaceId
+      });
+      return readWorkflowDependencyOperations(env.DB, input.workspaceId, input.workflowId);
+    }
+  };
   const workflowRunReader = {
     read(input: { workflowRunId: string; workspaceId: string }) {
       return readWorkflowHistoryForRun(env.DB, input.workspaceId, input.workflowRunId);
@@ -854,6 +1067,148 @@ export function createRuntimeWithSnapshot(
               reason: result.reason,
               replayRequestId,
               status: "rejected" as const
+            }
+      );
+    }
+  };
+  const workflowAggregateMaintenanceRequester = {
+    requestMaintenance(input: {
+      actor: {
+        mode: "agent";
+        principalId: string;
+      };
+      aggregateAliases?: string[];
+      changedFieldIds?: string[];
+      kind: "backfill" | "recompute";
+      reason?: string;
+      recordId?: string;
+      requestId?: string;
+      workflowId: string;
+      workspaceId: string;
+    }) {
+      const requestId =
+        input.requestId ?? `workflow-aggregate-maintenance:${input.workflowId}:${input.kind}`;
+      return requestManualAggregateMaintenance(env, {
+        aggregateAliases: input.aggregateAliases,
+        changedFieldIds: input.changedFieldIds,
+        kind: input.kind,
+        principalId: input.actor.principalId,
+        reason: input.reason,
+        recordId: input.recordId,
+        requestId,
+        workflowId: input.workflowId,
+        workspaceId: input.workspaceId
+      }).then((result) =>
+        result.ok
+          ? {
+              aliases: result.aggregateAliases,
+              requestId,
+              status: result.status,
+              workflowId: input.workflowId,
+              workflowVersionId: result.workflowVersionId
+            }
+          : {
+              message: result.message,
+              reason: result.reason,
+              requestId,
+              status: "rejected" as const,
+              workflowId: input.workflowId
+            }
+      );
+    }
+  };
+  const workflowSyncMaintenanceRequester = {
+    requestMaintenance(input: {
+      actor: {
+        mode: "agent";
+        principalId: string;
+      };
+      changedFieldIds?: string[];
+      kind: "backfill" | "recompute";
+      reason?: string;
+      recordId?: string;
+      requestId?: string;
+      syncAliases?: string[];
+      targetRecordId?: string;
+      workflowId: string;
+      workspaceId: string;
+    }) {
+      const requestId =
+        input.requestId ?? `workflow-sync-maintenance:${input.workflowId}:${input.kind}`;
+      return requestManualSyncMaintenance(env, {
+        changedFieldIds: input.changedFieldIds,
+        kind: input.kind,
+        principalId: input.actor.principalId,
+        reason: input.reason,
+        recordId: input.recordId,
+        requestId,
+        syncAliases: input.syncAliases,
+        targetRecordId: input.targetRecordId,
+        workflowId: input.workflowId,
+        workspaceId: input.workspaceId
+      }).then((result) =>
+        result.ok
+          ? {
+              aliases: result.syncAliases,
+              requestId,
+              status: result.status,
+              workflowId: input.workflowId,
+              workflowVersionId: result.workflowVersionId
+            }
+          : {
+              message: result.message,
+              reason: result.reason,
+              requestId,
+              status: "rejected" as const,
+              workflowId: input.workflowId
+            }
+      );
+    }
+  };
+  const workflowLookupMaintenanceRequester = {
+    requestMaintenance(input: {
+      actor: {
+        mode: "agent";
+        principalId: string;
+      };
+      changedFieldIds?: string[];
+      kind: "backfill" | "recompute";
+      lookupAliases?: string[];
+      reason?: string;
+      recordId?: string;
+      requestId?: string;
+      targetRecordId?: string;
+      workflowId: string;
+      workspaceId: string;
+    }) {
+      const requestId =
+        input.requestId ?? `workflow-lookup-maintenance:${input.workflowId}:${input.kind}`;
+      return requestManualLookupMaintenance(env, {
+        changedFieldIds: input.changedFieldIds,
+        kind: input.kind,
+        principalId: input.actor.principalId,
+        reason: input.reason,
+        recordId: input.recordId,
+        requestId,
+        lookupAliases: input.lookupAliases,
+        targetRecordId: input.targetRecordId,
+        workflowId: input.workflowId,
+        workspaceId: input.workspaceId
+      }).then((result) =>
+        result.ok
+          ? {
+              aliases: result.lookupAliases,
+              requestId,
+              status: result.status,
+              workflowId: input.workflowId,
+              workflowVersionId: result.workflowVersionId
+            }
+          : {
+              message: result.message,
+              reason: result.reason,
+              requestId,
+              status: "rejected" as const,
+              workflowId: input.workflowId
             }
       );
     }
@@ -925,6 +1280,47 @@ export function createRuntimeWithSnapshot(
     activityHistoryReader,
     commandBus,
     workflowTestPreviewReader,
+    workflowAggregateMaintenanceRequester,
+    workflowBackfillDispositionRequester: {
+      requestDisposition(input: {
+        actor: {
+          mode: "agent";
+          principalId: string;
+        };
+        disposition: "abandoned" | "superseded";
+        jobId: string;
+        reason: string;
+        supersededByJobId?: string;
+        workflowId: string;
+        workspaceId: string;
+      }) {
+        return requestWorkflowBackfillJobDisposition(env.DB, {
+          disposition: input.disposition,
+          jobId: input.jobId,
+          operatorPrincipalId: input.actor.principalId,
+          reason: input.reason,
+          supersededByJobId: input.supersededByJobId,
+          workflowId: input.workflowId,
+          workspaceId: input.workspaceId
+        }).then((result) =>
+          result.ok
+            ? {
+                jobId: result.jobId,
+                operatorReason: result.operatorReason,
+                status: result.status,
+                supersededByJobId: result.supersededByJobId,
+                workflowId: result.workflowId
+              }
+            : {
+                jobId: input.jobId,
+                message: result.message,
+                reason: result.reason,
+                status: "rejected" as const,
+                workflowId: input.workflowId
+              }
+        );
+      }
+    },
     permissionPersonaPreviewReader,
     permissionEngine,
     tableSchemaInspector,
@@ -934,6 +1330,9 @@ export function createRuntimeWithSnapshot(
     viewPlanner,
     viewQueryReader,
     workflowDeadLetterReplayRequester,
+    workflowLookupMaintenanceRequester,
+    workflowSyncMaintenanceRequester,
+    workflowDependencyOperationsReader,
     workflowHistoryReader,
     workflowRunReader,
     workflowOperatorRegistry,

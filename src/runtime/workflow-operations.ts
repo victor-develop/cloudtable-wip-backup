@@ -55,6 +55,102 @@ type WorkflowVersionLookupRow = {
   definition_json: string;
 };
 
+type WorkflowDependencyIndexRow = {
+  alias: string;
+  definition_json: string;
+  dependency_field_ids_json: string;
+  dependency_kind: string;
+  source_table_id: string | null;
+  status: string;
+  target_table_id: string | null;
+  trigger_table_id: string | null;
+  updated_at: string;
+  workflow_version_id: string;
+};
+
+type WorkflowBackfillJobRow = {
+  attempt_count: number;
+  chunk_size: number;
+  completed_at: string | null;
+  cursor_json: string | null;
+  dependency_alias: string;
+  dependency_kind: string;
+  id: string;
+  last_error: string | null;
+  operator_actor_principal_id: string | null;
+  operator_reason: string | null;
+  operator_transition_at: string | null;
+  processed_count: number;
+  reason: string;
+  status: string;
+  superseded_by_job_id: string | null;
+  updated_at: string;
+  workflow_version_id: string;
+};
+
+type WorkflowDependencyOperationsBackfillJob = {
+  attemptCount: number;
+  chunkSize: number;
+  completedAt: string | null;
+  cursor: Record<string, unknown> | null;
+  dependencyAlias: string;
+  dependencyKind: string;
+  id: string;
+  lastError: string | null;
+  operatorActorPrincipalId: string | null;
+  operatorReason: string | null;
+  operatorTransitionAt: string | null;
+  processedCount: number;
+  reason: string;
+  status: string;
+  supersededByJobId: string | null;
+  updatedAt: string;
+  workflowVersionId: string;
+};
+
+type WorkflowDependencyOperationsDependency = {
+  alias: string;
+  definition: Record<string, unknown> | null;
+  dependencyFieldIds: string[];
+  kind: string;
+  sourceTableId: string | null;
+  status: string;
+  targetTableId: string | null;
+  triggerTableId: string | null;
+  updatedAt: string;
+  workflowVersionId: string;
+};
+
+type WorkflowDependencyOperationsSuggestedMaintenanceRequest = {
+  input: {
+    aggregateAliases?: string[];
+    kind: "backfill";
+    lookupAliases?: string[];
+    reason: string;
+    requestId: string;
+    syncAliases?: string[];
+    workflowId: string;
+    workspaceId: string;
+  };
+  reason: "attention_required_backfill";
+  successorToolId:
+    | "requestWorkflowAggregateMaintenance"
+    | "requestWorkflowLookupMaintenance"
+    | "requestWorkflowSyncMaintenance";
+  toolId:
+    | "prepareWorkflowAggregateMaintenance"
+    | "prepareWorkflowLookupMaintenance"
+    | "prepareWorkflowSyncMaintenance";
+};
+
+const STALE_RUNNING_BACKFILL_JOB_MS = 15 * 60 * 1000;
+const INTENTIONALLY_CLOSED_BACKFILL_STATUSES = new Set(["abandoned", "superseded"]);
+const TERMINAL_BACKFILL_STATUSES = new Set([
+  "abandoned",
+  "completed",
+  "superseded"
+]);
+
 type ReplayRequestPayload = {
   replayRequest?: {
     id: string;
@@ -130,6 +226,243 @@ function parseJsonRecord(input: string | null): Record<string, unknown> | null {
 function parseReplayPayload(input: string): ReplayRequestPayload {
   const parsed = parseJsonRecord(input);
   return parsed ? (parsed as ReplayRequestPayload) : {};
+}
+
+function parseStringArray(input: string): string[] {
+  try {
+    const parsed = JSON.parse(input) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function incrementCount(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function isStaleRunningBackfillJob(job: WorkflowDependencyOperationsBackfillJob): boolean {
+  if (job.status !== "running") {
+    return false;
+  }
+
+  const updatedAtMs = Date.parse(job.updatedAt);
+  return Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs >= STALE_RUNNING_BACKFILL_JOB_MS;
+}
+
+function workflowMaintenanceReasonRequestId(
+  dependencyKind: "aggregate" | "lookup" | "sync",
+  workflowId: string,
+  maintenanceKind: "backfill" | "recompute",
+  reason: string
+): string {
+  return `${workflowMaintenanceRequestId(
+    dependencyKind,
+    workflowId,
+    maintenanceKind
+  )}:${encodeURIComponent(reason)}`;
+}
+
+function summarizeWorkflowDependencyOperations(input: {
+  backfillJobs: WorkflowDependencyOperationsBackfillJob[];
+  dependencies: WorkflowDependencyOperationsDependency[];
+}) {
+  const backfillJobsByStatus: Record<string, number> = {};
+  const dependenciesByKind: Record<string, number> = {};
+  const dependenciesByStatus: Record<string, number> = {};
+
+  for (const dependency of input.dependencies) {
+    incrementCount(dependenciesByKind, dependency.kind);
+    incrementCount(dependenciesByStatus, dependency.status);
+  }
+
+  for (const job of input.backfillJobs) {
+    incrementCount(backfillJobsByStatus, job.status);
+  }
+
+  const staleRunningBackfillJobs = input.backfillJobs.filter(isStaleRunningBackfillJob);
+  const intentionallyClosedBackfillJobs = input.backfillJobs
+    .filter((job) => INTENTIONALLY_CLOSED_BACKFILL_STATUSES.has(job.status))
+    .map((job) => ({
+      dependencyAlias: job.dependencyAlias,
+      dependencyKind: job.dependencyKind,
+      id: job.id,
+      operatorAction: job.status === "superseded" ? "superseded_backfill" : "abandoned_backfill",
+      operatorActorPrincipalId: job.operatorActorPrincipalId,
+      operatorReason: job.operatorReason,
+      operatorTransitionAt: job.operatorTransitionAt,
+      reason: job.reason,
+      status: job.status,
+      supersededByJobId: job.supersededByJobId,
+      workflowVersionId: job.workflowVersionId
+    }));
+  const attentionRequiredBackfillJobs = input.backfillJobs
+    .filter(
+      (job) =>
+        job.status === "failed" || job.lastError != null || isStaleRunningBackfillJob(job)
+    )
+    .map((job) => ({
+      dependencyAlias: job.dependencyAlias,
+      dependencyKind: job.dependencyKind,
+      id: job.id,
+      lastError: job.lastError,
+      operatorAction: "retry_backfill",
+      reason: job.reason,
+      staleRunning: isStaleRunningBackfillJob(job),
+      status: job.status,
+      workflowVersionId: job.workflowVersionId
+    }));
+  const pendingBackfillJobCount = input.backfillJobs.filter((job) =>
+    ["queued", "running"].includes(job.status)
+  ).length;
+  const maintenanceState =
+    attentionRequiredBackfillJobs.length > 0
+      ? "attention_required"
+      : pendingBackfillJobCount > 0
+        ? "active"
+        : input.backfillJobs.length > 0
+          ? "complete"
+          : "idle";
+
+  return {
+    attentionRequiredBackfillJobs,
+    backfillJobsByStatus,
+    abandonedBackfillJobCount: input.backfillJobs.filter((job) => job.status === "abandoned")
+      .length,
+    completedBackfillJobCount: input.backfillJobs.filter((job) => job.status === "completed")
+      .length,
+    dependencyCount: input.dependencies.length,
+    dependenciesByKind,
+    dependenciesByStatus,
+    failedBackfillJobCount: attentionRequiredBackfillJobs.length,
+    intentionallyClosedBackfillJobs,
+    maintenanceState,
+    pendingBackfillJobCount,
+    resumableBackfillJobCount: input.backfillJobs.filter((job) => job.cursor != null).length,
+    runningBackfillJobCount: input.backfillJobs.filter((job) => job.status === "running").length,
+    totalBackfillProcessedCount: input.backfillJobs.reduce(
+      (total, job) => total + job.processedCount,
+      0
+    ),
+    staleRunningBackfillJobCount: staleRunningBackfillJobs.length,
+    supersededBackfillJobCount: input.backfillJobs.filter((job) => job.status === "superseded")
+      .length,
+    terminalBackfillJobCount: input.backfillJobs.filter((job) =>
+      TERMINAL_BACKFILL_STATUSES.has(job.status)
+    ).length,
+    totalBackfillJobCount: input.backfillJobs.length
+  };
+}
+
+function workflowMaintenanceRequestId(
+  dependencyKind: "aggregate" | "lookup" | "sync",
+  workflowId: string,
+  maintenanceKind: "backfill" | "recompute"
+): string {
+  return `workflow-${dependencyKind}-maintenance:${workflowId}:${maintenanceKind}`;
+}
+
+function suggestWorkflowMaintenanceRequests(input: {
+  backfillJobs: WorkflowDependencyOperationsBackfillJob[];
+  workflowId: string;
+  workspaceId: string;
+}): WorkflowDependencyOperationsSuggestedMaintenanceRequest[] {
+  const aliasesByKindAndReason = new Map<"aggregate" | "lookup" | "sync", Map<string, Set<string>>>();
+
+  for (const job of input.backfillJobs) {
+    if (
+      (job.status !== "failed" && job.lastError == null && !isStaleRunningBackfillJob(job)) ||
+      !["aggregate", "lookup", "sync"].includes(job.dependencyKind)
+    ) {
+      continue;
+    }
+
+    const dependencyKind = job.dependencyKind as "aggregate" | "lookup" | "sync";
+    const aliasesByReason =
+      aliasesByKindAndReason.get(dependencyKind) ?? new Map<string, Set<string>>();
+    const aliases = aliasesByReason.get(job.reason) ?? new Set<string>();
+    aliases.add(job.dependencyAlias);
+    aliasesByReason.set(job.reason, aliases);
+    aliasesByKindAndReason.set(dependencyKind, aliasesByReason);
+  }
+
+  const suggestions: WorkflowDependencyOperationsSuggestedMaintenanceRequest[] = [];
+  const kinds: Array<"aggregate" | "lookup" | "sync"> = ["aggregate", "lookup", "sync"];
+
+  for (const dependencyKind of kinds) {
+    const aliasesByReason = aliasesByKindAndReason.get(dependencyKind);
+    if (!aliasesByReason) {
+      continue;
+    }
+
+    for (const [reason, aliases] of [...aliasesByReason.entries()].sort(([left], [right]) =>
+      left.localeCompare(right)
+    )) {
+      const sortedAliases = [...aliases].sort();
+      suggestions.push(
+        dependencyKind === "aggregate"
+          ? {
+              input: {
+                aggregateAliases: sortedAliases,
+                kind: "backfill",
+                reason,
+                requestId: workflowMaintenanceReasonRequestId(
+                  "aggregate",
+                  input.workflowId,
+                  "backfill",
+                  reason
+                ),
+                workflowId: input.workflowId,
+                workspaceId: input.workspaceId
+              },
+              reason: "attention_required_backfill",
+              successorToolId: "requestWorkflowAggregateMaintenance",
+              toolId: "prepareWorkflowAggregateMaintenance"
+            }
+          : dependencyKind === "lookup"
+            ? {
+                input: {
+                  kind: "backfill",
+                  lookupAliases: sortedAliases,
+                  reason,
+                  requestId: workflowMaintenanceReasonRequestId(
+                    "lookup",
+                    input.workflowId,
+                    "backfill",
+                    reason
+                  ),
+                  workflowId: input.workflowId,
+                  workspaceId: input.workspaceId
+                },
+                reason: "attention_required_backfill",
+                successorToolId: "requestWorkflowLookupMaintenance",
+                toolId: "prepareWorkflowLookupMaintenance"
+              }
+          : {
+              input: {
+                kind: "backfill",
+                reason,
+                requestId: workflowMaintenanceReasonRequestId(
+                  "sync",
+                  input.workflowId,
+                  "backfill",
+                  reason
+                ),
+                syncAliases: sortedAliases,
+                workflowId: input.workflowId,
+                workspaceId: input.workspaceId
+              },
+              reason: "attention_required_backfill",
+              successorToolId: "requestWorkflowSyncMaintenance",
+              toolId: "prepareWorkflowSyncMaintenance"
+            }
+      );
+    }
+  }
+
+  return suggestions;
 }
 
 function isWorkflowOperationsAuthorized(snapshot: EffectivePermissionSnapshot): boolean {
@@ -376,6 +709,228 @@ export async function readWorkflowHistoryForRun(
     await loadWorkflowSteps(db, run.id),
     await loadWorkflowDeadLetters(db, run.id)
   );
+}
+
+export async function readWorkflowDependencyOperations(
+  db: D1Database,
+  workspaceId: string,
+  workflowId: string
+): Promise<{
+  backfillJobs: WorkflowDependencyOperationsBackfillJob[];
+  dependencies: WorkflowDependencyOperationsDependency[];
+  summary: ReturnType<typeof summarizeWorkflowDependencyOperations>;
+  suggestedMaintenanceRequests: WorkflowDependencyOperationsSuggestedMaintenanceRequest[];
+  workflowId: string;
+}> {
+  const [dependencyRows, jobRows] = await Promise.all([
+    db
+      .prepare(
+        `SELECT
+           workflow_version_id,
+           dependency_kind,
+           alias,
+           source_table_id,
+           target_table_id,
+           trigger_table_id,
+           dependency_field_ids_json,
+           definition_json,
+           status,
+           updated_at
+         FROM workflow_dependency_index
+         WHERE workspace_id = ? AND workflow_id = ?
+         ORDER BY workflow_version_id ASC, dependency_kind ASC, alias ASC`
+      )
+      .bind(workspaceId, workflowId)
+      .all<WorkflowDependencyIndexRow>(),
+    db
+      .prepare(
+        `SELECT
+           id,
+           workflow_version_id,
+           dependency_kind,
+           dependency_alias,
+           reason,
+           status,
+           chunk_size,
+           cursor_json,
+           processed_count,
+           attempt_count,
+           last_error,
+           operator_reason,
+           operator_actor_principal_id,
+           operator_transition_at,
+           superseded_by_job_id,
+           updated_at,
+           completed_at
+         FROM workflow_backfill_jobs
+         WHERE workspace_id = ? AND workflow_id = ?
+         ORDER BY updated_at DESC, id ASC`
+      )
+      .bind(workspaceId, workflowId)
+      .all<WorkflowBackfillJobRow>()
+  ]);
+
+  const backfillJobs = (jobRows.results ?? []).map((row) => ({
+    attemptCount: row.attempt_count,
+    chunkSize: row.chunk_size,
+    completedAt: row.completed_at,
+    cursor: parseJsonRecord(row.cursor_json),
+    dependencyAlias: row.dependency_alias,
+    dependencyKind: row.dependency_kind,
+    id: row.id,
+    lastError: row.last_error,
+    operatorActorPrincipalId: row.operator_actor_principal_id,
+    operatorReason: row.operator_reason,
+    operatorTransitionAt: row.operator_transition_at,
+    processedCount: row.processed_count,
+    reason: row.reason,
+    status: row.status,
+    supersededByJobId: row.superseded_by_job_id,
+    updatedAt: row.updated_at,
+    workflowVersionId: row.workflow_version_id
+  }));
+  const dependencies = (dependencyRows.results ?? []).map((row) => ({
+    alias: row.alias,
+    definition: parseJsonRecord(row.definition_json),
+    dependencyFieldIds: parseStringArray(row.dependency_field_ids_json),
+    kind: row.dependency_kind,
+    sourceTableId: row.source_table_id,
+    status: row.status,
+    targetTableId: row.target_table_id,
+    triggerTableId: row.trigger_table_id,
+    updatedAt: row.updated_at,
+    workflowVersionId: row.workflow_version_id
+  }));
+
+  return {
+    backfillJobs,
+    dependencies,
+    summary: summarizeWorkflowDependencyOperations({
+      backfillJobs,
+      dependencies
+    }),
+    suggestedMaintenanceRequests: suggestWorkflowMaintenanceRequests({
+      backfillJobs,
+      workflowId,
+      workspaceId
+    }),
+    workflowId
+  };
+}
+
+export async function requestWorkflowBackfillJobDisposition(
+  db: D1Database,
+  input: {
+    disposition: "abandoned" | "superseded";
+    jobId: string;
+    operatorPrincipalId: string;
+    reason: string;
+    supersededByJobId?: string | null;
+    workflowId: string;
+    workspaceId: string;
+  }
+): Promise<
+  | {
+      jobId: string;
+      ok: true;
+      operatorReason: string;
+      status: "abandoned" | "superseded";
+      supersededByJobId: string | null;
+      workflowId: string;
+    }
+  | {
+      message: string;
+      ok: false;
+      reason: "backfill_job_not_found" | "backfill_job_terminal" | "invalid_supersede_target";
+    }
+> {
+  if (input.disposition === "superseded" && !input.supersededByJobId) {
+    return {
+      message: "supersededByJobId is required when superseding a backfill job.",
+      ok: false,
+      reason: "invalid_supersede_target"
+    };
+  }
+
+  const row = await db
+    .prepare(
+      `SELECT status
+       FROM workflow_backfill_jobs
+       WHERE id = ? AND workspace_id = ? AND workflow_id = ?`
+    )
+    .bind(input.jobId, input.workspaceId, input.workflowId)
+    .first<{ status: string }>();
+
+  if (!row) {
+    return {
+      message: `Workflow backfill job ${input.jobId} was not found.`,
+      ok: false,
+      reason: "backfill_job_not_found"
+    };
+  }
+
+  if (TERMINAL_BACKFILL_STATUSES.has(row.status)) {
+    return {
+      message: `Workflow backfill job ${input.jobId} is already terminal with status ${row.status}.`,
+      ok: false,
+      reason: "backfill_job_terminal"
+    };
+  }
+
+  if (input.disposition === "superseded") {
+    const supersedingJob = await db
+      .prepare(
+        `SELECT id
+         FROM workflow_backfill_jobs
+         WHERE id = ? AND workspace_id = ? AND workflow_id = ?`
+      )
+      .bind(input.supersededByJobId, input.workspaceId, input.workflowId)
+      .first<{ id: string }>();
+    if (!supersedingJob || input.supersededByJobId === input.jobId) {
+      return {
+        message: `Superseding workflow backfill job ${input.supersededByJobId} was not found.`,
+        ok: false,
+        reason: "invalid_supersede_target"
+      };
+    }
+  }
+
+  const now = new Date().toISOString();
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = ?,
+             cursor_json = NULL,
+             last_error = NULL,
+             operator_reason = ?,
+             operator_actor_principal_id = ?,
+             operator_transition_at = ?,
+             superseded_by_job_id = ?,
+             updated_at = ?
+         WHERE id = ? AND workspace_id = ? AND workflow_id = ?`
+      )
+      .bind(
+        input.disposition,
+        input.reason,
+        input.operatorPrincipalId,
+        now,
+        input.supersededByJobId ?? null,
+        now,
+        input.jobId,
+        input.workspaceId,
+        input.workflowId
+      )
+  ]);
+
+  return {
+    jobId: input.jobId,
+    ok: true,
+    operatorReason: input.reason,
+    status: input.disposition,
+    supersededByJobId: input.supersededByJobId ?? null,
+    workflowId: input.workflowId
+  };
 }
 
 export async function readWorkflowTriggerTableIdForWorkflow(

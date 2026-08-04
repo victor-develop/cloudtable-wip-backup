@@ -306,6 +306,45 @@ describe("cloudtable permission engine", () => {
     expect(createDecision.reasons).toContain("agent_hidden:customer_note");
   });
 
+  it("allows workflow-service computed writes only when the snapshot explicitly grants them", () => {
+    const permissionEngine = createPermissionEngine(registry, {
+      snapshot: {
+        ...snapshot,
+        fields: {
+          ...snapshot.fields,
+          health_score: {
+            ...snapshot.fields.health_score!,
+            workflow: true,
+            write: true
+          }
+        }
+      }
+    });
+
+    const decision = permissionEngine.evaluateCommand(
+      buildCommand(
+        {
+          actor: {
+            mode: "workflow",
+            principalId: "usr_alice"
+          }
+        },
+        [
+          {
+            fieldId: "health_score",
+            fieldType: "computed.readonly",
+            value: "green"
+          }
+        ]
+      )
+    );
+
+    expect(decision).toEqual({
+      allowed: true,
+      reasons: []
+    });
+  });
+
   it("explains direct, view, command, workflow, and agent field access deterministically", () => {
     const permissionEngine = createPermissionEngine(registry, {
       snapshot
@@ -511,6 +550,11 @@ describe("cloudtable permission engine", () => {
           throw new Error("not used in permission tests");
         }
       },
+      workflowDependencyOperationsReader: {
+        read() {
+          throw new Error("not used in permission tests");
+        }
+      },
       workflowRunReader: {
         read() {
           throw new Error("not used in permission tests");
@@ -518,6 +562,26 @@ describe("cloudtable permission engine", () => {
       },
       workflowDeadLetterReplayRequester: {
         requestReplay() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      workflowAggregateMaintenanceRequester: {
+        requestMaintenance() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      workflowBackfillDispositionRequester: {
+        requestDisposition() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      workflowLookupMaintenanceRequester: {
+        requestMaintenance() {
+          throw new Error("not used in permission tests");
+        }
+      },
+      workflowSyncMaintenanceRequester: {
+        requestMaintenance() {
           throw new Error("not used in permission tests");
         }
       },

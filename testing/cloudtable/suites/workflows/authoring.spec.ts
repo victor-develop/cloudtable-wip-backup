@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { createAggregateOperationRegistry } from "../../../../src/core/aggregates/registry";
 import { createFieldTypeRegistry } from "../../../../src/core/field-types/registry";
-import { buildWorkflowAuthoringMetadata, normalizeWorkflowAuthoringMetadata } from "../../../../src/core/workflows/binding-metadata";
 import {
+  buildWorkflowAuthoringMetadata,
+  normalizeWorkflowAuthoringMetadata
+} from "../../../../src/core/workflows/binding-metadata";
+import {
+  buildWorkflowRecipeAuthoringCatalog,
   draftWorkflowConditionsFromMetadata,
   inspectWorkflowConditionsFromMetadata
 } from "../../../../src/core/workflows/authoring";
@@ -18,6 +23,7 @@ import {
 
 const fieldTypeRegistry = createFieldTypeRegistry();
 const workflowOperatorRegistry = createWorkflowOperatorRegistry();
+const aggregateOperationRegistry = createAggregateOperationRegistry();
 
 function supportedOperators(operatorIds: readonly string[]): WorkflowConditionManifest[] {
   return operatorIds.map(
@@ -29,6 +35,89 @@ function supportedOperators(operatorIds: readonly string[]): WorkflowConditionMa
 }
 
 describe("workflow authoring", () => {
+  it("publishes the canonical direct-sync recipe authoring contract", () => {
+    const catalog = buildWorkflowRecipeAuthoringCatalog({
+      aggregateOperationRegistry,
+      workflowOperatorRegistry
+    });
+
+    expect(catalog.recipeTypes).toEqual(["direct_sync", "grouped_rollup"]);
+    expect(catalog.recipes.direct_sync).toMatchObject({
+      fixedTriggerId: "field_changed",
+      maintenance: {
+        kinds: ["backfill", "recompute"],
+        queuedMessage: "Sync maintenance is queued after publish and runs asynchronously.",
+        route: {
+          method: "POST",
+          pathTemplate: "/v1/workflows/{workflowId}/sync-maintenance"
+        }
+      },
+      matchStrategies: ["single_relation", "value_match"],
+      previewRoute: {
+        method: "POST",
+        pathTemplate: "/v1/tables/{tableId}/workflow-recipes/preview"
+      },
+      publishRoute: {
+        method: "POST",
+        pathTemplate: "/v1/workflows/{workflowId}/publish"
+      },
+      recipeType: "direct_sync",
+      requiredInputIds: [
+        "tableId",
+        "workflowId",
+        "name",
+        "syncSourceFieldId",
+        "syncTargetFieldId",
+        "relatedSourceFieldId"
+      ],
+      statusValues: ["draft", "published", "paused"]
+    });
+    expect(catalog.recipes.direct_sync.workflowOperators.map((operator) => operator.id)).toEqual([
+      "sync_related_field"
+    ]);
+  });
+
+  it("publishes the canonical grouped-rollup recipe authoring contract", () => {
+    const catalog = buildWorkflowRecipeAuthoringCatalog({
+      aggregateOperationRegistry,
+      workflowOperatorRegistry
+    });
+
+    expect(catalog.recipes.grouped_rollup).toMatchObject({
+      fixedTriggerId: "field_changed",
+      maintenance: {
+        kinds: ["backfill", "recompute"],
+        queuedMessage: "Rollup maintenance is queued after publish and runs asynchronously.",
+        route: {
+          method: "POST",
+          pathTemplate: "/v1/workflows/{workflowId}/aggregate-maintenance"
+        }
+      },
+      matchStrategies: ["single_relation", "value_match"],
+      previewRoute: {
+        method: "POST",
+        pathTemplate: "/v1/tables/{tableId}/workflow-recipes/preview"
+      },
+      publishRoute: {
+        method: "POST",
+        pathTemplate: "/v1/workflows/{workflowId}/publish"
+      },
+      recipeType: "grouped_rollup",
+      requiredInputIds: ["tableId", "workflowId", "name", "rollupFieldIds"],
+      statusValues: ["draft", "published", "paused"]
+    });
+    expect(catalog.recipes.grouped_rollup.workflowOperators.map((operator) => operator.id)).toEqual([
+      "set_cell"
+    ]);
+    expect(catalog.recipes.grouped_rollup.aggregateOperations?.map((operation) => operation.id)).toEqual([
+      "count_records",
+      "sum_numbers",
+      "max_number",
+      "min_number",
+      "average_numbers"
+    ]);
+  });
+
   it("publishes supported condition operator metadata alongside binding-local ids", () => {
     const metadata = buildWorkflowAuthoringMetadata(fieldTypeRegistry, [
       {

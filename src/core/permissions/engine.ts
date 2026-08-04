@@ -374,7 +374,19 @@ export function createPermissionEngine(
 
         const writeAccess = this.evaluateFieldAccess(field, "command-ingress", snapshot);
         if (!writeAccess.writeAllowed) {
-          reasons.push(...writeAccess.reasons.filter((reason) => reason.startsWith("field_")));
+          const explicitAccess = snapshot?.fields[field.fieldId];
+          const allowsWorkflowComputedWrite =
+            command.actor.mode === "workflow" &&
+            field.fieldType === "computed.readonly" &&
+            explicitAccess?.workflow === true &&
+            explicitAccess.write === true;
+          reasons.push(
+            ...writeAccess.reasons.filter(
+              (reason) =>
+                reason.startsWith("field_") &&
+                !(allowsWorkflowComputedWrite && reason === `field_read_only:${field.fieldId}`)
+            )
+          );
         }
 
         if (command.actor.mode === "workflow") {

@@ -21,6 +21,7 @@ import type { EventLedgerCommit, EventLedgerRecord } from "../events/types";
 import { createWorkflowOperatorRegistry } from "../workflows/operator-registry";
 import { validateWorkflowConditionBindings } from "../workflows/authoring";
 import { buildWorkflowAuthoringMetadataForFields as buildSharedWorkflowAuthoringMetadataForFields } from "../workflows/binding-metadata";
+import { workflowDependencyIndexStatements } from "../../runtime/workflow-dependency-index";
 import type {
   WorkflowActionBinding,
   WorkflowAggregateDefinition,
@@ -149,9 +150,11 @@ type WorkspaceMembershipIdentityRow = {
   workspace_id: string;
   workspace_membership_id: string;
   workspace_membership_status: string;
+  workspace_name: string;
   workspace_principal_id: string | null;
   workspace_principal_role_key: string | null;
   workspace_role_key: string;
+  workspace_slug: string;
 };
 
 type CountRow = {
@@ -274,9 +277,11 @@ function mapWorkspaceMembershipIdentityRow(
     workspaceId: row.workspace_id,
     workspaceMembershipId: row.workspace_membership_id,
     workspaceMembershipStatus: row.workspace_membership_status,
+    workspaceName: row.workspace_name,
     workspacePrincipalId: row.workspace_principal_id,
     workspacePrincipalRoleKey: row.workspace_principal_role_key,
-    workspaceRoleKey: row.workspace_role_key
+    workspaceRoleKey: row.workspace_role_key,
+    workspaceSlug: row.workspace_slug
   };
 }
 
@@ -3536,6 +3541,16 @@ async function appendDomainStatements(
             )
         );
       }
+      statements.push(
+        ...workflowDependencyIndexStatements(db, {
+          definition,
+          eventId: event.eventId,
+          now: event.createdAt,
+          workflowId,
+          workflowVersionId,
+          workspaceId: command.workspaceId
+        })
+      );
       return;
     }
 
@@ -3682,6 +3697,16 @@ async function appendDomainStatements(
               )
           );
         }
+        statements.push(
+          ...workflowDependencyIndexStatements(db, {
+            definition: nextDefinition,
+            eventId: event.eventId,
+            now: event.createdAt,
+            workflowId,
+            workflowVersionId: currentVersion.id,
+            workspaceId: command.workspaceId
+          })
+        );
         return;
       }
 
@@ -3736,6 +3761,16 @@ async function appendDomainStatements(
             )
         );
       }
+      statements.push(
+        ...workflowDependencyIndexStatements(db, {
+          definition: nextDefinition,
+          eventId: event.eventId,
+          now: event.createdAt,
+          workflowId,
+          workflowVersionId: nextWorkflowVersionId,
+          workspaceId: command.workspaceId
+        })
+      );
       return;
     }
 
@@ -3839,6 +3874,16 @@ async function appendDomainStatements(
             command.workspaceId,
             version.id
           )
+      );
+      statements.push(
+        ...workflowDependencyIndexStatements(db, {
+          definition: nextDefinition,
+          eventId: event.eventId,
+          now: event.createdAt,
+          workflowId,
+          workflowVersionId: version.id,
+          workspaceId: command.workspaceId
+        })
       );
       return;
     }
@@ -4786,6 +4831,46 @@ export function createCloudTableD1Repository(
       return row ? mapCanonicalUserRow(row) : null;
     },
 
+    async findPendingInvitationForWorkspaceEmail(input) {
+      const row = await db
+        .prepare(
+          `SELECT
+             invitations.id,
+             invitations.organization_id,
+             invitations.workspace_id,
+             invitations.invited_email,
+             invitations.role_key,
+             invitations.token_hash,
+             invitations.status,
+             invitations.invited_by_user_id,
+             invitations.expires_at,
+             invitations.accepted_at,
+             invitations.created_at,
+             invitations.updated_at,
+             o.slug AS organization_slug,
+             o.name AS organization_name,
+             w.slug AS workspace_slug,
+             w.name AS workspace_name
+           FROM invitations
+           INNER JOIN organizations o
+             ON o.id = invitations.organization_id
+           INNER JOIN workspaces w
+             ON w.id = invitations.workspace_id
+           WHERE invitations.workspace_id = ?
+             AND lower(invitations.invited_email) = lower(?)
+             AND invitations.status = 'pending'
+             AND invitations.archived_at IS NULL
+             AND o.archived_at IS NULL
+             AND w.archived_at IS NULL
+           ORDER BY invitations.created_at DESC, invitations.id DESC
+           LIMIT 1`
+        )
+        .bind(input.workspaceId, input.invitedEmail)
+        .first<InvitationRow>();
+
+      return row ? mapInvitationRow(row) : null;
+    },
+
     async linkExternalIdentityToUser(input) {
       const existing = await db
         .prepare(
@@ -4878,9 +4963,13 @@ export function createCloudTableD1Repository(
              o.id AS organization_id,
              o.slug AS organization_slug,
              o.name AS organization_name,
+             w.slug AS workspace_slug,
+             w.name AS workspace_name,
              wp.id AS workspace_principal_id,
              wp.role_key AS workspace_principal_role_key
            FROM workspace_memberships wm
+           INNER JOIN workspaces w
+             ON w.id = wm.workspace_id
            INNER JOIN users u
              ON u.id = wm.user_id
            INNER JOIN organization_memberships om
@@ -4894,9 +4983,57 @@ export function createCloudTableD1Repository(
            WHERE wm.user_id = ?
              AND wm.status = 'active'
              AND wm.archived_at IS NULL
+             AND w.archived_at IS NULL
            ORDER BY wm.workspace_id ASC`
         )
         .bind(userId)
+        .all<WorkspaceMembershipIdentityRow>();
+
+      return (rows.results ?? []).map(mapWorkspaceMembershipIdentityRow);
+    },
+
+    async listWorkspaceMembershipIdentitiesForWorkspace(workspaceId) {
+      const rows = await db
+        .prepare(
+          `SELECT
+             wm.workspace_id,
+             wm.principal_id,
+             wm.id AS workspace_membership_id,
+             wm.role_key AS workspace_role_key,
+             wm.status AS workspace_membership_status,
+             u.id AS user_id,
+             u.primary_email AS user_email,
+             u.display_name AS user_display_name,
+             om.id AS organization_membership_id,
+             om.role_key AS organization_role_key,
+             om.status AS organization_membership_status,
+             o.id AS organization_id,
+             o.slug AS organization_slug,
+             o.name AS organization_name,
+             w.slug AS workspace_slug,
+             w.name AS workspace_name,
+             wp.id AS workspace_principal_id,
+             wp.role_key AS workspace_principal_role_key
+           FROM workspace_memberships wm
+           INNER JOIN workspaces w
+             ON w.id = wm.workspace_id
+           INNER JOIN users u
+             ON u.id = wm.user_id
+           INNER JOIN organization_memberships om
+             ON om.id = wm.organization_membership_id
+           INNER JOIN organizations o
+             ON o.id = om.organization_id
+           LEFT JOIN workspace_principals wp
+             ON wp.workspace_id = wm.workspace_id
+            AND wp.workspace_membership_id = wm.id
+            AND wp.archived_at IS NULL
+           WHERE wm.workspace_id = ?
+             AND wm.status = 'active'
+             AND wm.archived_at IS NULL
+             AND w.archived_at IS NULL
+           ORDER BY lower(u.primary_email) ASC, wm.principal_id ASC`
+        )
+        .bind(workspaceId)
         .all<WorkspaceMembershipIdentityRow>();
 
       return (rows.results ?? []).map(mapWorkspaceMembershipIdentityRow);
@@ -5174,9 +5311,13 @@ export function createCloudTableD1Repository(
              o.id AS organization_id,
              o.slug AS organization_slug,
              o.name AS organization_name,
+             w.slug AS workspace_slug,
+             w.name AS workspace_name,
              wp.id AS workspace_principal_id,
              wp.role_key AS workspace_principal_role_key
            FROM workspace_memberships wm
+           INNER JOIN workspaces w
+             ON w.id = wm.workspace_id
            INNER JOIN users u
              ON u.id = wm.user_id
            INNER JOIN organization_memberships om
@@ -5190,6 +5331,7 @@ export function createCloudTableD1Repository(
            WHERE wm.workspace_id = ?
              AND wm.principal_id = ?
              AND wm.archived_at IS NULL
+             AND w.archived_at IS NULL
            LIMIT 1`
         )
         .bind(input.workspaceId, input.principalId)
@@ -5216,9 +5358,13 @@ export function createCloudTableD1Repository(
              o.id AS organization_id,
              o.slug AS organization_slug,
              o.name AS organization_name,
+             w.slug AS workspace_slug,
+             w.name AS workspace_name,
              wp.id AS workspace_principal_id,
              wp.role_key AS workspace_principal_role_key
            FROM workspace_memberships wm
+           INNER JOIN workspaces w
+             ON w.id = wm.workspace_id
            INNER JOIN users u
              ON u.id = wm.user_id
            INNER JOIN organization_memberships om
@@ -5233,6 +5379,7 @@ export function createCloudTableD1Repository(
              AND wm.user_id = ?
              AND wm.status = 'active'
              AND wm.archived_at IS NULL
+             AND w.archived_at IS NULL
            LIMIT 1`
         )
         .bind(input.workspaceId, input.userId)

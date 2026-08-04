@@ -44,9 +44,18 @@ export type AgentToolId =
   | "readWorkspaceActivityHistory"
   | "readAppActivityHistory"
   | "readWorkflowHistory"
+  | "readWorkflowDependencies"
   | "readWorkflowRunDetail"
   | "prepareWorkflowDeadLetterReplay"
   | "requestWorkflowDeadLetterReplay"
+  | "prepareWorkflowAggregateMaintenance"
+  | "requestWorkflowAggregateMaintenance"
+  | "prepareWorkflowLookupMaintenance"
+  | "requestWorkflowLookupMaintenance"
+  | "prepareWorkflowSyncMaintenance"
+  | "requestWorkflowSyncMaintenance"
+  | "prepareWorkflowBackfillDisposition"
+  | "requestWorkflowBackfillDisposition"
   | "createApp"
   | "createTable"
   | "createField"
@@ -86,6 +95,7 @@ export type AgentToolBinding =
         | "viewQueryReader"
         | "activityHistoryReader"
         | "workflowHistoryReader"
+        | "workflowDependencyOperationsReader"
         | "workflowRunReader";
     }
   | {
@@ -99,7 +109,12 @@ export type AgentToolBinding =
     }
   | {
       kind: "workflow-operation";
-      operation: "replay-dead-letter";
+      operation:
+        | "aggregate-maintenance"
+        | "backfill-disposition"
+        | "lookup-maintenance"
+        | "replay-dead-letter"
+        | "sync-maintenance";
     }
   | {
       kind: "command-bus";
@@ -416,6 +431,11 @@ export type ReadWorkflowHistoryToolInput = {
   workspaceId: string;
 };
 
+export type ReadWorkflowDependenciesToolInput = {
+  workflowId: string;
+  workspaceId: string;
+};
+
 export type ReadWorkflowRunDetailToolInput = {
   workflowRunId: string;
   workspaceId: string;
@@ -424,6 +444,37 @@ export type ReadWorkflowRunDetailToolInput = {
 export type WorkflowDeadLetterReplayToolInput = AgentToolCommandBase & {
   deadLetterId: string;
   replayRequestId?: string;
+};
+
+export type WorkflowMaintenanceToolInput = AgentToolCommandBase & {
+  changedFieldIds?: string[];
+  kind: "backfill" | "recompute";
+  reason?: string;
+  recordId?: string;
+  requestId?: string;
+  workflowId: string;
+};
+
+export type WorkflowAggregateMaintenanceToolInput = WorkflowMaintenanceToolInput & {
+  aggregateAliases?: string[];
+};
+
+export type WorkflowLookupMaintenanceToolInput = WorkflowMaintenanceToolInput & {
+  lookupAliases?: string[];
+  targetRecordId?: string;
+};
+
+export type WorkflowSyncMaintenanceToolInput = WorkflowMaintenanceToolInput & {
+  syncAliases?: string[];
+  targetRecordId?: string;
+};
+
+export type WorkflowBackfillDispositionToolInput = AgentToolCommandBase & {
+  disposition: "abandoned" | "superseded";
+  jobId: string;
+  reason: string;
+  supersededByJobId?: string;
+  workflowId: string;
 };
 
 export type WorkspaceInspection = {
@@ -510,6 +561,12 @@ export type WorkflowHistoryReader = {
   ): Promise<Record<string, unknown>> | Record<string, unknown>;
 };
 
+export type WorkflowDependencyOperationsReader = {
+  read(
+    input: ReadWorkflowDependenciesToolInput
+  ): Promise<Record<string, unknown>> | Record<string, unknown>;
+};
+
 export type WorkflowRunReader = {
   read(
     input: ReadWorkflowRunDetailToolInput
@@ -546,6 +603,73 @@ export type WorkflowDeadLetterReplayRequester = {
         reason: "already_requested" | "not_found" | "not_replayable";
         status: "rejected";
       };
+};
+
+export type WorkflowMaintenanceRequesterResult =
+  | {
+      aliases: string[];
+      requestId: string;
+      status: "enqueued";
+      workflowId: string;
+      workflowVersionId: string;
+    }
+  | {
+      aliases?: string[];
+      message: string;
+      reason:
+        | "aggregate_alias_not_found"
+        | "aggregate_not_configured"
+        | "already_requested"
+        | "lookup_alias_not_found"
+        | "lookup_not_configured"
+        | "sync_alias_not_found"
+        | "sync_not_configured"
+        | "workflow_not_found"
+        | "workflow_paused"
+        | "workflow_service_identity_invalid";
+      requestId: string;
+      status: "rejected";
+      workflowId: string;
+    };
+
+export type WorkflowAggregateMaintenanceRequester = {
+  requestMaintenance(
+    input: WorkflowAggregateMaintenanceToolInput
+  ): Promise<WorkflowMaintenanceRequesterResult> | WorkflowMaintenanceRequesterResult;
+};
+
+export type WorkflowLookupMaintenanceRequester = {
+  requestMaintenance(
+    input: WorkflowLookupMaintenanceToolInput
+  ): Promise<WorkflowMaintenanceRequesterResult> | WorkflowMaintenanceRequesterResult;
+};
+
+export type WorkflowSyncMaintenanceRequester = {
+  requestMaintenance(
+    input: WorkflowSyncMaintenanceToolInput
+  ): Promise<WorkflowMaintenanceRequesterResult> | WorkflowMaintenanceRequesterResult;
+};
+
+export type WorkflowBackfillDispositionRequesterResult =
+  | {
+      jobId: string;
+      operatorReason: string;
+      status: "abandoned" | "superseded";
+      supersededByJobId: string | null;
+      workflowId: string;
+    }
+  | {
+      jobId: string;
+      message: string;
+      reason: "backfill_job_not_found" | "backfill_job_terminal" | "invalid_supersede_target";
+      status: "rejected";
+      workflowId: string;
+    };
+
+export type WorkflowBackfillDispositionRequester = {
+  requestDisposition(
+    input: WorkflowBackfillDispositionToolInput
+  ): Promise<WorkflowBackfillDispositionRequesterResult> | WorkflowBackfillDispositionRequesterResult;
 };
 
 export type RecordInspector = {
@@ -654,6 +778,10 @@ export type AgentToolInvocation =
       input: ReadWorkflowHistoryToolInput;
     }
   | {
+      toolId: "readWorkflowDependencies";
+      input: ReadWorkflowDependenciesToolInput;
+    }
+  | {
       toolId: "readWorkflowRunDetail";
       input: ReadWorkflowRunDetailToolInput;
     }
@@ -664,6 +792,38 @@ export type AgentToolInvocation =
   | {
       toolId: "requestWorkflowDeadLetterReplay";
       input: WorkflowDeadLetterReplayToolInput;
+    }
+  | {
+      toolId: "prepareWorkflowAggregateMaintenance";
+      input: WorkflowAggregateMaintenanceToolInput;
+    }
+  | {
+      toolId: "requestWorkflowAggregateMaintenance";
+      input: WorkflowAggregateMaintenanceToolInput;
+    }
+  | {
+      toolId: "prepareWorkflowLookupMaintenance";
+      input: WorkflowLookupMaintenanceToolInput;
+    }
+  | {
+      toolId: "requestWorkflowLookupMaintenance";
+      input: WorkflowLookupMaintenanceToolInput;
+    }
+  | {
+      toolId: "prepareWorkflowSyncMaintenance";
+      input: WorkflowSyncMaintenanceToolInput;
+    }
+  | {
+      toolId: "requestWorkflowSyncMaintenance";
+      input: WorkflowSyncMaintenanceToolInput;
+    }
+  | {
+      toolId: "prepareWorkflowBackfillDisposition";
+      input: WorkflowBackfillDispositionToolInput;
+    }
+  | {
+      toolId: "requestWorkflowBackfillDisposition";
+      input: WorkflowBackfillDispositionToolInput;
     }
   | {
       toolId: "createApp";
@@ -811,6 +971,10 @@ export type AgentToolInvocationResult =
       history: Record<string, unknown>;
     }
   | {
+      dependencies: Record<string, unknown>;
+      kind: "workflow-dependencies";
+    }
+  | {
       kind: "workflow-run-detail";
       run: Record<string, unknown> | null;
     }
@@ -831,6 +995,94 @@ export type AgentToolInvocationResult =
       replayRequestId: string;
       status: "enqueued" | "rejected";
     }
+  | {
+      diffs: AgentToolAuditDiff[];
+      kind: "workflow-maintenance-draft";
+      request: {
+        aliases?: string[];
+        changedFieldIds?: string[];
+        dependencyKind: "aggregate" | "lookup" | "sync";
+        kind: "backfill" | "recompute";
+        reason?: string;
+        recordId?: string;
+        requestId: string;
+        targetRecordId?: string;
+        workflowId: string;
+        workspaceId: string;
+      };
+      successorInvocation:
+        | {
+            input: {
+              aggregateAliases?: string[];
+              changedFieldIds?: string[];
+              kind: "backfill" | "recompute";
+              reason?: string;
+              recordId?: string;
+              requestId: string;
+              workflowId: string;
+              workspaceId: string;
+            };
+            toolId: "requestWorkflowAggregateMaintenance";
+          }
+        | {
+            input: {
+              changedFieldIds?: string[];
+              kind: "backfill" | "recompute";
+              lookupAliases?: string[];
+              reason?: string;
+              recordId?: string;
+              requestId: string;
+              targetRecordId?: string;
+              workflowId: string;
+              workspaceId: string;
+            };
+            toolId: "requestWorkflowLookupMaintenance";
+          }
+        | {
+            input: {
+              changedFieldIds?: string[];
+              kind: "backfill" | "recompute";
+              reason?: string;
+              recordId?: string;
+              requestId: string;
+              syncAliases?: string[];
+              targetRecordId?: string;
+              workflowId: string;
+              workspaceId: string;
+            };
+            toolId: "requestWorkflowSyncMaintenance";
+          };
+    }
+  | ({
+      dependencyKind: "aggregate" | "lookup" | "sync";
+      kind: "workflow-maintenance-request";
+    } & WorkflowMaintenanceRequesterResult)
+  | {
+      diffs: AgentToolAuditDiff[];
+      kind: "workflow-backfill-disposition-draft";
+      request: {
+        disposition: "abandoned" | "superseded";
+        jobId: string;
+        reason: string;
+        supersededByJobId?: string;
+        workflowId: string;
+        workspaceId: string;
+      };
+      successorInvocation: {
+        input: {
+          disposition: "abandoned" | "superseded";
+          jobId: string;
+          reason: string;
+          supersededByJobId?: string;
+          workflowId: string;
+          workspaceId: string;
+        };
+        toolId: "requestWorkflowBackfillDisposition";
+      };
+    }
+  | ({
+      kind: "workflow-backfill-disposition";
+    } & WorkflowBackfillDispositionRequesterResult)
   | {
       kind: "command-draft";
       command: CommandEnvelope;

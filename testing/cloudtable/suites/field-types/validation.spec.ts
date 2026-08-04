@@ -196,7 +196,7 @@ describe("cloudtable field-type validation", () => {
     ).toEqual({
       valid: false,
       errors: [
-        "Field configuration rollup.operationId must be one of: count_records, sum_numbers, max_number, average_numbers."
+        "Field configuration rollup.operationId must be one of: count_records, sum_numbers, max_number, min_number, average_numbers."
       ]
     });
 

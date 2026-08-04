@@ -470,6 +470,7 @@ function createRuntimeEnv(): {
   env = {
     AGGREGATE_MAINTENANCE_QUEUE: aggregateQueue as unknown as Queue<CloudTableQueueMessage>,
     ARTIFACTS_BUCKET: {} as R2Bucket,
+    AUTH_ALLOWED_REDIRECT_ORIGINS: "https://app.example.test",
     AUTH_SESSION_SECRET: "test-session-secret",
     AUTH_SESSION_TTL_SECONDS: "3600",
     DB: db as unknown as D1Database,
@@ -4597,6 +4598,15 @@ describe("cloudtable MVP regression matrix", () => {
             };
           }
         },
+        workflowDependencyOperationsReader: {
+          read() {
+            return {
+              backfillJobs: [],
+              dependencies: [],
+              workflowId: "wf_matrix"
+            };
+          }
+        },
         workflowRunReader: {
           read() {
             return {
@@ -4613,6 +4623,53 @@ describe("cloudtable MVP regression matrix", () => {
               replayRequestId:
                 input.replayRequestId ?? `dead-letter-replay:${input.deadLetterId}`,
               status: "enqueued" as const
+            };
+          }
+        },
+        workflowAggregateMaintenanceRequester: {
+          requestMaintenance(input) {
+            return {
+              aliases: input.aggregateAliases ?? ["agg_total"],
+              requestId:
+                input.requestId ?? `workflow-aggregate-maintenance:${input.workflowId}:${input.kind}`,
+              status: "enqueued" as const,
+              workflowId: input.workflowId,
+              workflowVersionId: "wf_matrix:v1"
+            };
+          }
+        },
+        workflowBackfillDispositionRequester: {
+          requestDisposition(input) {
+            return {
+              jobId: input.jobId,
+              operatorReason: input.reason,
+              status: input.disposition,
+              supersededByJobId: input.supersededByJobId ?? null,
+              workflowId: input.workflowId
+            };
+          }
+        },
+        workflowLookupMaintenanceRequester: {
+          requestMaintenance(input) {
+            return {
+              aliases: input.lookupAliases ?? ["lookup_account_name"],
+              requestId:
+                input.requestId ?? `workflow-lookup-maintenance:${input.workflowId}:${input.kind}`,
+              status: "enqueued" as const,
+              workflowId: input.workflowId,
+              workflowVersionId: "wf_matrix:v1"
+            };
+          }
+        },
+        workflowSyncMaintenanceRequester: {
+          requestMaintenance(input) {
+            return {
+              aliases: input.syncAliases ?? ["sync_status"],
+              requestId:
+                input.requestId ?? `workflow-sync-maintenance:${input.workflowId}:${input.kind}`,
+              status: "enqueued" as const,
+              workflowId: input.workflowId,
+              workflowVersionId: "wf_matrix:v1"
             };
           }
         },
@@ -6669,6 +6726,7 @@ describe("cloudtable MVP regression matrix", () => {
 
     await provisionRuntimeWorkspaceMembershipIdentity(env, {
       principalId: "usr_inviter",
+      roleKey: "workspace.admin",
       userId: "user_inviter"
     });
     const inviterCookie = await createAuthenticatedRuntimeCookie(env, "user_inviter");
@@ -7025,6 +7083,7 @@ describe("cloudtable MVP regression matrix", () => {
 
     await provisionRuntimeWorkspaceMembershipIdentity(env, {
       principalId: "usr_inviter",
+      roleKey: "workspace.admin",
       userId: "user_inviter"
     });
     const inviterCookie = await createAuthenticatedRuntimeCookie(env, "user_inviter");
@@ -7520,6 +7579,7 @@ describe("cloudtable MVP regression matrix", () => {
 
     await provisionRuntimeWorkspaceMembershipIdentity(env, {
       principalId: "usr_inviter",
+      roleKey: "workspace.admin",
       userId: "user_inviter"
     });
     const inviterCookie = await createAuthenticatedRuntimeCookie(env, "user_inviter");
@@ -7911,6 +7971,730 @@ describe("cloudtable MVP regression matrix", () => {
     ]);
   });
 
+  it("scenario: invited_session_recipe_authoring_reactive_journey covers direct sync and grouped rollup through readback", async () => {
+    const { aggregateQueue, db, env, eventFanoutQueue } = createRuntimeEnv();
+
+    const drainEventFanout = async (startIndex: number): Promise<void> => {
+      for (const message of eventFanoutQueue.sent.slice(startIndex)) {
+        await handleQueueBatch(createRuntimeBatch([message]).batch as never, env, {} as ExecutionContext);
+      }
+    };
+    const drainAggregateMaintenance = async (startIndex: number): Promise<number> => {
+      let retried = 0;
+      for (const message of aggregateQueue.sent.slice(startIndex)) {
+        const batch = createRuntimeBatchWithRetryTracking([message]);
+        await handleQueueBatch(batch.batch as never, env, {} as ExecutionContext);
+        retried += batch.retried;
+      }
+      return retried;
+    };
+
+    db.inner
+      .prepare(
+        `INSERT INTO tables (
+           id, workspace_id, app_id, slug, name, schema_epoch, current_schema_version,
+           created_at, updated_at, archived_at, last_event_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "tbl_accounts",
+        "ws_1",
+        "app_1",
+        "accounts",
+        "Accounts",
+        0,
+        1,
+        logicalTime,
+        logicalTime,
+        null,
+        null
+      );
+
+    insertField(db, {
+      config: {
+        allowMultiple: false,
+        targetTableId: "tbl_accounts"
+      },
+      fieldId: "fld_ticket_account",
+      fieldKey: "account",
+      fieldType: "relation.record",
+      label: "Account",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_status",
+      fieldKey: "status",
+      fieldType: "text.single_line",
+      label: "Status",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_ticket_amount",
+      fieldKey: "amount",
+      fieldType: "number.decimal",
+      label: "Amount",
+      tableId: "tbl_1"
+    });
+    insertField(db, {
+      fieldId: "fld_account_name",
+      fieldKey: "account_name",
+      fieldType: "text.single_line",
+      label: "Account Name",
+      tableId: "tbl_accounts"
+    });
+    insertField(db, {
+      fieldId: "fld_account_status",
+      fieldKey: "account_status",
+      fieldType: "text.single_line",
+      label: "Account Status",
+      tableId: "tbl_accounts"
+    });
+    insertField(db, {
+      config: {
+        dependsOnFieldIds: ["fld_ticket_account", "fld_ticket_amount"],
+        resultValueType: "number",
+        rollup: {
+          grouping: {
+            sourceFieldId: "fld_ticket_account",
+            strategy: "single_relation"
+          },
+          operandFieldId: "fld_ticket_amount",
+          operationId: "sum_numbers",
+          sourceTableId: "tbl_1"
+        }
+      },
+      fieldId: "fld_account_revenue_rollup",
+      fieldKey: "revenue_rollup",
+      fieldType: "computed.readonly",
+      label: "Revenue Rollup",
+      tableId: "tbl_accounts"
+    });
+
+    insertRecord(db, {
+      recordId: "rec_ticket_1",
+      recordKey: "ticket-1",
+      tableId: "tbl_1"
+    });
+    insertRecord(db, {
+      recordId: "rec_account_1",
+      recordKey: "account-1",
+      tableId: "tbl_accounts"
+    });
+    db.inner
+      .prepare(
+        `INSERT INTO record_projection (
+           workspace_id,
+           table_id,
+           record_id,
+           projection_json,
+           search_document,
+           projection_version,
+           last_event_id,
+           updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        "ws_1",
+        "tbl_accounts",
+        "rec_account_1",
+        JSON.stringify({
+          fields: {
+            account_name: "Acme Corp",
+            account_status: "open",
+            revenue_rollup: null
+          }
+        }),
+        "",
+        1,
+        "evt_seed_account_projection",
+        logicalTime
+      );
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_account",
+      fieldType: "relation.record",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: ["rec_account_1"]
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_status",
+      fieldType: "text.single_line",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: "open"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_ticket_amount",
+      fieldType: "number.decimal",
+      recordId: "rec_ticket_1",
+      tableId: "tbl_1",
+      value: 10
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account_name",
+      fieldType: "text.single_line",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts",
+      value: "Acme Corp"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account_status",
+      fieldType: "text.single_line",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts",
+      value: "open"
+    });
+    insertRuntimeCellCurrent(db, {
+      fieldId: "fld_account_revenue_rollup",
+      fieldType: "computed.readonly",
+      recordId: "rec_account_1",
+      tableId: "tbl_accounts",
+      value: null
+    });
+    insertRuntimeView(db, {
+      tableId: "tbl_accounts",
+      viewId: "view_invited_recipe_accounts",
+      viewKey: "invited-recipe-accounts",
+      viewName: "Invited Recipe Accounts",
+      visibleFieldIds: ["fld_account_name", "fld_account_status", "fld_account_revenue_rollup"]
+    });
+
+    await provisionRuntimeWorkspaceMembershipIdentity(env, {
+      principalId: "usr_inviter",
+      roleKey: "workspace.admin",
+      userId: "user_inviter"
+    });
+    const inviterCookie = await createAuthenticatedRuntimeCookie(env, "user_inviter");
+    const invitationResponse = await handleFetch(
+      new Request("https://example.test/v1/workspaces/ws_1/invitations", {
+        method: "POST",
+        headers: {
+          cookie: inviterCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          email: "recipe-invitee@example.com",
+          redirectTo: "https://app.example.test/cloudtable"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(invitationResponse.status).toBe(201);
+    const invitationBody = (await invitationResponse.json()) as {
+      invitation: { acceptUrl: string; id: string };
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(JSON.stringify({ access_token: "google-access-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
+
+      if (url === "https://openidconnect.googleapis.com/v1/userinfo") {
+        return new Response(
+          JSON.stringify({
+            email: "recipe-invitee@example.com",
+            name: "Recipe Invitee",
+            sub: "google-oauth2|recipe-invitee"
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" }
+          }
+        );
+      }
+
+      throw new Error(`Unexpected fetch to ${url}.`);
+    });
+
+    const loginResponse = await handleFetch(
+      new Request(invitationBody.invitation.acceptUrl),
+      env,
+      {} as ExecutionContext
+    );
+    expect(loginResponse.status).toBe(302);
+    const state = new URL(loginResponse.headers.get("location") ?? "").searchParams.get("state");
+    const callbackResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/auth/google/callback?code=google-code&state=${encodeURIComponent(state ?? "")}`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(callbackResponse.status).toBe(302);
+    const inviteeCookie = readCookieHeaderFromSetCookie(callbackResponse.headers.get("set-cookie") ?? "");
+
+    const sessionResponse = await handleFetch(
+      new Request("https://example.test/v1/auth/session?workspaceId=ws_1", {
+        headers: {
+          cookie: inviteeCookie
+        }
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(sessionResponse.status).toBe(200);
+    const sessionBody = (await sessionResponse.json()) as {
+      session: { userEmail: string | null; userId: string };
+      workspaceMembership: { principalId: string; userId: string };
+    };
+    expect(sessionBody.session.userEmail).toBe("recipe-invitee@example.com");
+    expect(sessionBody.workspaceMembership.userId).toBe(sessionBody.session.userId);
+    expect(sessionBody.workspaceMembership.principalId).toMatch(/^usr_/);
+
+    const invitedPrincipalId = sessionBody.workspaceMembership.principalId;
+    const workflowFields = {
+      fld_ticket_account: {
+        agent: true,
+        fieldId: "fld_ticket_account",
+        fieldType: "relation.record",
+        read: "visible",
+        workflow: true,
+        write: true
+      },
+      fld_ticket_status: {
+        agent: true,
+        fieldId: "fld_ticket_status",
+        fieldType: "text.single_line",
+        read: "visible",
+        workflow: true,
+        write: true
+      },
+      fld_ticket_amount: {
+        agent: true,
+        fieldId: "fld_ticket_amount",
+        fieldType: "number.decimal",
+        read: "visible",
+        workflow: true,
+        write: true
+      },
+      fld_account_status: {
+        agent: true,
+        fieldId: "fld_account_status",
+        fieldType: "text.single_line",
+        read: "visible",
+        workflow: true,
+        write: true
+      },
+      fld_account_revenue_rollup: {
+        agent: true,
+        fieldId: "fld_account_revenue_rollup",
+        fieldType: "computed.readonly",
+        read: "visible",
+        workflow: true,
+        write: true
+      }
+    };
+    insertRuntimePermissionSnapshot(db, {
+      commandTypes: ["workflow.create", "workflow.publish", "cell.set"],
+      fields: workflowFields,
+      policyRevision: 72,
+      principalId: invitedPrincipalId,
+      scopeHash: "scope:table:tbl_1",
+      snapshotId: "snap_invited_recipe_authoring"
+    });
+    insertRuntimePermissionSnapshot(db, {
+      commandTypes: [],
+      fields: {
+        fld_account_name: {
+          agent: true,
+          fieldId: "fld_account_name",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: false,
+          write: false
+        },
+        fld_account_status: {
+          agent: true,
+          fieldId: "fld_account_status",
+          fieldType: "text.single_line",
+          read: "visible",
+          workflow: false,
+          write: false
+        },
+        fld_account_revenue_rollup: {
+          agent: true,
+          fieldId: "fld_account_revenue_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: false,
+          write: false
+        }
+      },
+      policyRevision: 73,
+      principalId: invitedPrincipalId,
+      scopeHash: "scope:view:view_invited_recipe_accounts",
+      snapshotId: "snap_invited_recipe_view"
+    });
+
+    const syncCreateResponse = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          businessRule: "Keep account status aligned to the linked ticket status.",
+          commandId: "cmd_invited_direct_sync_create",
+          idempotencyKey: "idem_invited_direct_sync_create",
+          name: "Invited direct sync",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 72,
+          publish: {
+            commandId: "cmd_invited_direct_sync_publish",
+            idempotencyKey: "idem_invited_direct_sync_publish"
+          },
+          recipeType: "direct_sync",
+          relatedSourceFieldId: "fld_ticket_account",
+          syncSourceFieldId: "fld_ticket_status",
+          syncTargetFieldId: "fld_account_status",
+          workflowId: "wf_invited_direct_sync_recipe",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(syncCreateResponse.status).toBe(200);
+    expect((await syncCreateResponse.json()) as Record<string, unknown>).toMatchObject({
+      publish: {
+        result: {
+          accepted: true
+        }
+      },
+      recipeType: "direct_sync",
+      status: "published",
+      workflowId: "wf_invited_direct_sync_recipe"
+    });
+
+    const rollupCreateResponse = await handleFetch(
+      new Request("https://example.test/v1/tables/tbl_1/workflow-recipes", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          businessRule: "Roll ticket amount into account revenue.",
+          commandId: "cmd_invited_rollup_create",
+          idempotencyKey: "idem_invited_rollup_create",
+          name: "Invited revenue rollup",
+          permissionScopeHash: "scope:table:tbl_1",
+          policyRevision: 72,
+          publish: {
+            commandId: "cmd_invited_rollup_publish",
+            idempotencyKey: "idem_invited_rollup_publish"
+          },
+          recipeType: "grouped_rollup",
+          rollupFieldIds: ["fld_account_revenue_rollup"],
+          workflowId: "wf_invited_grouped_rollup_recipe",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(rollupCreateResponse.status).toBe(200);
+    expect((await rollupCreateResponse.json()) as Record<string, unknown>).toMatchObject({
+      publish: {
+        result: {
+          accepted: true
+        }
+      },
+      recipeType: "grouped_rollup",
+      status: "published",
+      workflowId: "wf_invited_grouped_rollup_recipe"
+    });
+
+    await drainEventFanout(0);
+    expect(aggregateQueue.sent).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            sync: expect.objectContaining({
+              alias: "sync_fld_account_status:fld_ticket_status:fld_account_status",
+              targetFieldId: "fld_account_status"
+            }),
+            trigger: expect.objectContaining({
+              kind: "backfill",
+              reason: "workflow_published"
+            }),
+            workflowId: "wf_invited_direct_sync_recipe"
+          })
+        }),
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            aggregate: expect.objectContaining({
+              operationId: "sum_numbers",
+              targetFieldId: "fld_account_revenue_rollup"
+            }),
+            trigger: expect.objectContaining({
+              kind: "backfill",
+              reason: "workflow_published"
+            }),
+            workflowId: "wf_invited_grouped_rollup_recipe"
+          })
+        })
+      ])
+    );
+    expect(await drainAggregateMaintenance(0)).toBe(0);
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_status",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe("open");
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_revenue_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(10);
+
+    const fanoutAfterBackfill = eventFanoutQueue.sent.length;
+    const aggregateAfterBackfill = aggregateQueue.sent.length;
+    const statusCommandResponse = await handleFetch(
+      new Request("https://example.test/v1/commands/execute", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          actor: {
+            mode: "user"
+          },
+          commandId: "cmd_invited_status_recompute",
+          commandType: "cell.set",
+          idempotencyKey: "idem_invited_status_recompute",
+          payload: {
+            fieldId: "fld_ticket_status",
+            fieldType: "text.single_line",
+            recordId: "rec_ticket_1",
+            value: "won"
+          },
+          scope: "table",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(statusCommandResponse.status).toBe(200);
+    expect((await statusCommandResponse.json()) as Record<string, unknown>).toMatchObject({
+      command: {
+        actor: {
+          principalId: invitedPrincipalId
+        }
+      },
+      result: {
+        accepted: true
+      }
+    });
+
+    const amountCommandResponse = await handleFetch(
+      new Request("https://example.test/v1/commands/execute", {
+        method: "POST",
+        headers: {
+          cookie: inviteeCookie,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          actor: {
+            mode: "user"
+          },
+          commandId: "cmd_invited_amount_recompute",
+          commandType: "cell.set",
+          idempotencyKey: "idem_invited_amount_recompute",
+          payload: {
+            fieldId: "fld_ticket_amount",
+            fieldType: "number.decimal",
+            recordId: "rec_ticket_1",
+            value: 35
+          },
+          scope: "table",
+          tableId: "tbl_1",
+          workspaceId: "ws_1"
+        })
+      }),
+      env,
+      {} as ExecutionContext
+    );
+    expect(amountCommandResponse.status).toBe(200);
+    expect((await amountCommandResponse.json()) as Record<string, unknown>).toMatchObject({
+      command: {
+        actor: {
+          principalId: invitedPrincipalId
+        }
+      },
+      result: {
+        accepted: true
+      }
+    });
+
+    await drainEventFanout(fanoutAfterBackfill);
+    expect(aggregateQueue.sent.slice(aggregateAfterBackfill)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            sync: expect.objectContaining({
+              targetFieldId: "fld_account_status"
+            }),
+            trigger: expect.objectContaining({
+              changedFieldIds: ["fld_ticket_status"],
+              kind: "recompute",
+              recordId: "rec_ticket_1"
+            }),
+            workflowId: "wf_invited_direct_sync_recipe"
+          })
+        }),
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            aggregate: expect.objectContaining({
+              operationId: "sum_numbers",
+              targetFieldId: "fld_account_revenue_rollup"
+            }),
+            trigger: expect.objectContaining({
+              changedFieldIds: ["fld_ticket_amount"],
+              kind: "recompute",
+              recordId: "rec_ticket_1"
+            }),
+            workflowId: "wf_invited_grouped_rollup_recipe"
+          })
+        })
+      ])
+    );
+    expect(await drainAggregateMaintenance(aggregateAfterBackfill)).toBe(0);
+
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_status",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe("won");
+    expect(
+      readRuntimeCellRawValue(db, {
+        fieldId: "fld_account_revenue_rollup",
+        recordId: "rec_account_1",
+        tableId: "tbl_accounts"
+      })
+    ).toBe(35);
+
+    const dependencyResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/workflows/wf_invited_grouped_rollup_recipe/dependencies?workspaceId=ws_1&principalId=${invitedPrincipalId}&permissionScopeHash=scope:table:tbl_1&policyRevision=72`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(dependencyResponse.status).toBe(200);
+    const dependencyBody = (await dependencyResponse.json()) as {
+      backfillJobs: Array<{
+        dependencyAlias: string;
+        dependencyKind: string;
+        lastError: string | null;
+        status: string;
+      }>;
+      dependencies: Array<{ alias: string; kind: string; status: string }>;
+      summary: {
+        attentionRequiredBackfillJobs: Array<{
+          dependencyAlias: string;
+          dependencyKind: string;
+          lastError: string | null;
+          operatorAction: string;
+          status: string;
+        }>;
+        failedBackfillJobCount: number;
+        maintenanceState: string;
+      };
+      suggestedMaintenanceRequests: Array<{
+        input: {
+          aggregateAliases: string[];
+          kind: string;
+          reason: string;
+          requestId: string;
+          workflowId: string;
+          workspaceId: string;
+        };
+        reason: string;
+        successorToolId: string;
+        toolId: string;
+      }>;
+    };
+    expect(dependencyBody.dependencies).toContainEqual(
+      expect.objectContaining({
+        alias: "fld_account_revenue_rollup",
+        kind: "aggregate",
+        status: "published"
+      })
+    );
+    expect(dependencyBody.backfillJobs).toContainEqual(
+      expect.objectContaining({
+        dependencyAlias: "fld_account_revenue_rollup",
+        dependencyKind: "aggregate",
+        lastError: null,
+        status: "completed"
+      })
+    );
+    expect(dependencyBody.summary).toMatchObject({
+      attentionRequiredBackfillJobs: [],
+      completedBackfillJobCount: 1,
+      failedBackfillJobCount: 0,
+      maintenanceState: "complete"
+    });
+    expect(dependencyBody.suggestedMaintenanceRequests).toEqual([]);
+
+    const savedViewResponse = await handleFetch(
+      new Request(
+        `https://example.test/v1/tables/tbl_accounts/views/view_invited_recipe_accounts?workspaceId=ws_1&principalId=${invitedPrincipalId}&permissionScopeHash=scope:view:view_invited_recipe_accounts&policyRevision=73`
+      ),
+      env,
+      {} as ExecutionContext
+    );
+    expect(savedViewResponse.status).toBe(200);
+    expect((await savedViewResponse.json()) as Record<string, unknown>).toMatchObject({
+      rows: [
+        {
+          cells: {
+            fld_account_name: "Acme Corp",
+            fld_account_revenue_rollup: 35,
+            fld_account_status: "won"
+          },
+          redactedFieldIds: []
+        }
+      ],
+      view: {
+        redactedFieldIds: [],
+        visibleFieldIds: ["fld_account_name", "fld_account_status", "fld_account_revenue_rollup"]
+      }
+    });
+
+    const invitationRow = db.inner
+      .prepare(
+        `SELECT accepted_by_user_id, status
+         FROM invitations
+         WHERE id = ?`
+      )
+      .get(invitationBody.invitation.id) as {
+      accepted_by_user_id: string | null;
+      status: string;
+    };
+    expect(invitationRow).toEqual({
+      accepted_by_user_id: sessionBody.session.userId,
+      status: "accepted"
+    });
+  });
+
   it("scenario: workflow_service_identity_reactive_maintenance_writes preserve workflow principal metadata on coordinator-owned rollups", async () => {
     const { db, env } = createRuntimeEnv();
 
@@ -8047,6 +8831,21 @@ describe("cloudtable MVP regression matrix", () => {
         }
       },
       workflowId: "wf_service_identity_rollup"
+    });
+    insertRuntimePermissionSnapshot(db, {
+      fields: {
+        fld_account_revenue_rollup: {
+          agent: true,
+          fieldId: "fld_account_revenue_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      principalId: "wf_service",
+      scopeHash: "scope:wf:status-sync",
+      snapshotId: "snap_wf_service_identity_rollup"
     });
 
     await handleQueueBatch(
@@ -8389,6 +9188,21 @@ describe("cloudtable MVP regression matrix", () => {
       },
       workflowId: "wf_service_identity_max_rollup"
     });
+    insertRuntimePermissionSnapshot(db, {
+      fields: {
+        fld_account_max_rollup: {
+          agent: true,
+          fieldId: "fld_account_max_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      principalId: "wf_service_max",
+      scopeHash: "scope:wf:max-rollup",
+      snapshotId: "snap_wf_service_max_rollup"
+    });
 
     await handleQueueBatch(
       createRuntimeBatch([
@@ -8675,6 +9489,21 @@ describe("cloudtable MVP regression matrix", () => {
         }
       },
       workflowId: "wf_service_identity_average_rollup"
+    });
+    insertRuntimePermissionSnapshot(db, {
+      fields: {
+        fld_account_average_rollup: {
+          agent: true,
+          fieldId: "fld_account_average_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      principalId: "wf_service_average",
+      scopeHash: "scope:wf:average-rollup",
+      snapshotId: "snap_wf_service_average_rollup"
     });
 
     await handleQueueBatch(
@@ -8998,6 +9827,21 @@ describe("cloudtable MVP regression matrix", () => {
         }
       },
       workflowId: "wf_service_identity_value_match_max_rollup"
+    });
+    insertRuntimePermissionSnapshot(db, {
+      fields: {
+        fld_account_region_max_rollup: {
+          agent: true,
+          fieldId: "fld_account_region_max_rollup",
+          fieldType: "computed.readonly",
+          read: "visible",
+          workflow: true,
+          write: true
+        }
+      },
+      principalId: "wf_service_value_match_max",
+      scopeHash: "scope:wf:value-match-max-rollup",
+      snapshotId: "snap_wf_service_value_match_max_rollup"
     });
 
     await handleQueueBatch(

@@ -37,9 +37,14 @@ import type {
   TableSchemaInspector,
   ViewDefinitionInspector,
   WorkflowDeadLetterReplayRequester,
+  WorkflowDependencyOperationsReader,
   ViewQueryReader,
+  WorkflowAggregateMaintenanceRequester,
+  WorkflowBackfillDispositionRequester,
   WorkflowDefinitionInspector,
   WorkflowHistoryReader,
+  WorkflowLookupMaintenanceRequester,
+  WorkflowSyncMaintenanceRequester,
   WorkflowRunReader,
   WorkflowTestPreviewReader,
   WorkspaceInspector
@@ -59,9 +64,14 @@ type CreateAgentToolRegistryDeps = {
   recordInspector: RecordInspector;
   viewQueryReader: ViewQueryReader;
   workflowOperatorRegistry: WorkflowOperatorRegistry;
+  workflowDependencyOperationsReader: WorkflowDependencyOperationsReader;
   workflowHistoryReader: WorkflowHistoryReader;
   workflowRunReader: WorkflowRunReader;
   workflowDeadLetterReplayRequester: WorkflowDeadLetterReplayRequester;
+  workflowAggregateMaintenanceRequester: WorkflowAggregateMaintenanceRequester;
+  workflowBackfillDispositionRequester: WorkflowBackfillDispositionRequester;
+  workflowLookupMaintenanceRequester: WorkflowLookupMaintenanceRequester;
+  workflowSyncMaintenanceRequester: WorkflowSyncMaintenanceRequester;
   workspaceInspector: WorkspaceInspector;
 };
 
@@ -157,6 +167,215 @@ const workflowOperatorManifestSchema = {
       type: "number"
     }
   },
+  type: "object"
+} as const;
+
+const workflowDependencySummarySchema = {
+  properties: {
+    attentionRequiredBackfillJobs: {
+      items: {
+        properties: {
+          dependencyAlias: jsonStringSchema,
+          dependencyKind: jsonStringSchema,
+          id: jsonStringSchema,
+          lastError: jsonStringSchema,
+          operatorAction: {
+            enum: ["retry_backfill"],
+            type: "string"
+          },
+          reason: jsonStringSchema,
+          staleRunning: jsonBooleanSchema,
+          status: jsonStringSchema,
+          workflowVersionId: jsonStringSchema
+        },
+        type: "object"
+      },
+      type: "array"
+    },
+    abandonedBackfillJobCount: {
+      type: "number"
+    },
+    backfillJobsByStatus: {
+      type: "object"
+    },
+    completedBackfillJobCount: {
+      type: "number"
+    },
+    dependencyCount: {
+      type: "number"
+    },
+    dependenciesByKind: {
+      type: "object"
+    },
+    dependenciesByStatus: {
+      type: "object"
+    },
+    failedBackfillJobCount: {
+      type: "number"
+    },
+    intentionallyClosedBackfillJobs: {
+      items: {
+        properties: {
+          dependencyAlias: jsonStringSchema,
+          dependencyKind: jsonStringSchema,
+          id: jsonStringSchema,
+          operatorAction: {
+            enum: ["abandoned_backfill", "superseded_backfill"],
+            type: "string"
+          },
+          operatorActorPrincipalId: jsonStringSchema,
+          operatorReason: jsonStringSchema,
+          operatorTransitionAt: jsonStringSchema,
+          reason: jsonStringSchema,
+          status: jsonStringSchema,
+          supersededByJobId: jsonStringSchema,
+          workflowVersionId: jsonStringSchema
+        },
+        type: "object"
+      },
+      type: "array"
+    },
+    maintenanceState: {
+      description:
+        "Actionable workflow maintenance state: idle when no jobs exist, active while queued/running work remains, complete after all known jobs complete, or attention_required when failed jobs or last errors need operator action.",
+      enum: ["idle", "active", "complete", "attention_required"],
+      type: "string"
+    },
+    pendingBackfillJobCount: {
+      type: "number"
+    },
+    resumableBackfillJobCount: {
+      type: "number"
+    },
+    runningBackfillJobCount: {
+      type: "number"
+    },
+    staleRunningBackfillJobCount: {
+      type: "number"
+    },
+    supersededBackfillJobCount: {
+      type: "number"
+    },
+    terminalBackfillJobCount: {
+      type: "number"
+    },
+    totalBackfillJobCount: {
+      type: "number"
+    },
+    totalBackfillProcessedCount: {
+      type: "number"
+    }
+  },
+  required: [
+    "attentionRequiredBackfillJobs",
+    "abandonedBackfillJobCount",
+    "backfillJobsByStatus",
+    "completedBackfillJobCount",
+    "dependencyCount",
+    "dependenciesByKind",
+    "dependenciesByStatus",
+    "failedBackfillJobCount",
+    "intentionallyClosedBackfillJobs",
+    "maintenanceState",
+    "pendingBackfillJobCount",
+    "resumableBackfillJobCount",
+    "runningBackfillJobCount",
+    "staleRunningBackfillJobCount",
+    "supersededBackfillJobCount",
+    "terminalBackfillJobCount",
+    "totalBackfillJobCount",
+    "totalBackfillProcessedCount"
+  ],
+  type: "object"
+} as const;
+
+const workflowMaintenanceInputSchema = {
+  properties: {
+    changedFieldIds: {
+      items: jsonStringSchema,
+      type: "array"
+    },
+    kind: {
+      enum: ["backfill", "recompute"],
+      type: "string"
+    },
+    reason: jsonStringSchema,
+    recordId: jsonStringSchema,
+    requestId: jsonStringSchema,
+    workflowId: jsonStringSchema,
+    workspaceId: jsonStringSchema
+  },
+  required: ["kind", "workflowId", "workspaceId"],
+  type: "object"
+} as const;
+
+const workflowMaintenanceOutputSchema = {
+  properties: {
+    aliases: {
+      items: jsonStringSchema,
+      type: "array"
+    },
+    dependencyKind: {
+      enum: ["aggregate", "lookup", "sync"],
+      type: "string"
+    },
+    message: jsonStringSchema,
+    reason: jsonStringSchema,
+    requestId: jsonStringSchema,
+    status: {
+      enum: ["enqueued", "rejected"],
+      type: "string"
+    },
+    workflowId: jsonStringSchema,
+    workflowVersionId: jsonStringSchema
+  },
+  required: ["dependencyKind", "requestId", "status", "workflowId"],
+  type: "object"
+} as const;
+
+const workflowBackfillDispositionInputSchema = {
+  properties: {
+    disposition: {
+      enum: ["abandoned", "superseded"],
+      type: "string"
+    },
+    jobId: jsonStringSchema,
+    reason: jsonStringSchema,
+    supersededByJobId: jsonStringSchema,
+    workflowId: jsonStringSchema,
+    workspaceId: jsonStringSchema
+  },
+  required: ["disposition", "jobId", "reason", "workflowId", "workspaceId"],
+  type: "object"
+} as const;
+
+const workflowBackfillDispositionOutputSchema = {
+  properties: {
+    jobId: jsonStringSchema,
+    message: jsonStringSchema,
+    operatorReason: jsonStringSchema,
+    reason: jsonStringSchema,
+    status: {
+      enum: ["abandoned", "rejected", "superseded"],
+      type: "string"
+    },
+    supersededByJobId: jsonStringSchema,
+    workflowId: jsonStringSchema
+  },
+  required: ["jobId", "status", "workflowId"],
+  type: "object"
+} as const;
+
+const workflowSuggestedMaintenanceRequestSchema = {
+  properties: {
+    input: {
+      type: "object"
+    },
+    reason: jsonStringSchema,
+    successorToolId: jsonStringSchema,
+    toolId: jsonStringSchema
+  },
+  required: ["input", "reason", "successorToolId", "toolId"],
   type: "object"
 } as const;
 
@@ -676,6 +895,57 @@ const tools: AgentToolDefinition[] = [
   {
     binding: {
       kind: "query-service",
+      service: "workflowDependencyOperationsReader"
+    },
+    description:
+      "Read workflow dependency index and backfill job state through the same audited workflow-operations ingress used by direct runtime observers.",
+    fieldBinding: "none",
+    id: "readWorkflowDependencies",
+    inputSchema: {
+      properties: {
+        workflowId: jsonStringSchema,
+        workspaceId: jsonStringSchema
+      },
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        dependencies: {
+          properties: {
+            backfillJobs: {
+              type: "array"
+            },
+            dependencies: {
+              type: "array"
+            },
+            summary: workflowDependencySummarySchema,
+            suggestedMaintenanceRequests: {
+              items: workflowSuggestedMaintenanceRequestSchema,
+              type: "array"
+            },
+            workflowId: jsonStringSchema
+          },
+          required: [
+            "backfillJobs",
+            "dependencies",
+            "summary",
+            "suggestedMaintenanceRequests",
+            "workflowId"
+          ],
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "draft",
+    requiresConfirmation: false,
+    scope: "workflow"
+  },
+  {
+    binding: {
+      kind: "query-service",
       service: "workflowRunReader"
     },
     description:
@@ -729,6 +999,9 @@ const tools: AgentToolDefinition[] = [
         },
         request: {
           type: "object"
+        },
+        successorInvocation: {
+          type: "object"
         }
       },
       type: "object"
@@ -767,6 +1040,262 @@ const tools: AgentToolDefinition[] = [
       },
       type: "object"
     },
+    phase: "execute",
+    requiresConfirmation: true,
+    scope: "workflow"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "aggregate-maintenance"
+    },
+    description:
+      "Prepare a bounded aggregate workflow maintenance request for backfill or recompute after dependency inspection reports actionable state.",
+    fieldBinding: "none",
+    id: "prepareWorkflowAggregateMaintenance",
+    inputSchema: {
+      properties: {
+        ...workflowMaintenanceInputSchema.properties,
+        aggregateAliases: {
+          items: jsonStringSchema,
+          type: "array"
+        }
+      },
+      required: workflowMaintenanceInputSchema.required,
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        diffs: {
+          type: "array"
+        },
+        request: {
+          type: "object"
+        },
+        successorInvocation: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "workflow",
+    successorToolId: "requestWorkflowAggregateMaintenance"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "aggregate-maintenance"
+    },
+    description:
+      "Request aggregate workflow maintenance backfill or recompute through the workflow operations contract.",
+    fieldBinding: "none",
+    id: "requestWorkflowAggregateMaintenance",
+    inputSchema: {
+      properties: {
+        ...workflowMaintenanceInputSchema.properties,
+        aggregateAliases: {
+          items: jsonStringSchema,
+          type: "array"
+        }
+      },
+      required: workflowMaintenanceInputSchema.required,
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "workflow",
+    outputSchema: workflowMaintenanceOutputSchema,
+    phase: "execute",
+    requiresConfirmation: true,
+    scope: "workflow"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "lookup-maintenance"
+    },
+    description:
+      "Prepare a bounded lookup workflow maintenance request for backfill, source recompute, or target-scoped recompute after dependency inspection reports actionable state.",
+    fieldBinding: "none",
+    id: "prepareWorkflowLookupMaintenance",
+    inputSchema: {
+      properties: {
+        ...workflowMaintenanceInputSchema.properties,
+        lookupAliases: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        targetRecordId: jsonStringSchema
+      },
+      required: workflowMaintenanceInputSchema.required,
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        diffs: {
+          type: "array"
+        },
+        request: {
+          type: "object"
+        },
+        successorInvocation: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "workflow",
+    successorToolId: "requestWorkflowLookupMaintenance"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "lookup-maintenance"
+    },
+    description:
+      "Request lookup workflow maintenance backfill, source recompute, or target-scoped recompute through the workflow operations contract.",
+    fieldBinding: "none",
+    id: "requestWorkflowLookupMaintenance",
+    inputSchema: {
+      properties: {
+        ...workflowMaintenanceInputSchema.properties,
+        lookupAliases: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        targetRecordId: jsonStringSchema
+      },
+      required: workflowMaintenanceInputSchema.required,
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "workflow",
+    outputSchema: workflowMaintenanceOutputSchema,
+    phase: "execute",
+    requiresConfirmation: true,
+    scope: "workflow"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "sync-maintenance"
+    },
+    description:
+      "Prepare a bounded sync workflow maintenance request for backfill, source recompute, or target-scoped recompute after dependency inspection reports actionable state.",
+    fieldBinding: "none",
+    id: "prepareWorkflowSyncMaintenance",
+    inputSchema: {
+      properties: {
+        ...workflowMaintenanceInputSchema.properties,
+        syncAliases: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        targetRecordId: jsonStringSchema
+      },
+      required: workflowMaintenanceInputSchema.required,
+      type: "object"
+    },
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        diffs: {
+          type: "array"
+        },
+        request: {
+          type: "object"
+        },
+        successorInvocation: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "workflow",
+    successorToolId: "requestWorkflowSyncMaintenance"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "sync-maintenance"
+    },
+    description:
+      "Request sync workflow maintenance backfill, source recompute, or target-scoped recompute through the workflow operations contract.",
+    fieldBinding: "none",
+    id: "requestWorkflowSyncMaintenance",
+    inputSchema: {
+      properties: {
+        ...workflowMaintenanceInputSchema.properties,
+        syncAliases: {
+          items: jsonStringSchema,
+          type: "array"
+        },
+        targetRecordId: jsonStringSchema
+      },
+      required: workflowMaintenanceInputSchema.required,
+      type: "object"
+    },
+    mutating: true,
+    mutationTarget: "workflow",
+    outputSchema: workflowMaintenanceOutputSchema,
+    phase: "execute",
+    requiresConfirmation: true,
+    scope: "workflow"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "backfill-disposition"
+    },
+    description:
+      "Prepare an obsolete workflow backfill disposition for operator confirmation, preserving the audit reason and optional superseding job reference.",
+    fieldBinding: "none",
+    id: "prepareWorkflowBackfillDisposition",
+    inputSchema: workflowBackfillDispositionInputSchema,
+    mutating: false,
+    mutationTarget: "none",
+    outputSchema: {
+      properties: {
+        diffs: {
+          type: "array"
+        },
+        request: {
+          type: "object"
+        },
+        successorInvocation: {
+          type: "object"
+        }
+      },
+      type: "object"
+    },
+    phase: "preview",
+    requiresConfirmation: true,
+    scope: "workflow",
+    successorToolId: "requestWorkflowBackfillDisposition"
+  },
+  {
+    binding: {
+      kind: "workflow-operation",
+      operation: "backfill-disposition"
+    },
+    description:
+      "Apply an operator-reviewed obsolete workflow backfill disposition through the workflow operations contract.",
+    fieldBinding: "none",
+    id: "requestWorkflowBackfillDisposition",
+    inputSchema: workflowBackfillDispositionInputSchema,
+    mutating: true,
+    mutationTarget: "workflow",
+    outputSchema: workflowBackfillDispositionOutputSchema,
     phase: "execute",
     requiresConfirmation: true,
     scope: "workflow"
@@ -1845,6 +2374,119 @@ const singularFieldIdKeys = new Set([
   "targetFieldId"
 ]);
 
+function workflowMaintenanceRequestId(
+  dependencyKind: "aggregate" | "lookup" | "sync",
+  input: {
+    kind: "backfill" | "recompute";
+    requestId?: string;
+    workflowId: string;
+  }
+) {
+  return input.requestId ?? `workflow-${dependencyKind}-maintenance:${input.workflowId}:${input.kind}`;
+}
+
+function summarizeWorkflowMaintenanceRequest(input: {
+  aliases?: string[];
+  aliasesInputKey: "aggregateAliases" | "lookupAliases" | "syncAliases";
+  changedFieldIds?: string[];
+  dependencyKind: "aggregate" | "lookup" | "sync";
+  kind: "backfill" | "recompute";
+  reason?: string;
+  recordId?: string;
+  requestId: string;
+  successorToolId:
+    | "requestWorkflowAggregateMaintenance"
+    | "requestWorkflowLookupMaintenance"
+    | "requestWorkflowSyncMaintenance";
+  targetRecordId?: string;
+  workflowId: string;
+  workspaceId: string;
+}) {
+  const request = {
+    ...(input.aliases ? { aliases: input.aliases } : {}),
+    ...(input.changedFieldIds ? { changedFieldIds: input.changedFieldIds } : {}),
+    dependencyKind: input.dependencyKind,
+    kind: input.kind,
+    ...(input.reason ? { reason: input.reason } : {}),
+    ...(input.recordId ? { recordId: input.recordId } : {}),
+    requestId: input.requestId,
+    ...(input.targetRecordId ? { targetRecordId: input.targetRecordId } : {}),
+    workflowId: input.workflowId,
+    workspaceId: input.workspaceId
+  };
+  const successorInput = {
+    ...(input.aliases ? { [input.aliasesInputKey]: input.aliases } : {}),
+    ...(input.changedFieldIds ? { changedFieldIds: input.changedFieldIds } : {}),
+    kind: input.kind,
+    ...(input.reason ? { reason: input.reason } : {}),
+    ...(input.recordId ? { recordId: input.recordId } : {}),
+    requestId: input.requestId,
+    ...(input.targetRecordId ? { targetRecordId: input.targetRecordId } : {}),
+    workflowId: input.workflowId,
+    workspaceId: input.workspaceId
+  };
+
+  return {
+    diffs: [
+      {
+        action: "propose" as const,
+        after: request,
+        note: `Request ${input.dependencyKind} workflow maintenance ${input.kind}.`,
+        path: `$.workflowMaintenance.${input.dependencyKind}`
+      }
+    ],
+    kind: "workflow-maintenance-draft" as const,
+    request,
+    successorInvocation: {
+      input: successorInput,
+      toolId: input.successorToolId
+    }
+  };
+}
+
+function summarizeWorkflowBackfillDispositionRequest(input: {
+  disposition: "abandoned" | "superseded";
+  jobId: string;
+  reason: string;
+  supersededByJobId?: string;
+  successorToolId: "requestWorkflowBackfillDisposition";
+  workflowId: string;
+  workspaceId: string;
+}) {
+  if (input.disposition === "superseded" && !input.supersededByJobId) {
+    throw new Error("supersededByJobId is required when superseding a backfill job.");
+  }
+
+  const request = {
+    disposition: input.disposition,
+    jobId: input.jobId,
+    reason: input.reason,
+    ...(input.supersededByJobId ? { supersededByJobId: input.supersededByJobId } : {}),
+    workflowId: input.workflowId,
+    workspaceId: input.workspaceId
+  };
+
+  return {
+    diffs: [
+      {
+        action: "propose" as const,
+        after: request,
+        note:
+          input.disposition === "superseded"
+            ? "Mark one obsolete workflow backfill job as superseded."
+            : "Mark one obsolete workflow backfill job as abandoned.",
+        path: `$.workflowBackfillDisposition.${input.jobId}`
+      }
+    ],
+    kind: "workflow-backfill-disposition-draft" as const,
+    request,
+    successorInvocation: {
+      input: request,
+      toolId: input.successorToolId
+    }
+  };
+}
+
 export function createAgentToolRegistry({
   permissionEngine,
   commandBus,
@@ -1859,9 +2501,14 @@ export function createAgentToolRegistry({
   recordInspector,
   viewQueryReader,
   workflowOperatorRegistry,
+  workflowDependencyOperationsReader,
   workflowHistoryReader,
   workflowRunReader,
   workflowDeadLetterReplayRequester,
+  workflowAggregateMaintenanceRequester,
+  workflowBackfillDispositionRequester,
+  workflowLookupMaintenanceRequester,
+  workflowSyncMaintenanceRequester,
   workspaceInspector
 }: CreateAgentToolRegistryDeps): AgentToolRegistry {
   return {
@@ -1983,6 +2630,13 @@ export function createAgentToolRegistry({
             history: await Promise.resolve(workflowHistoryReader.read(invocation.input)),
             kind: "workflow-history"
           };
+        case "readWorkflowDependencies":
+          return {
+            dependencies: await Promise.resolve(
+              workflowDependencyOperationsReader.read(invocation.input)
+            ),
+            kind: "workflow-dependencies"
+          };
         case "readWorkflowRunDetail":
           return {
             kind: "workflow-run-detail",
@@ -2016,6 +2670,102 @@ export function createAgentToolRegistry({
           return {
             kind: "workflow-dead-letter-replay",
             ...(await Promise.resolve(workflowDeadLetterReplayRequester.requestReplay(invocation.input)))
+          };
+        case "prepareWorkflowAggregateMaintenance":
+          return summarizeWorkflowMaintenanceRequest({
+            aliases: invocation.input.aggregateAliases,
+            aliasesInputKey: "aggregateAliases",
+            changedFieldIds: invocation.input.changedFieldIds,
+            dependencyKind: "aggregate",
+            kind: invocation.input.kind,
+            reason: invocation.input.reason,
+            recordId: invocation.input.recordId,
+            requestId: workflowMaintenanceRequestId("aggregate", invocation.input),
+            successorToolId: "requestWorkflowAggregateMaintenance",
+            workflowId: invocation.input.workflowId,
+            workspaceId: invocation.input.workspaceId
+          });
+        case "requestWorkflowAggregateMaintenance":
+          return {
+            dependencyKind: "aggregate",
+            kind: "workflow-maintenance-request",
+            ...(await Promise.resolve(
+              workflowAggregateMaintenanceRequester.requestMaintenance({
+                ...invocation.input,
+                requestId: workflowMaintenanceRequestId("aggregate", invocation.input)
+              })
+            ))
+          };
+        case "prepareWorkflowLookupMaintenance":
+          return summarizeWorkflowMaintenanceRequest({
+            aliases: invocation.input.lookupAliases,
+            aliasesInputKey: "lookupAliases",
+            changedFieldIds: invocation.input.changedFieldIds,
+            dependencyKind: "lookup",
+            kind: invocation.input.kind,
+            requestId: workflowMaintenanceRequestId("lookup", invocation.input),
+            reason: invocation.input.reason,
+            recordId: invocation.input.recordId,
+            successorToolId: "requestWorkflowLookupMaintenance",
+            ...(invocation.input.targetRecordId ? { targetRecordId: invocation.input.targetRecordId } : {}),
+            workflowId: invocation.input.workflowId,
+            workspaceId: invocation.input.workspaceId
+          });
+        case "requestWorkflowLookupMaintenance":
+          return {
+            dependencyKind: "lookup",
+            kind: "workflow-maintenance-request",
+            ...(await Promise.resolve(
+              workflowLookupMaintenanceRequester.requestMaintenance({
+                ...invocation.input,
+                requestId: workflowMaintenanceRequestId("lookup", invocation.input)
+              })
+            ))
+          };
+        case "prepareWorkflowSyncMaintenance":
+          return summarizeWorkflowMaintenanceRequest({
+            aliases: invocation.input.syncAliases,
+            aliasesInputKey: "syncAliases",
+            changedFieldIds: invocation.input.changedFieldIds,
+            dependencyKind: "sync",
+            kind: invocation.input.kind,
+            requestId: workflowMaintenanceRequestId("sync", invocation.input),
+            reason: invocation.input.reason,
+            recordId: invocation.input.recordId,
+            successorToolId: "requestWorkflowSyncMaintenance",
+            ...(invocation.input.targetRecordId ? { targetRecordId: invocation.input.targetRecordId } : {}),
+            workflowId: invocation.input.workflowId,
+            workspaceId: invocation.input.workspaceId
+          });
+        case "requestWorkflowSyncMaintenance":
+          return {
+            dependencyKind: "sync",
+            kind: "workflow-maintenance-request",
+            ...(await Promise.resolve(
+              workflowSyncMaintenanceRequester.requestMaintenance({
+                ...invocation.input,
+                requestId: workflowMaintenanceRequestId("sync", invocation.input)
+              })
+            ))
+          };
+        case "prepareWorkflowBackfillDisposition":
+          return summarizeWorkflowBackfillDispositionRequest({
+            disposition: invocation.input.disposition,
+            jobId: invocation.input.jobId,
+            reason: invocation.input.reason,
+            ...(invocation.input.supersededByJobId
+              ? { supersededByJobId: invocation.input.supersededByJobId }
+              : {}),
+            successorToolId: "requestWorkflowBackfillDisposition",
+            workflowId: invocation.input.workflowId,
+            workspaceId: invocation.input.workspaceId
+          });
+        case "requestWorkflowBackfillDisposition":
+          return {
+            kind: "workflow-backfill-disposition",
+            ...(await Promise.resolve(
+              workflowBackfillDispositionRequester.requestDisposition(invocation.input)
+            ))
           };
         case "createApp": {
           const command = buildCommandEnvelope("base.create", "workspace", invocation.input, {

@@ -91,6 +91,7 @@ type AggregateTrigger =
       eventType?: string | null;
       kind: "recompute";
       recordId?: string | null;
+      targetRecordId?: string | null;
     };
 
 type ParsedMaintenanceMessage =
@@ -116,6 +117,30 @@ type ParsedMaintenanceMessage =
 type RecordRow = {
   id: string;
 };
+
+type WorkflowBackfillJobRow = {
+  chunk_size: number;
+  cursor_json: string | null;
+  processed_count: number;
+  status: string;
+};
+
+const TERMINAL_BACKFILL_STATUSES = new Set(["abandoned", "completed", "superseded"]);
+
+type BackfillCursor = {
+  lastRecordId?: string;
+};
+
+type BackfillJobState = {
+  chunkSize: number;
+  cursor: BackfillCursor;
+  processedCount: number;
+  status: string;
+};
+
+function isTerminalBackfillStatus(status: string): boolean {
+  return TERMINAL_BACKFILL_STATUSES.has(status);
+}
 
 type RelatedSourceRow = {
   numeric_value?: number | null;
@@ -244,7 +269,8 @@ function parseAggregateMessage(message: CloudTableQueueMessage): ParsedMaintenan
           eventId: readString(trigger.eventId),
           eventType: readString(trigger.eventType),
           kind: "recompute",
-          recordId: readString(trigger.recordId)
+          recordId: readString(trigger.recordId),
+          targetRecordId: readString(trigger.targetRecordId)
         };
 
   if (parsedAggregate) {
@@ -437,12 +463,52 @@ async function loadActiveRecordIds(
   return (rows.results ?? []).map((row) => row.id);
 }
 
+async function loadActiveRecordIdChunk(
+  db: D1Database,
+  input: {
+    afterRecordId?: string;
+    limit: number;
+    tableId: string;
+    workspaceId: string;
+  }
+): Promise<string[]> {
+  const rows = await db
+    .prepare(
+      `SELECT id
+       FROM records
+       WHERE workspace_id = ?
+         AND table_id = ?
+         AND archived_at IS NULL
+         AND (? IS NULL OR id > ?)
+       ORDER BY id ASC
+       LIMIT ?`
+    )
+    .bind(
+      input.workspaceId,
+      input.tableId,
+      input.afterRecordId ?? null,
+      input.afterRecordId ?? null,
+      input.limit
+    )
+    .all<RecordRow>();
+
+  return (rows.results ?? []).map((row) => row.id);
+}
+
 async function loadRelatedSourceRows(
   db: D1Database,
   workspaceId: string,
-  aggregate: RoutedAggregateDefinition
+  aggregate: RoutedAggregateDefinition,
+  sourceRecordIds?: readonly string[]
 ): Promise<Array<{ numericValue: number | null; recordId: string; targetRecordId: string | null }>> {
   const operandFieldId = aggregate.operand?.fieldId ?? null;
+  const sourceRecordFilter =
+    sourceRecordIds && sourceRecordIds.length > 0
+      ? {
+          clause: ` AND records.id IN (${sourceRecordIds.map(() => "?").join(", ")})`,
+          values: [...sourceRecordIds]
+        }
+      : { clause: "", values: [] as string[] };
 
   if (aggregate.resolver.strategy === "value_match") {
     const [sourceRows, targetRows] = await Promise.all([
@@ -465,14 +531,15 @@ async function loadRelatedSourceRows(
             AND operand_cell.field_id = ?
            WHERE records.workspace_id = ?
              AND records.table_id = ?
-             AND records.archived_at IS NULL
+             AND records.archived_at IS NULL${sourceRecordFilter.clause}
            ORDER BY records.id ASC`
         )
         .bind(
           aggregate.resolver.sourceFieldId,
           operandFieldId,
           workspaceId,
-          aggregate.sourceTableId
+          aggregate.sourceTableId,
+          ...sourceRecordFilter.values
         )
         .all<RelatedSourceRow>(),
       db
@@ -552,10 +619,16 @@ async function loadRelatedSourceRows(
         AND operand_cell.field_id = ?
        WHERE records.workspace_id = ?
          AND records.table_id = ?
-         AND records.archived_at IS NULL
+         AND records.archived_at IS NULL${sourceRecordFilter.clause}
        ORDER BY records.id ASC`
     )
-    .bind(aggregate.resolver.sourceFieldId, operandFieldId, workspaceId, aggregate.sourceTableId)
+    .bind(
+      aggregate.resolver.sourceFieldId,
+      operandFieldId,
+      workspaceId,
+      aggregate.sourceTableId,
+      ...sourceRecordFilter.values
+    )
     .all<RelatedSourceRow>();
 
   return (rows.results ?? []).map((row) => ({
@@ -640,6 +713,40 @@ async function loadLookupNextValue(
     .first<{ value_json: string | null }>();
 
   return parseRawCellValue(relatedValue?.value_json ?? null);
+}
+
+async function loadLookupSourceRecordIdsForTargetRecord(
+  db: D1Database,
+  workspaceId: string,
+  lookup: RoutedLookupDefinition,
+  targetRecordId: string
+): Promise<string[]> {
+  const rows = await db
+    .prepare(
+      `SELECT
+         records.id AS record_id,
+         cell_current.value_json AS value_json
+       FROM records
+       LEFT JOIN cell_current
+         ON cell_current.workspace_id = records.workspace_id
+        AND cell_current.table_id = records.table_id
+        AND cell_current.record_id = records.id
+        AND cell_current.field_id = ?
+       WHERE records.workspace_id = ?
+         AND records.table_id = ?
+         AND records.archived_at IS NULL
+       ORDER BY records.id ASC`
+    )
+    .bind(lookup.resolver.sourceFieldId, workspaceId, lookup.sourceTableId)
+    .all<{ record_id: string; value_json: string | null }>();
+
+  return (rows.results ?? [])
+    .filter((row) => {
+      const raw = parseRawCellValue(row.value_json);
+      const relatedRecordIds = Array.isArray(raw) ? raw : [raw];
+      return relatedRecordIds.includes(targetRecordId);
+    })
+    .map((row) => row.record_id);
 }
 
 type SyncSourceRow = {
@@ -929,6 +1036,224 @@ function commandIdentityForSyncTarget(
   };
 }
 
+async function markBackfillJobRunning(
+  db: D1Database,
+  input: {
+    alias: string;
+    dependencyKind: "aggregate" | "lookup" | "sync";
+    reason: string;
+    workflowVersionId: string;
+    workspaceId: string;
+  }
+): Promise<BackfillJobState | null> {
+  const row = await db
+    .prepare(
+      `SELECT chunk_size, cursor_json, processed_count, status
+       FROM workflow_backfill_jobs
+       WHERE workspace_id = ?
+         AND workflow_version_id = ?
+         AND dependency_kind = ?
+         AND dependency_alias = ?
+         AND reason = ?`
+    )
+    .bind(
+      input.workspaceId,
+      input.workflowVersionId,
+      input.dependencyKind,
+      input.alias,
+      input.reason
+    )
+    .first<WorkflowBackfillJobRow>();
+  if (!row) {
+    return null;
+  }
+  if (isTerminalBackfillStatus(row.status)) {
+    return {
+      chunkSize: Math.max(1, row.chunk_size),
+      cursor: parseBackfillCursor(row.cursor_json),
+      processedCount: row.processed_count,
+      status: row.status
+    };
+  }
+
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = 'running',
+             attempt_count = attempt_count + 1,
+             last_error = NULL,
+             updated_at = ?
+         WHERE workspace_id = ?
+           AND workflow_version_id = ?
+           AND dependency_kind = ?
+           AND dependency_alias = ?
+           AND reason = ?
+           AND status NOT IN ('abandoned', 'completed', 'superseded')`
+      )
+      .bind(
+        new Date().toISOString(),
+        input.workspaceId,
+        input.workflowVersionId,
+        input.dependencyKind,
+        input.alias,
+        input.reason
+      )
+  ]);
+
+  return {
+    chunkSize: Math.max(1, row.chunk_size),
+    cursor: parseBackfillCursor(row.cursor_json),
+    processedCount: row.processed_count,
+    status: "running"
+  };
+}
+
+async function markBackfillJobCompleted(
+  db: D1Database,
+  input: {
+    alias: string;
+    dependencyKind: "aggregate" | "lookup" | "sync";
+    processedCount: number;
+    reason: string;
+    workflowVersionId: string;
+    workspaceId: string;
+  }
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = 'completed',
+             processed_count = ?,
+             cursor_json = NULL,
+             last_error = NULL,
+             updated_at = ?,
+             completed_at = ?
+         WHERE workspace_id = ?
+           AND workflow_version_id = ?
+           AND dependency_kind = ?
+           AND dependency_alias = ?
+           AND reason = ?`
+      )
+      .bind(
+        input.processedCount,
+        now,
+        now,
+        input.workspaceId,
+        input.workflowVersionId,
+        input.dependencyKind,
+        input.alias,
+        input.reason
+      )
+  ]);
+}
+
+function parseBackfillCursor(cursorJson: string | null): BackfillCursor {
+  if (!cursorJson) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(cursorJson) as unknown;
+    if (!isRecord(parsed)) {
+      return {};
+    }
+    return typeof parsed.lastRecordId === "string" && parsed.lastRecordId.length > 0
+      ? { lastRecordId: parsed.lastRecordId }
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+async function markBackfillJobChunkProgress(
+  db: D1Database,
+  input: {
+    alias: string;
+    dependencyKind: "aggregate" | "lookup" | "sync";
+    lastRecordId: string;
+    processedCount: number;
+    reason: string;
+    workflowVersionId: string;
+    workspaceId: string;
+  }
+): Promise<void> {
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = 'queued',
+             processed_count = processed_count + ?,
+             cursor_json = ?,
+             last_error = NULL,
+             updated_at = ?
+         WHERE workspace_id = ?
+           AND workflow_version_id = ?
+           AND dependency_kind = ?
+           AND dependency_alias = ?
+           AND reason = ?
+           AND status NOT IN ('abandoned', 'completed', 'superseded')`
+      )
+      .bind(
+        input.processedCount,
+        JSON.stringify({ lastRecordId: input.lastRecordId }),
+        new Date().toISOString(),
+        input.workspaceId,
+        input.workflowVersionId,
+        input.dependencyKind,
+        input.alias,
+        input.reason
+      )
+  ]);
+}
+
+async function markBackfillJobFailed(
+  db: D1Database,
+  input: {
+    alias: string;
+    dependencyKind: "aggregate" | "lookup" | "sync";
+    error: unknown;
+    reason: string;
+    workflowVersionId: string;
+    workspaceId: string;
+  }
+): Promise<void> {
+  const message = input.error instanceof Error ? input.error.message : String(input.error);
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE workflow_backfill_jobs
+         SET status = 'queued',
+             last_error = ?,
+             updated_at = ?
+         WHERE workspace_id = ?
+           AND workflow_version_id = ?
+           AND dependency_kind = ?
+           AND dependency_alias = ?
+           AND reason = ?
+           AND status NOT IN ('abandoned', 'completed', 'superseded')`
+      )
+      .bind(
+        message,
+        new Date().toISOString(),
+        input.workspaceId,
+        input.workflowVersionId,
+        input.dependencyKind,
+        input.alias,
+        input.reason
+      )
+  ]);
+}
+
+async function enqueueNextBackfillChunk(
+  env: CloudTableEnv,
+  message: CloudTableQueueMessage
+): Promise<void> {
+  await env.AGGREGATE_MAINTENANCE_QUEUE.send(message);
+}
+
 export async function processAggregateMaintenanceMessage(
   env: CloudTableEnv,
   message: CloudTableQueueMessage
@@ -945,117 +1270,72 @@ export async function processAggregateMaintenanceMessage(
   });
 
   if ("lookup" in parsed) {
-    const sourceRecordIds =
-      parsed.trigger.kind === "recompute" && parsed.trigger.recordId
-        ? [parsed.trigger.recordId]
-        : await loadActiveRecordIds(env.DB, message.workspaceId, parsed.lookup.sourceTableId);
-    const [activeSourceRecordIds, currentValues] = await Promise.all([
-      loadActiveRecordIds(env.DB, message.workspaceId, parsed.lookup.sourceTableId),
-      loadLookupCurrentFieldValues(env.DB, message.workspaceId, parsed.lookup)
-    ]);
-    const activeSourceRecordIdSet = new Set(activeSourceRecordIds);
-
-    for (const sourceRecordId of sourceRecordIds) {
-      if (!activeSourceRecordIdSet.has(sourceRecordId)) {
-        continue;
-      }
-
-      const nextValue = await loadLookupNextValue(
-        env.DB,
-        message.workspaceId,
-        parsed.lookup,
-        sourceRecordId
-      );
-      const currentValue = currentValues.get(sourceRecordId) ?? null;
-      if (JSON.stringify(currentValue) === JSON.stringify(nextValue)) {
-        continue;
-      }
-
-      const identity = commandIdentityForLookupTarget({
-        lookup: parsed.lookup,
-        sourceRecordId,
-        trigger: parsed.trigger,
-        workflowVersionId: parsed.workflowVersionId
-      });
-      await dispatchCoordinatorOwnedCellSet(env, {
-        ...applyWorkflowServiceIdentity(workflowServiceIdentity),
-        commandId: identity.commandId,
-        commandType: "cell.set",
-        idempotencyKey: identity.idempotencyKey,
-        payload: {
-          fieldId: parsed.lookup.targetFieldId,
-          fieldType: "computed.readonly",
-          recordId: sourceRecordId,
-          value: nextValue
-        },
-        scope: "table",
-        tableId: parsed.lookup.sourceTableId,
+    let backfillJob: BackfillJobState | null = null;
+    if (parsed.trigger.kind === "backfill") {
+      backfillJob = await markBackfillJobRunning(env.DB, {
+        alias: parsed.lookup.alias,
+        dependencyKind: "lookup",
+        reason: parsed.trigger.reason,
+        workflowVersionId: parsed.workflowVersionId,
         workspaceId: message.workspaceId
       });
+      if (backfillJob && isTerminalBackfillStatus(backfillJob.status)) {
+        return;
+      }
     }
-
-    return;
-  }
-
-  if ("sync" in parsed) {
-    const targetFieldType = await loadFieldType(env.DB, {
-      fieldId: parsed.sync.targetFieldId,
-      tableId: parsed.sync.targetTableId,
-      workspaceId: message.workspaceId
-    });
-    const scopedSourceRecordIds =
-      parsed.trigger.kind === "recompute" && parsed.trigger.recordId
-        ? [parsed.trigger.recordId]
-        : undefined;
-    const [currentValues, sourceRows] = await Promise.all([
-      loadSyncTargetFieldValues(env.DB, message.workspaceId, parsed.sync),
-      loadSyncSourceRows(env.DB, message.workspaceId, parsed.sync, scopedSourceRecordIds)
-    ]);
-    const targetRecordIdsByMatchKey =
-      parsed.sync.resolver.strategy === "value_match"
-        ? await loadSyncTargetRecordIdsByMatchKey(
-            env.DB,
-            message.workspaceId,
-            parsed.sync as RoutedSyncDefinition & {
-              resolver: {
-                sourceFieldId: string;
-                strategy: "value_match";
-                targetFieldId: string;
-                targetTableId: string;
-              };
-            }
-          )
-        : null;
-
-    for (const row of sourceRows) {
-      const sourceValue = parseRawCellValue(row.source_value_json ?? null);
-      const targetRecordIds =
-        parsed.sync.resolver.strategy === "single_relation"
-          ? Array.from(
-              new Set(
-                (Array.isArray(parseRawCellValue(row.match_value_json ?? null))
-                  ? (parseRawCellValue(row.match_value_json ?? null) as JsonValue[])
-                  : [parseRawCellValue(row.match_value_json ?? null)]
-                ).filter(
-                  (recordId): recordId is string =>
-                    typeof recordId === "string" && recordId.length > 0
-                )
+    const sourceRecordIdsWithSentinel =
+      parsed.trigger.kind === "backfill" && backfillJob
+        ? await loadActiveRecordIdChunk(env.DB, {
+            afterRecordId: backfillJob.cursor.lastRecordId,
+            limit: backfillJob.chunkSize + 1,
+            tableId: parsed.lookup.sourceTableId,
+            workspaceId: message.workspaceId
+          })
+        : parsed.trigger.kind === "recompute" && parsed.trigger.recordId
+          ? [parsed.trigger.recordId]
+          : parsed.trigger.kind === "recompute" && parsed.trigger.targetRecordId
+            ? await loadLookupSourceRecordIdsForTargetRecord(
+                env.DB,
+                message.workspaceId,
+                parsed.lookup,
+                parsed.trigger.targetRecordId
               )
-            ).sort()
-          : (targetRecordIdsByMatchKey?.get(
-              scalarMatchKey(parseScalarCellValue(row.match_value_json ?? null)) ?? "__missing__"
-            ) ?? []);
+          : await loadActiveRecordIds(env.DB, message.workspaceId, parsed.lookup.sourceTableId);
+    const sourceRecordIds =
+      parsed.trigger.kind === "backfill" && backfillJob
+        ? sourceRecordIdsWithSentinel.slice(0, backfillJob.chunkSize)
+        : sourceRecordIdsWithSentinel;
+    const hasMoreBackfillRecords =
+      parsed.trigger.kind === "backfill" &&
+      backfillJob !== null &&
+      sourceRecordIdsWithSentinel.length > backfillJob.chunkSize;
 
-      for (const targetRecordId of targetRecordIds) {
-        const currentValue = currentValues.get(targetRecordId) ?? null;
-        if (JSON.stringify(currentValue) === JSON.stringify(sourceValue)) {
+    try {
+      const [activeSourceRecordIds, currentValues] = await Promise.all([
+        loadActiveRecordIds(env.DB, message.workspaceId, parsed.lookup.sourceTableId),
+        loadLookupCurrentFieldValues(env.DB, message.workspaceId, parsed.lookup)
+      ]);
+      const activeSourceRecordIdSet = new Set(activeSourceRecordIds);
+
+      for (const sourceRecordId of sourceRecordIds) {
+        if (!activeSourceRecordIdSet.has(sourceRecordId)) {
           continue;
         }
 
-        const identity = commandIdentityForSyncTarget({
-          sourceRecordId: row.record_id,
-          sync: parsed.sync,
-          targetRecordId,
+        const nextValue = await loadLookupNextValue(
+          env.DB,
+          message.workspaceId,
+          parsed.lookup,
+          sourceRecordId
+        );
+        const currentValue = currentValues.get(sourceRecordId) ?? null;
+        if (JSON.stringify(currentValue) === JSON.stringify(nextValue)) {
+          continue;
+        }
+
+        const identity = commandIdentityForLookupTarget({
+          lookup: parsed.lookup,
+          sourceRecordId,
           trigger: parsed.trigger,
           workflowVersionId: parsed.workflowVersionId
         });
@@ -1065,21 +1345,283 @@ export async function processAggregateMaintenanceMessage(
           commandType: "cell.set",
           idempotencyKey: identity.idempotencyKey,
           payload: {
-            fieldId: parsed.sync.targetFieldId,
-            fieldType: targetFieldType,
-            recordId: targetRecordId,
-            value: sourceValue
+            fieldId: parsed.lookup.targetFieldId,
+            fieldType: "computed.readonly",
+            recordId: sourceRecordId,
+            value: nextValue
           },
           scope: "table",
-          tableId: parsed.sync.targetTableId,
+          tableId: parsed.lookup.sourceTableId,
           workspaceId: message.workspaceId
         });
       }
-    }
 
+      if (parsed.trigger.kind === "backfill") {
+        if (backfillJob) {
+          if (hasMoreBackfillRecords && sourceRecordIds.length > 0) {
+            await markBackfillJobChunkProgress(env.DB, {
+              alias: parsed.lookup.alias,
+              dependencyKind: "lookup",
+              lastRecordId: sourceRecordIds[sourceRecordIds.length - 1]!,
+              processedCount: sourceRecordIds.length,
+              reason: parsed.trigger.reason,
+              workflowVersionId: parsed.workflowVersionId,
+              workspaceId: message.workspaceId
+            });
+            await enqueueNextBackfillChunk(env, message);
+          } else {
+            await markBackfillJobCompleted(env.DB, {
+              alias: parsed.lookup.alias,
+              dependencyKind: "lookup",
+              processedCount: backfillJob.processedCount + sourceRecordIds.length,
+              reason: parsed.trigger.reason,
+              workflowVersionId: parsed.workflowVersionId,
+              workspaceId: message.workspaceId
+            });
+          }
+        } else {
+          await markBackfillJobCompleted(env.DB, {
+            alias: parsed.lookup.alias,
+            dependencyKind: "lookup",
+            processedCount: sourceRecordIds.length,
+            reason: parsed.trigger.reason,
+            workflowVersionId: parsed.workflowVersionId,
+            workspaceId: message.workspaceId
+          });
+        }
+      }
+    } catch (error) {
+      if (parsed.trigger.kind === "backfill" && backfillJob) {
+        await markBackfillJobFailed(env.DB, {
+          alias: parsed.lookup.alias,
+          dependencyKind: "lookup",
+          error,
+          reason: parsed.trigger.reason,
+          workflowVersionId: parsed.workflowVersionId,
+          workspaceId: message.workspaceId
+        });
+      }
+      throw error;
+    }
     return;
   }
 
+  if ("sync" in parsed) {
+    let backfillJob: BackfillJobState | null = null;
+    if (parsed.trigger.kind === "backfill") {
+      backfillJob = await markBackfillJobRunning(env.DB, {
+        alias: parsed.sync.alias,
+        dependencyKind: "sync",
+        reason: parsed.trigger.reason,
+        workflowVersionId: parsed.workflowVersionId,
+        workspaceId: message.workspaceId
+      });
+      if (backfillJob && isTerminalBackfillStatus(backfillJob.status)) {
+        return;
+      }
+    }
+    const sourceRecordIdsWithSentinel =
+      parsed.trigger.kind === "backfill" && backfillJob
+        ? await loadActiveRecordIdChunk(env.DB, {
+            afterRecordId: backfillJob.cursor.lastRecordId,
+            limit: backfillJob.chunkSize + 1,
+            tableId: parsed.sync.sourceTableId,
+            workspaceId: message.workspaceId
+          })
+        : undefined;
+    const scopedSourceRecordIds =
+      parsed.trigger.kind === "backfill" && backfillJob
+        ? sourceRecordIdsWithSentinel!.slice(0, backfillJob.chunkSize)
+        : parsed.trigger.kind === "recompute" && parsed.trigger.recordId
+          ? [parsed.trigger.recordId]
+          : undefined;
+    const hasMoreBackfillRecords =
+      parsed.trigger.kind === "backfill" &&
+      backfillJob !== null &&
+      sourceRecordIdsWithSentinel !== undefined &&
+      sourceRecordIdsWithSentinel.length > backfillJob.chunkSize;
+
+    try {
+      const targetFieldType = await loadFieldType(env.DB, {
+        fieldId: parsed.sync.targetFieldId,
+        tableId: parsed.sync.targetTableId,
+        workspaceId: message.workspaceId
+      });
+      const [currentValues, sourceRows] = await Promise.all([
+        loadSyncTargetFieldValues(env.DB, message.workspaceId, parsed.sync),
+        loadSyncSourceRows(env.DB, message.workspaceId, parsed.sync, scopedSourceRecordIds)
+      ]);
+      const targetRecordIdsByMatchKey =
+        parsed.sync.resolver.strategy === "value_match"
+          ? await loadSyncTargetRecordIdsByMatchKey(
+              env.DB,
+              message.workspaceId,
+              parsed.sync as RoutedSyncDefinition & {
+                resolver: {
+                  sourceFieldId: string;
+                  strategy: "value_match";
+                  targetFieldId: string;
+                  targetTableId: string;
+                };
+              }
+            )
+          : null;
+      const reconciledTargetRecordIds = new Set<string>();
+
+      for (const row of sourceRows) {
+        const sourceValue = parseRawCellValue(row.source_value_json ?? null);
+        const targetRecordIds =
+          parsed.sync.resolver.strategy === "single_relation"
+            ? Array.from(
+                new Set(
+                  (Array.isArray(parseRawCellValue(row.match_value_json ?? null))
+                    ? (parseRawCellValue(row.match_value_json ?? null) as JsonValue[])
+                    : [parseRawCellValue(row.match_value_json ?? null)]
+                  ).filter(
+                    (recordId): recordId is string =>
+                      typeof recordId === "string" && recordId.length > 0
+                  )
+                )
+              ).sort()
+            : (targetRecordIdsByMatchKey?.get(
+                scalarMatchKey(parseScalarCellValue(row.match_value_json ?? null)) ?? "__missing__"
+              ) ?? []);
+
+        for (const targetRecordId of targetRecordIds) {
+          if (
+            parsed.trigger.kind === "recompute" &&
+            parsed.trigger.targetRecordId &&
+            targetRecordId !== parsed.trigger.targetRecordId
+          ) {
+            continue;
+          }
+
+          reconciledTargetRecordIds.add(targetRecordId);
+          const currentValue = currentValues.get(targetRecordId) ?? null;
+          if (JSON.stringify(currentValue) === JSON.stringify(sourceValue)) {
+            continue;
+          }
+
+          const identity = commandIdentityForSyncTarget({
+            sourceRecordId: row.record_id,
+            sync: parsed.sync,
+            targetRecordId,
+            trigger: parsed.trigger,
+            workflowVersionId: parsed.workflowVersionId
+          });
+          await dispatchCoordinatorOwnedCellSet(env, {
+            ...applyWorkflowServiceIdentity(workflowServiceIdentity),
+            commandId: identity.commandId,
+            commandType: "cell.set",
+            idempotencyKey: identity.idempotencyKey,
+            payload: {
+              fieldId: parsed.sync.targetFieldId,
+              fieldType: targetFieldType,
+              recordId: targetRecordId,
+              value: sourceValue
+            },
+            scope: "table",
+            tableId: parsed.sync.targetTableId,
+            workspaceId: message.workspaceId
+          });
+        }
+      }
+
+      if (
+        parsed.trigger.kind === "recompute" &&
+        parsed.trigger.targetRecordId &&
+        !reconciledTargetRecordIds.has(parsed.trigger.targetRecordId)
+      ) {
+        const currentValue = currentValues.get(parsed.trigger.targetRecordId) ?? null;
+        if (currentValue !== null) {
+          const identity = commandIdentityForSyncTarget({
+            sourceRecordId: `target:${parsed.trigger.targetRecordId}`,
+            sync: parsed.sync,
+            targetRecordId: parsed.trigger.targetRecordId,
+            trigger: parsed.trigger,
+            workflowVersionId: parsed.workflowVersionId
+          });
+          await dispatchCoordinatorOwnedCellSet(env, {
+            ...applyWorkflowServiceIdentity(workflowServiceIdentity),
+            commandId: identity.commandId,
+            commandType: "cell.set",
+            idempotencyKey: identity.idempotencyKey,
+            payload: {
+              fieldId: parsed.sync.targetFieldId,
+              fieldType: targetFieldType,
+              recordId: parsed.trigger.targetRecordId,
+              value: null
+            },
+            scope: "table",
+            tableId: parsed.sync.targetTableId,
+            workspaceId: message.workspaceId
+          });
+        }
+      }
+
+      if (parsed.trigger.kind === "backfill") {
+        if (backfillJob && scopedSourceRecordIds) {
+          if (hasMoreBackfillRecords && scopedSourceRecordIds.length > 0) {
+            await markBackfillJobChunkProgress(env.DB, {
+              alias: parsed.sync.alias,
+              dependencyKind: "sync",
+              lastRecordId: scopedSourceRecordIds[scopedSourceRecordIds.length - 1]!,
+              processedCount: scopedSourceRecordIds.length,
+              reason: parsed.trigger.reason,
+              workflowVersionId: parsed.workflowVersionId,
+              workspaceId: message.workspaceId
+            });
+            await enqueueNextBackfillChunk(env, message);
+          } else {
+            await markBackfillJobCompleted(env.DB, {
+              alias: parsed.sync.alias,
+              dependencyKind: "sync",
+              processedCount: backfillJob.processedCount + scopedSourceRecordIds.length,
+              reason: parsed.trigger.reason,
+              workflowVersionId: parsed.workflowVersionId,
+              workspaceId: message.workspaceId
+            });
+          }
+        } else {
+          await markBackfillJobCompleted(env.DB, {
+            alias: parsed.sync.alias,
+            dependencyKind: "sync",
+            processedCount: sourceRows.length,
+            reason: parsed.trigger.reason,
+            workflowVersionId: parsed.workflowVersionId,
+            workspaceId: message.workspaceId
+          });
+        }
+      }
+    } catch (error) {
+      if (parsed.trigger.kind === "backfill" && backfillJob) {
+        await markBackfillJobFailed(env.DB, {
+          alias: parsed.sync.alias,
+          dependencyKind: "sync",
+          error,
+          reason: parsed.trigger.reason,
+          workflowVersionId: parsed.workflowVersionId,
+          workspaceId: message.workspaceId
+        });
+      }
+      throw error;
+    }
+    return;
+  }
+
+  let backfillJob: BackfillJobState | null = null;
+  if (parsed.trigger.kind === "backfill") {
+    backfillJob = await markBackfillJobRunning(env.DB, {
+      alias: parsed.aggregate.alias,
+      dependencyKind: "aggregate",
+      reason: parsed.trigger.reason,
+      workflowVersionId: parsed.workflowVersionId,
+      workspaceId: message.workspaceId
+    });
+    if (backfillJob && isTerminalBackfillStatus(backfillJob.status)) {
+      return;
+    }
+  }
   const registry = createAggregateOperationRegistry();
   const operation = registry.require(parsed.aggregate.operationId);
   const configDiagnostics = operation.validateConfig?.(parsed.aggregate.operationConfig) ?? [];
@@ -1089,45 +1631,111 @@ export async function processAggregateMaintenanceMessage(
     );
   }
 
-  const [targetRecordIds, sourceRows, currentValues] = await Promise.all([
-    loadActiveRecordIds(env.DB, message.workspaceId, parsed.aggregate.targetTableId),
-    loadRelatedSourceRows(env.DB, message.workspaceId, parsed.aggregate),
-    loadCurrentTargetFieldValues(env.DB, message.workspaceId, parsed.aggregate)
-  ]);
+  const targetRecordIdsWithSentinel =
+    parsed.trigger.kind === "backfill" && backfillJob
+      ? await loadActiveRecordIdChunk(env.DB, {
+          afterRecordId: backfillJob.cursor.lastRecordId,
+          limit: backfillJob.chunkSize + 1,
+          tableId: parsed.aggregate.targetTableId,
+          workspaceId: message.workspaceId
+        })
+      : await loadActiveRecordIds(env.DB, message.workspaceId, parsed.aggregate.targetTableId);
+  const targetRecordIds =
+    parsed.trigger.kind === "backfill" && backfillJob
+      ? targetRecordIdsWithSentinel.slice(0, backfillJob.chunkSize)
+      : targetRecordIdsWithSentinel;
+  const hasMoreBackfillRecords =
+    parsed.trigger.kind === "backfill" &&
+    backfillJob !== null &&
+    targetRecordIdsWithSentinel.length > backfillJob.chunkSize;
 
-  for (const targetRecordId of targetRecordIds) {
-    const rowsForTarget = sourceRows.filter((row) => row.targetRecordId === targetRecordId);
-    const nextValue = operation.evaluate({
-      config: parsed.aggregate.operationConfig,
-      rows: rowsForTarget
-    });
-    const currentValue = currentValues.get(targetRecordId) ?? null;
+  try {
+    const [sourceRows, currentValues] = await Promise.all([
+      loadRelatedSourceRows(env.DB, message.workspaceId, parsed.aggregate),
+      loadCurrentTargetFieldValues(env.DB, message.workspaceId, parsed.aggregate)
+    ]);
 
-    if (JSON.stringify(currentValue) === JSON.stringify(nextValue)) {
-      continue;
+    for (const targetRecordId of targetRecordIds) {
+      const rowsForTarget = sourceRows.filter((row) => row.targetRecordId === targetRecordId);
+      const nextValue = operation.evaluate({
+        config: parsed.aggregate.operationConfig,
+        rows: rowsForTarget
+      });
+      const currentValue = currentValues.get(targetRecordId) ?? null;
+
+      if (JSON.stringify(currentValue) === JSON.stringify(nextValue)) {
+        continue;
+      }
+
+      const identity = commandIdentityForTarget({
+        aggregate: parsed.aggregate,
+        targetRecordId,
+        trigger: parsed.trigger,
+        workflowId: parsed.workflowId,
+        workflowVersionId: parsed.workflowVersionId
+      });
+      await dispatchCoordinatorOwnedCellSet(env, {
+        ...applyWorkflowServiceIdentity(workflowServiceIdentity),
+        commandId: identity.commandId,
+        commandType: "cell.set",
+        idempotencyKey: identity.idempotencyKey,
+        payload: {
+          fieldId: parsed.aggregate.targetFieldId,
+          fieldType: "computed.readonly",
+          recordId: targetRecordId,
+          value: nextValue
+        },
+        scope: "table",
+        tableId: parsed.aggregate.targetTableId,
+        workspaceId: message.workspaceId
+      });
     }
 
-    const identity = commandIdentityForTarget({
-      aggregate: parsed.aggregate,
-      targetRecordId,
-      trigger: parsed.trigger,
-      workflowId: parsed.workflowId,
-      workflowVersionId: parsed.workflowVersionId
-    });
-    await dispatchCoordinatorOwnedCellSet(env, {
-      ...applyWorkflowServiceIdentity(workflowServiceIdentity),
-      commandId: identity.commandId,
-      commandType: "cell.set",
-      idempotencyKey: identity.idempotencyKey,
-      payload: {
-        fieldId: parsed.aggregate.targetFieldId,
-        fieldType: "computed.readonly",
-        recordId: targetRecordId,
-        value: nextValue
-      },
-      scope: "table",
-      tableId: parsed.aggregate.targetTableId,
-      workspaceId: message.workspaceId
-    });
+    if (parsed.trigger.kind === "backfill") {
+      if (backfillJob) {
+        if (hasMoreBackfillRecords && targetRecordIds.length > 0) {
+          await markBackfillJobChunkProgress(env.DB, {
+            alias: parsed.aggregate.alias,
+            dependencyKind: "aggregate",
+            lastRecordId: targetRecordIds[targetRecordIds.length - 1]!,
+            processedCount: targetRecordIds.length,
+            reason: parsed.trigger.reason,
+            workflowVersionId: parsed.workflowVersionId,
+            workspaceId: message.workspaceId
+          });
+          await enqueueNextBackfillChunk(env, message);
+        } else {
+          await markBackfillJobCompleted(env.DB, {
+            alias: parsed.aggregate.alias,
+            dependencyKind: "aggregate",
+            processedCount: backfillJob.processedCount + targetRecordIds.length,
+            reason: parsed.trigger.reason,
+            workflowVersionId: parsed.workflowVersionId,
+            workspaceId: message.workspaceId
+          });
+        }
+      } else {
+        await markBackfillJobCompleted(env.DB, {
+          alias: parsed.aggregate.alias,
+          dependencyKind: "aggregate",
+          processedCount: targetRecordIds.length,
+          reason: parsed.trigger.reason,
+          workflowVersionId: parsed.workflowVersionId,
+          workspaceId: message.workspaceId
+        });
+      }
+    }
+  } catch (error) {
+    if (parsed.trigger.kind === "backfill" && backfillJob) {
+      await markBackfillJobFailed(env.DB, {
+        alias: parsed.aggregate.alias,
+        dependencyKind: "aggregate",
+        error,
+        reason: parsed.trigger.reason,
+        workflowVersionId: parsed.workflowVersionId,
+        workspaceId: message.workspaceId
+      });
+    }
+    throw error;
   }
 }

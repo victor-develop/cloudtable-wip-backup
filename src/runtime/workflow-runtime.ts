@@ -37,6 +37,11 @@ import {
 import { shouldEnqueueProjectionMaintenance } from "./projection-maintenance";
 import { publishOutboxEntries } from "./queue-publisher";
 import { workflowStatus } from "./workflow-definition";
+import {
+  ensureWorkflowDependencyIndexForWorkspace,
+  readReactiveDependenciesForSourceEvent,
+  rebuildWorkflowDependencyIndexForVersion
+} from "./workflow-dependency-index";
 
 type WorkflowVersionRow = {
   definition_json: string;
@@ -196,6 +201,7 @@ type AggregateTriggerPayload =
       eventType: string | null;
       kind: "recompute";
       recordId: string | null;
+      targetRecordId?: string | null;
     };
 
 type RoutedAggregateDefinition = {
@@ -776,6 +782,14 @@ export async function requestManualAggregateMaintenance(
         };
 
   for (const alias of requestedAliases) {
+    await upsertWorkflowBackfillJob(env, {
+      alias,
+      dependencyKind: "aggregate",
+      reason: trigger.kind === "backfill" ? trigger.reason : "manual_recompute",
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: input.workspaceId
+    });
     await enqueueAggregateMaintenanceMessage(env, {
       aggregate: aggregateByAlias.get(alias)!,
       eventId: trigger.kind === "recompute" ? trigger.eventId ?? undefined : undefined,
@@ -794,6 +808,178 @@ export async function requestManualAggregateMaintenance(
   };
 }
 
+export async function requestManualLookupMaintenance(
+  env: CloudTableEnv,
+  input: {
+    changedFieldIds?: string[];
+    kind: AggregateTriggerKind;
+    lookupAliases?: string[];
+    principalId: string;
+    reason?: string;
+    recordId?: string | null;
+    requestId: string;
+    targetRecordId?: string | null;
+    workflowId: string;
+    workspaceId: string;
+  }
+): Promise<
+  | {
+      lookupAliases: string[];
+      ok: true;
+      status: "enqueued";
+      workflowVersionId: string;
+    }
+  | {
+      message: string;
+      ok: false;
+      reason:
+        | "already_requested"
+        | "lookup_alias_not_found"
+        | "lookup_not_configured"
+        | "workflow_service_identity_invalid"
+        | "workflow_not_found"
+        | "workflow_paused";
+    }
+> {
+  const version = await loadPublishedWorkflowVersion(env.DB, input.workspaceId, input.workflowId);
+  if (!version) {
+    return {
+      message: `Workflow ${input.workflowId} was not found.`,
+      ok: false,
+      reason: "workflow_not_found"
+    };
+  }
+
+  const definition = parseWorkflowDefinition(version.definition_json);
+  if (workflowStatus(definition) !== "published") {
+    return {
+      message: `Workflow ${input.workflowId} is paused and cannot accept lookup maintenance requests.`,
+      ok: false,
+      reason: "workflow_paused"
+    };
+  }
+
+  const lookupDefinitions = deriveLookupDefinitions(definition);
+  if (lookupDefinitions.length === 0) {
+    return {
+      message: `Workflow ${input.workflowId} does not define lookup maintenance metadata.`,
+      ok: false,
+      reason: "lookup_not_configured"
+    };
+  }
+
+  try {
+    assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
+  } catch (error) {
+    return {
+      message: error instanceof Error ? error.message : "Workflow service identity metadata is invalid.",
+      ok: false,
+      reason: "workflow_service_identity_invalid"
+    };
+  }
+
+  const lookupByAlias = new Map(lookupDefinitions.map((lookup) => [lookup.alias, lookup] as const));
+  const requestedAliases =
+    input.lookupAliases && input.lookupAliases.length > 0
+      ? Array.from(new Set(input.lookupAliases))
+      : lookupDefinitions.map((lookup) => lookup.alias);
+  const missingAlias = requestedAliases.find((alias) => !lookupByAlias.has(alias));
+  if (missingAlias) {
+    return {
+      message: `Workflow ${input.workflowId} does not define lookup alias ${missingAlias}.`,
+      ok: false,
+      reason: "lookup_alias_not_found"
+    };
+  }
+
+  const scopeKey = `workflow.lookup-maintenance:${input.workspaceId}:${input.workflowId}`;
+  const existingReceipt = await env.DB
+    .prepare(
+      `SELECT id
+       FROM idempotency_receipts
+       WHERE scope_key = ? AND idempotency_key = ?`
+    )
+    .bind(scopeKey, input.requestId)
+    .first<{ id: string }>();
+  if (existingReceipt) {
+    return {
+      message: `Lookup maintenance request ${input.requestId} was already accepted for workflow ${input.workflowId}.`,
+      ok: false,
+      reason: "already_requested"
+    };
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO idempotency_receipts (
+         id,
+         scope_key,
+         idempotency_key,
+         command_id,
+         receipt_json,
+         created_at,
+         last_event_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      `idem:workflow.lookup-maintenance:${input.workflowId}:${input.requestId}`,
+      scopeKey,
+      input.requestId,
+      `workflow.lookup-maintenance:${input.workflowId}:${input.requestId}`,
+      JSON.stringify({
+        kind: input.kind,
+        lookupAliases: requestedAliases,
+        requestedAt: now,
+        requestedBy: input.principalId,
+        workflowId: input.workflowId
+      }),
+      now,
+      null
+    )
+  ]);
+
+  const trigger: AggregateTriggerPayload =
+    input.kind === "backfill"
+      ? {
+          kind: "backfill",
+          reason: input.reason ?? "manual"
+        }
+      : {
+          changedFieldIds: input.changedFieldIds ?? [],
+          eventId: `manual-lookup-recompute:${input.requestId}`,
+          eventType: "workflow.lookup.manual_recompute",
+          kind: "recompute",
+          recordId: input.recordId ?? null,
+          ...(input.targetRecordId ? { targetRecordId: input.targetRecordId } : {})
+        };
+
+  for (const alias of requestedAliases) {
+    await upsertWorkflowBackfillJob(env, {
+      alias,
+      dependencyKind: "lookup",
+      reason: trigger.kind === "backfill" ? trigger.reason : "manual_recompute",
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: input.workspaceId
+    });
+    await enqueueLookupMaintenanceMessage(env, {
+      eventId: trigger.kind === "recompute" ? trigger.eventId ?? undefined : undefined,
+      lookup: lookupByAlias.get(alias)!,
+      trigger,
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: input.workspaceId
+    });
+  }
+
+  return {
+    lookupAliases: requestedAliases,
+    ok: true,
+    status: "enqueued",
+    workflowVersionId: version.workflow_version_id
+  };
+}
+
 export async function requestManualSyncMaintenance(
   env: CloudTableEnv,
   input: {
@@ -804,6 +990,7 @@ export async function requestManualSyncMaintenance(
     recordId?: string | null;
     requestId: string;
     syncAliases?: string[];
+    targetRecordId?: string | null;
     workflowId: string;
     workspaceId: string;
   }
@@ -934,10 +1121,19 @@ export async function requestManualSyncMaintenance(
           eventId: `manual-sync-recompute:${input.requestId}`,
           eventType: "workflow.sync.manual_recompute",
           kind: "recompute",
-          recordId: input.recordId ?? null
+          recordId: input.recordId ?? null,
+          ...(input.targetRecordId ? { targetRecordId: input.targetRecordId } : {})
         };
 
   for (const alias of requestedAliases) {
+    await upsertWorkflowBackfillJob(env, {
+      alias,
+      dependencyKind: "sync",
+      reason: trigger.kind === "backfill" ? trigger.reason : "manual_recompute",
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: input.workspaceId
+    });
     await enqueueSyncMaintenanceMessage(env, {
       eventId: trigger.kind === "recompute" ? trigger.eventId ?? undefined : undefined,
       sync: syncByAlias.get(alias)!,
@@ -2875,6 +3071,20 @@ async function routeAggregateMaintenanceFromEvent(
   }
 
   if (event.eventType === "workflow.published") {
+    const workflowId =
+      typeof event.payload.workflowId === "string" ? event.payload.workflowId : null;
+    if (workflowId) {
+      const version = await loadPublishedWorkflowVersion(env.DB, event.workspaceId, workflowId);
+      if (version) {
+        await rebuildWorkflowDependencyIndexForVersion(env.DB, {
+          definition: parseWorkflowDefinition(version.definition_json),
+          eventId: event.eventId,
+          workflowId: version.workflow_id,
+          workflowVersionId: version.workflow_version_id,
+          workspaceId: event.workspaceId
+        });
+      }
+    }
     await enqueueAggregateBackfillForPublishedWorkflow(env, event);
     await enqueueLookupBackfillForPublishedWorkflow(env, event);
     await enqueueSyncBackfillForPublishedWorkflow(env, event);
@@ -2890,60 +3100,147 @@ async function routeAggregateMaintenanceFromEvent(
     return;
   }
 
-  const versions = await loadWorkflowVersions(env.DB, workspaceId);
-  for (const version of versions) {
-    const definition = parseWorkflowDefinition(version.definition_json);
-    if (workflowStatus(definition) !== "published") {
+  await ensureWorkflowDependencyIndexForWorkspace(env.DB, workspaceId);
+  if (!event.tableId) {
+    return;
+  }
+  const changedFieldIds = readChangedFieldIds(event.payload);
+  const dependencies = await readReactiveDependenciesForSourceEvent(env.DB, {
+    changedFieldIds,
+    sourceTableId: event.tableId,
+    workspaceId
+  });
+  for (const dependency of dependencies) {
+    if ("aggregate" in dependency) {
+      const sourceRecordId =
+        dependency.aggregate.sourceTableId === event.tableId &&
+        typeof event.payload.recordId === "string"
+          ? event.payload.recordId
+          : null;
+      await enqueueAggregateMaintenanceMessage(env, {
+        aggregate: dependency.aggregate,
+        eventId: event.eventId,
+        trigger: {
+          changedFieldIds,
+          eventId: event.eventId,
+          eventType: event.eventType,
+          kind: "recompute",
+          recordId: sourceRecordId
+        },
+        workflowId: dependency.workflowId,
+        workflowVersionId: dependency.workflowVersionId,
+        workspaceId
+      });
       continue;
     }
-    const aggregates = deriveAggregateDefinitions(definition);
-    const lookups = deriveLookupDefinitions(definition);
-    if (aggregates.length > 0 || lookups.length > 0) {
-      assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
-    }
 
-    for (const aggregate of aggregates) {
-      if (!shouldRouteAggregateForEvent(aggregate, event)) {
-        continue;
-      }
-
-      await enqueueAggregateMaintenanceMessage(env, {
-        aggregate,
-        eventId: event.eventId,
-        trigger: {
-          changedFieldIds: readChangedFieldIds(event.payload),
-          eventId: event.eventId,
-          eventType: event.eventType,
-          kind: "recompute",
-          recordId: typeof event.payload.recordId === "string" ? event.payload.recordId : null
-        },
-        workflowId: version.workflow_id,
-        workflowVersionId: version.workflow_version_id,
-        workspaceId
-      });
-    }
-
-    for (const lookup of lookups) {
-      if (!shouldRouteLookupForEvent(lookup, event)) {
-        continue;
-      }
-
+    if ("lookup" in dependency) {
+      const sourceRecordId =
+        dependency.lookup.sourceTableId === event.tableId && typeof event.payload.recordId === "string"
+          ? event.payload.recordId
+          : null;
+      const targetRecordId =
+        dependency.lookup.resolver.targetTableId === event.tableId &&
+        typeof event.payload.recordId === "string"
+          ? event.payload.recordId
+          : null;
       await enqueueLookupMaintenanceMessage(env, {
         eventId: event.eventId,
-        lookup,
+        lookup: dependency.lookup,
         trigger: {
-          changedFieldIds: readChangedFieldIds(event.payload),
+          changedFieldIds,
           eventId: event.eventId,
           eventType: event.eventType,
           kind: "recompute",
-          recordId: typeof event.payload.recordId === "string" ? event.payload.recordId : null
+          recordId: sourceRecordId,
+          ...(targetRecordId ? { targetRecordId } : {})
         },
-        workflowId: version.workflow_id,
-        workflowVersionId: version.workflow_version_id,
+        workflowId: dependency.workflowId,
+        workflowVersionId: dependency.workflowVersionId,
         workspaceId
       });
+      continue;
     }
+
+    await enqueueSyncMaintenanceMessage(env, {
+      eventId: event.eventId,
+      sync: dependency.sync,
+      trigger: {
+        changedFieldIds,
+        eventId: event.eventId,
+        eventType: event.eventType,
+        kind: "recompute",
+        recordId:
+          dependency.sync.sourceTableId === event.tableId && typeof event.payload.recordId === "string"
+            ? event.payload.recordId
+            : null,
+        ...(dependency.sync.targetTableId === event.tableId &&
+        typeof event.payload.recordId === "string"
+          ? { targetRecordId: event.payload.recordId }
+          : {})
+      },
+      workflowId: dependency.workflowId,
+      workflowVersionId: dependency.workflowVersionId,
+      workspaceId
+    });
   }
+}
+
+async function upsertWorkflowBackfillJob(
+  env: CloudTableEnv,
+  input: {
+    alias: string;
+    dependencyKind: "aggregate" | "lookup" | "sync";
+    reason: string;
+    workflowId: string;
+    workflowVersionId: string;
+    workspaceId: string;
+  }
+): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB
+      .prepare(
+        `INSERT INTO workflow_backfill_jobs (
+           id,
+           workspace_id,
+           workflow_id,
+           workflow_version_id,
+           dependency_kind,
+           dependency_alias,
+           reason,
+           status,
+           chunk_size,
+           cursor_json,
+           processed_count,
+           attempt_count,
+           last_error,
+           created_at,
+           updated_at,
+           completed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 250, NULL, 0, 0, NULL, ?, ?, NULL)
+         ON CONFLICT(workspace_id, workflow_version_id, dependency_kind, dependency_alias, reason)
+         DO UPDATE SET updated_at = excluded.updated_at`
+      )
+      .bind(
+        [
+          "wbf",
+          input.workspaceId,
+          input.workflowVersionId,
+          input.dependencyKind,
+          input.alias,
+          input.reason
+        ].join(":"),
+        input.workspaceId,
+        input.workflowId,
+        input.workflowVersionId,
+        input.dependencyKind,
+        input.alias,
+        input.reason,
+        now,
+        now
+      )
+  ]);
 }
 
 async function enqueueAggregateBackfillForPublishedWorkflow(
@@ -2968,6 +3265,14 @@ async function enqueueAggregateBackfillForPublishedWorkflow(
   assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
 
   for (const aggregate of deriveAggregateDefinitions(definition)) {
+    await upsertWorkflowBackfillJob(env, {
+      alias: aggregate.alias,
+      dependencyKind: "aggregate",
+      reason: "workflow_published",
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: event.workspaceId
+    });
     await enqueueAggregateMaintenanceMessage(env, {
       aggregate,
       eventId: event.eventId,
@@ -3004,6 +3309,14 @@ async function enqueueLookupBackfillForPublishedWorkflow(
   assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
 
   for (const lookup of deriveLookupDefinitions(definition)) {
+    await upsertWorkflowBackfillJob(env, {
+      alias: lookup.alias,
+      dependencyKind: "lookup",
+      reason: "workflow_published",
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: event.workspaceId
+    });
     await enqueueLookupMaintenanceMessage(env, {
       eventId: event.eventId,
       lookup,
@@ -3045,6 +3358,14 @@ async function enqueueSyncBackfillForPublishedWorkflow(
   assertReactiveMaintenanceWorkflowServiceIdentity(definition, version);
 
   for (const sync of syncDefinitions) {
+    await upsertWorkflowBackfillJob(env, {
+      alias: sync.alias,
+      dependencyKind: "sync",
+      reason: "workflow_published",
+      workflowId: version.workflow_id,
+      workflowVersionId: version.workflow_version_id,
+      workspaceId: event.workspaceId
+    });
     await enqueueSyncMaintenanceMessage(env, {
       eventId: event.eventId,
       sync,

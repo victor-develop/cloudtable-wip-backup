@@ -87,6 +87,33 @@ function maxNumberOperation(): AggregateOperationDefinition {
   };
 }
 
+function minNumberOperation(): AggregateOperationDefinition {
+  return {
+    configSchema: {
+      additionalProperties: false,
+      description:
+        "Returns the minimum finite numeric operand value across grouped source rows, or null when none exist.",
+      properties: {},
+      type: "object"
+    },
+    description:
+      "Returns the minimum finite numeric operand value across grouped source rows, or null when none exist.",
+    id: "min_number",
+    operand: {
+      description: "Numeric source field whose finite values are reduced by minimum.",
+      required: true,
+      valueType: "number"
+    },
+    evaluate(input: AggregateOperationInput): JsonValue {
+      const values = input.rows
+        .map((row) => row.numericValue)
+        .filter((value): value is number => Number.isFinite(value));
+
+      return values.length > 0 ? Math.min(...values) : null;
+    }
+  };
+}
+
 function averageNumbersOperation(): AggregateOperationDefinition {
   return {
     configSchema: {
@@ -122,6 +149,7 @@ const defaultOperations = [
   countRecordsOperation(),
   sumNumbersOperation(),
   maxNumberOperation(),
+  minNumberOperation(),
   averageNumbersOperation()
 ] as const;
 

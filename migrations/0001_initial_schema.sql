@@ -298,6 +298,58 @@ CREATE TABLE IF NOT EXISTS workflow_operator_refs (
   FOREIGN KEY (workflow_version_id) REFERENCES workflow_versions (id)
 );
 
+CREATE TABLE IF NOT EXISTS workflow_dependency_index (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  workflow_version_id TEXT NOT NULL,
+  dependency_kind TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  source_table_id TEXT,
+  target_table_id TEXT,
+  trigger_table_id TEXT,
+  dependency_field_ids_json TEXT NOT NULL,
+  definition_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_event_id TEXT,
+  UNIQUE (workspace_id, workflow_version_id, dependency_kind, alias),
+  FOREIGN KEY (workflow_version_id) REFERENCES workflow_versions (id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_dependency_index_source
+  ON workflow_dependency_index (workspace_id, source_table_id, status, dependency_kind);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_dependency_index_workflow
+  ON workflow_dependency_index (workspace_id, workflow_id, workflow_version_id);
+
+CREATE TABLE IF NOT EXISTS workflow_backfill_jobs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  workflow_version_id TEXT NOT NULL,
+  dependency_kind TEXT NOT NULL,
+  dependency_alias TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL,
+  chunk_size INTEGER NOT NULL,
+  cursor_json TEXT,
+  processed_count INTEGER NOT NULL DEFAULT 0,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  operator_reason TEXT,
+  operator_actor_principal_id TEXT,
+  operator_transition_at TEXT,
+  superseded_by_job_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  UNIQUE (workspace_id, workflow_version_id, dependency_kind, dependency_alias, reason)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_backfill_jobs_status
+  ON workflow_backfill_jobs (workspace_id, status, updated_at);
+
 CREATE TABLE IF NOT EXISTS records (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,

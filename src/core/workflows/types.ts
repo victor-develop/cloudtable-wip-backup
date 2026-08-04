@@ -5,6 +5,7 @@ import type {
   CommandScope
 } from "../commands/types";
 import type { EventLedgerRecord } from "../events/types";
+import type { AggregateOperationManifest } from "../aggregates/types";
 import type { FieldWorkflowProposalHint, JsonSchema, JsonValue } from "../field-types/types";
 
 export type WorkflowOperatorKind = "trigger" | "condition" | "action";
@@ -339,6 +340,40 @@ export type WorkflowConditionInspectionMetadata = {
 
 export type WorkflowAuthoringMetadata = {
   bindings: Record<string, WorkflowConditionBindingMetadata>;
+};
+
+export type WorkflowRecipeType = "direct_sync" | "grouped_rollup";
+
+export type WorkflowRecipeMaintenanceKind = "backfill" | "recompute";
+
+export type WorkflowRecipeAuthoringRoute = {
+  method: "GET" | "POST" | "PUT" | "PATCH";
+  pathTemplate: string;
+};
+
+export type WorkflowRecipeAuthoringStatus = "draft" | "published" | "paused";
+
+export type WorkflowRecipeAuthoringMetadata = {
+  aggregateOperations?: AggregateOperationManifest[];
+  description: string;
+  fixedTriggerId: "field_changed";
+  maintenance: {
+    kinds: WorkflowRecipeMaintenanceKind[];
+    queuedMessage: string;
+    route: WorkflowRecipeAuthoringRoute;
+  };
+  matchStrategies: WorkflowRelatedTableResolver["strategy"][];
+  previewRoute: WorkflowRecipeAuthoringRoute;
+  publishRoute: WorkflowRecipeAuthoringRoute;
+  recipeType: WorkflowRecipeType;
+  requiredInputIds: string[];
+  statusValues: WorkflowRecipeAuthoringStatus[];
+  workflowOperators: WorkflowOperatorManifest[];
+};
+
+export type WorkflowRecipeAuthoringCatalog = {
+  recipeTypes: WorkflowRecipeType[];
+  recipes: Record<WorkflowRecipeType, WorkflowRecipeAuthoringMetadata>;
 };
 
 export type WorkflowOperatorDefinition =

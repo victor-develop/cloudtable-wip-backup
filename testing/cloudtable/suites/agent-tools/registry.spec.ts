@@ -106,6 +106,7 @@ function createRegistry(overrides?: {
   activityHistoryResult?: Record<string, unknown>;
   recordInspectionResult?: Record<string, unknown> | null;
   viewQueryResult?: Record<string, unknown> | null;
+  workflowDependencyOperationsResult?: Record<string, unknown>;
   workflowHistoryResult?: Record<string, unknown>;
   workflowRunResult?: Record<string, unknown> | null;
   workflowTestPreviewResult?: Record<string, unknown>;
@@ -121,6 +122,84 @@ function createRegistry(overrides?: {
         reason: "already_requested" | "not_found" | "not_replayable";
         replayRequestId: string;
         status: "rejected";
+      };
+  workflowAggregateMaintenanceResult?:
+    | {
+        aliases: string[];
+        requestId: string;
+        status: "enqueued";
+        workflowId: string;
+        workflowVersionId: string;
+      }
+    | {
+        message: string;
+        reason:
+          | "aggregate_alias_not_found"
+          | "aggregate_not_configured"
+          | "already_requested"
+          | "workflow_not_found"
+          | "workflow_paused"
+          | "workflow_service_identity_invalid";
+        requestId: string;
+        status: "rejected";
+        workflowId: string;
+      };
+  workflowLookupMaintenanceResult?:
+    | {
+        aliases: string[];
+        requestId: string;
+        status: "enqueued";
+        workflowId: string;
+        workflowVersionId: string;
+      }
+    | {
+        message: string;
+        reason:
+          | "already_requested"
+          | "lookup_alias_not_found"
+          | "lookup_not_configured"
+          | "workflow_not_found"
+          | "workflow_paused"
+          | "workflow_service_identity_invalid";
+        requestId: string;
+        status: "rejected";
+        workflowId: string;
+      };
+  workflowSyncMaintenanceResult?:
+    | {
+        aliases: string[];
+        requestId: string;
+        status: "enqueued";
+        workflowId: string;
+        workflowVersionId: string;
+      }
+    | {
+        message: string;
+        reason:
+          | "already_requested"
+          | "sync_alias_not_found"
+          | "sync_not_configured"
+          | "workflow_not_found"
+          | "workflow_paused"
+          | "workflow_service_identity_invalid";
+        requestId: string;
+        status: "rejected";
+        workflowId: string;
+      };
+  workflowBackfillDispositionResult?:
+    | {
+        jobId: string;
+        operatorReason: string;
+        status: "abandoned" | "superseded";
+        supersededByJobId: string | null;
+        workflowId: string;
+      }
+    | {
+        jobId: string;
+        message: string;
+        reason: "backfill_job_not_found" | "backfill_job_terminal" | "invalid_supersede_target";
+        status: "rejected";
+        workflowId: string;
       };
 }) {
   const permissionEngine = createPermissionEngine(fieldTypeRegistry, {
@@ -582,11 +661,77 @@ function createRegistry(overrides?: {
         ) as never;
       }
     },
+    workflowAggregateMaintenanceRequester: {
+      requestMaintenance(input) {
+        return (
+          overrides?.workflowAggregateMaintenanceResult ?? {
+            aliases: input.aggregateAliases ?? ["agg_total"],
+            requestId:
+              input.requestId ?? `workflow-aggregate-maintenance:${input.workflowId}:${input.kind}`,
+            status: "enqueued",
+            workflowId: input.workflowId,
+            workflowVersionId: "wf_demo:v2"
+          }
+        ) as never;
+      }
+    },
+    workflowBackfillDispositionRequester: {
+      requestDisposition(input) {
+        return (
+          overrides?.workflowBackfillDispositionResult ?? {
+            jobId: input.jobId,
+            operatorReason: input.reason,
+            status: input.disposition,
+            supersededByJobId: input.supersededByJobId ?? null,
+            workflowId: input.workflowId
+          }
+        ) as never;
+      }
+    },
+    workflowLookupMaintenanceRequester: {
+      requestMaintenance(input) {
+        return (
+          overrides?.workflowLookupMaintenanceResult ?? {
+            aliases: input.lookupAliases ?? ["lookup_account_name"],
+            requestId:
+              input.requestId ?? `workflow-lookup-maintenance:${input.workflowId}:${input.kind}`,
+            status: "enqueued",
+            workflowId: input.workflowId,
+            workflowVersionId: "wf_demo:v2"
+          }
+        ) as never;
+      }
+    },
+    workflowSyncMaintenanceRequester: {
+      requestMaintenance(input) {
+        return (
+          overrides?.workflowSyncMaintenanceResult ?? {
+            aliases: input.syncAliases ?? ["sync_status"],
+            requestId:
+              input.requestId ?? `workflow-sync-maintenance:${input.workflowId}:${input.kind}`,
+            status: "enqueued",
+            workflowId: input.workflowId,
+            workflowVersionId: "wf_demo:v2"
+          }
+        ) as never;
+      }
+    },
     workflowHistoryReader: {
       read() {
         return (overrides?.workflowHistoryResult ??
           {
             runs: [],
+            workflowId: "wf_demo"
+          }) as never;
+      }
+    },
+    workflowDependencyOperationsReader: {
+      read() {
+        return (overrides?.workflowDependencyOperationsResult ??
+          {
+            backfillJobs: [],
+            dependencies: [],
+            suggestedMaintenanceRequests: [],
             workflowId: "wf_demo"
           }) as never;
       }
@@ -857,9 +1002,18 @@ describe("cloudtable agent tool registry", () => {
       "readWorkspaceActivityHistory",
       "readAppActivityHistory",
       "readWorkflowHistory",
+      "readWorkflowDependencies",
       "readWorkflowRunDetail",
       "prepareWorkflowDeadLetterReplay",
       "requestWorkflowDeadLetterReplay",
+      "prepareWorkflowAggregateMaintenance",
+      "requestWorkflowAggregateMaintenance",
+      "prepareWorkflowLookupMaintenance",
+      "requestWorkflowLookupMaintenance",
+      "prepareWorkflowSyncMaintenance",
+      "requestWorkflowSyncMaintenance",
+      "prepareWorkflowBackfillDisposition",
+      "requestWorkflowBackfillDisposition",
       "createApp",
       "createTable",
       "createField",
@@ -941,6 +1095,59 @@ describe("cloudtable agent tool registry", () => {
       },
       scope: "workflow"
     });
+    expect(registry.require("readWorkflowDependencies")).toMatchObject({
+      binding: {
+        kind: "query-service",
+        service: "workflowDependencyOperationsReader"
+      },
+      outputSchema: {
+        properties: {
+          dependencies: {
+            properties: {
+              summary: {
+                properties: {
+                  attentionRequiredBackfillJobs: {
+                    type: "array"
+                  },
+                  failedBackfillJobCount: {
+                    type: "number"
+                  },
+                  maintenanceState: {
+                    enum: ["idle", "active", "complete", "attention_required"],
+                    type: "string"
+                  },
+                  pendingBackfillJobCount: {
+                    type: "number"
+                  },
+                  resumableBackfillJobCount: {
+                    type: "number"
+                  },
+                  staleRunningBackfillJobCount: {
+                    type: "number"
+                  }
+                },
+                required: expect.arrayContaining([
+                  "attentionRequiredBackfillJobs",
+                  "failedBackfillJobCount",
+                  "maintenanceState",
+                  "pendingBackfillJobCount",
+                  "resumableBackfillJobCount",
+                  "staleRunningBackfillJobCount"
+                ])
+              }
+            },
+            required: [
+              "backfillJobs",
+              "dependencies",
+              "summary",
+              "suggestedMaintenanceRequests",
+              "workflowId"
+            ]
+          }
+        }
+      },
+      scope: "workflow"
+    });
     expect(registry.require("explainPermissions")).toMatchObject({
       binding: {
         kind: "query-service",
@@ -1012,6 +1219,149 @@ describe("cloudtable agent tool registry", () => {
         kind: "workflow-operation",
         operation: "replay-dead-letter"
       },
+      phase: "execute",
+      scope: "workflow"
+    });
+    expect(registry.require("prepareWorkflowAggregateMaintenance")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "aggregate-maintenance"
+      },
+      inputSchema: {
+        properties: {
+          aggregateAliases: {
+            type: "array"
+          },
+          kind: {
+            enum: ["backfill", "recompute"]
+          },
+          requestId: {
+            type: "string"
+          },
+          workflowId: {
+            type: "string"
+          }
+        },
+        required: ["kind", "workflowId", "workspaceId"]
+      },
+      phase: "preview",
+      scope: "workflow",
+      successorToolId: "requestWorkflowAggregateMaintenance"
+    });
+    expect(registry.require("requestWorkflowAggregateMaintenance")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "aggregate-maintenance"
+      },
+      mutationTarget: "workflow",
+      phase: "execute",
+      scope: "workflow"
+    });
+    expect(registry.require("prepareWorkflowLookupMaintenance")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "lookup-maintenance"
+      },
+      inputSchema: {
+        properties: {
+          kind: {
+            enum: ["backfill", "recompute"]
+          },
+          lookupAliases: {
+            type: "array"
+          },
+          targetRecordId: {
+            type: "string"
+          },
+          workflowId: {
+            type: "string"
+          }
+        },
+        required: ["kind", "workflowId", "workspaceId"]
+      },
+      phase: "preview",
+      scope: "workflow",
+      successorToolId: "requestWorkflowLookupMaintenance"
+    });
+    expect(registry.require("requestWorkflowLookupMaintenance")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "lookup-maintenance"
+      },
+      mutationTarget: "workflow",
+      phase: "execute",
+      scope: "workflow"
+    });
+    expect(registry.require("prepareWorkflowSyncMaintenance")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "sync-maintenance"
+      },
+      inputSchema: {
+        properties: {
+          kind: {
+            enum: ["backfill", "recompute"]
+          },
+          syncAliases: {
+            type: "array"
+          },
+          targetRecordId: {
+            type: "string"
+          },
+          workflowId: {
+            type: "string"
+          }
+        },
+        required: ["kind", "workflowId", "workspaceId"]
+      },
+      phase: "preview",
+      scope: "workflow",
+      successorToolId: "requestWorkflowSyncMaintenance"
+    });
+    expect(registry.require("requestWorkflowSyncMaintenance")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "sync-maintenance"
+      },
+      mutationTarget: "workflow",
+      phase: "execute",
+      scope: "workflow"
+    });
+    expect(registry.require("prepareWorkflowBackfillDisposition")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "backfill-disposition"
+      },
+      inputSchema: {
+        properties: {
+          disposition: {
+            enum: ["abandoned", "superseded"]
+          },
+          jobId: {
+            type: "string"
+          },
+          reason: {
+            type: "string"
+          },
+          supersededByJobId: {
+            type: "string"
+          },
+          workflowId: {
+            type: "string"
+          }
+        },
+        required: ["disposition", "jobId", "reason", "workflowId", "workspaceId"]
+      },
+      phase: "preview",
+      scope: "workflow",
+      successorToolId: "requestWorkflowBackfillDisposition"
+    });
+    expect(registry.require("requestWorkflowBackfillDisposition")).toMatchObject({
+      binding: {
+        kind: "workflow-operation",
+        operation: "backfill-disposition"
+      },
+      mutationTarget: "workflow",
       phase: "execute",
       scope: "workflow"
     });
@@ -1239,6 +1589,69 @@ describe("cloudtable agent tool registry", () => {
         ],
         workflowId: "wf_demo"
       },
+      workflowDependencyOperationsResult: {
+        backfillJobs: [
+          {
+            dependencyAlias: "fld_revenue_sum",
+            dependencyKind: "aggregate",
+            lastError: "permission snapshot expired",
+            reason: "workflow_published",
+            status: "queued"
+          }
+        ],
+          dependencies: [
+            {
+              alias: "fld_revenue_sum",
+              kind: "aggregate",
+              status: "published"
+            }
+          ],
+          suggestedMaintenanceRequests: [
+            {
+              input: {
+                aggregateAliases: ["fld_revenue_sum"],
+                kind: "backfill",
+                reason: "workflow_published",
+                requestId: "workflow-aggregate-maintenance:wf_demo:backfill",
+                workflowId: "wf_demo",
+                workspaceId: "ws_demo"
+              },
+              reason: "attention_required_backfill",
+              successorToolId: "requestWorkflowAggregateMaintenance",
+              toolId: "prepareWorkflowAggregateMaintenance"
+            }
+          ],
+          summary: {
+            attentionRequiredBackfillJobs: [
+              {
+              dependencyAlias: "fld_revenue_sum",
+              dependencyKind: "aggregate",
+              lastError: "permission snapshot expired",
+              reason: "workflow_published",
+              status: "queued"
+            }
+          ],
+          backfillJobsByStatus: {
+            queued: 1
+          },
+          completedBackfillJobCount: 0,
+          dependencyCount: 1,
+          dependenciesByKind: {
+            aggregate: 1
+          },
+          dependenciesByStatus: {
+            published: 1
+          },
+          failedBackfillJobCount: 1,
+          maintenanceState: "attention_required",
+          pendingBackfillJobCount: 1,
+          resumableBackfillJobCount: 0,
+          runningBackfillJobCount: 0,
+          totalBackfillProcessedCount: 0,
+          totalBackfillJobCount: 1
+        },
+        workflowId: "wf_demo"
+      },
       workflowRunResult: {
         id: "wfr_demo_1",
         status: "dead_lettered",
@@ -1257,6 +1670,13 @@ describe("cloudtable agent tool registry", () => {
       toolId: "readWorkflowRunDetail",
       input: {
         workflowRunId: "wfr_demo_1",
+        workspaceId: "ws_demo"
+      }
+    });
+    const dependenciesResult = await registry.invoke({
+      toolId: "readWorkflowDependencies",
+      input: {
+        workflowId: "wf_demo",
         workspaceId: "ws_demo"
       }
     });
@@ -1280,6 +1700,72 @@ describe("cloudtable agent tool registry", () => {
         status: "dead_lettered",
         workflowId: "wf_demo"
       }
+    });
+    expect(dependenciesResult).toEqual({
+      dependencies: {
+        backfillJobs: [
+          {
+            dependencyAlias: "fld_revenue_sum",
+            dependencyKind: "aggregate",
+            lastError: "permission snapshot expired",
+            reason: "workflow_published",
+            status: "queued"
+          }
+        ],
+        dependencies: [
+          {
+            alias: "fld_revenue_sum",
+            kind: "aggregate",
+            status: "published"
+          }
+        ],
+        suggestedMaintenanceRequests: [
+          {
+            input: {
+              aggregateAliases: ["fld_revenue_sum"],
+              kind: "backfill",
+              reason: "workflow_published",
+              requestId: "workflow-aggregate-maintenance:wf_demo:backfill",
+              workflowId: "wf_demo",
+              workspaceId: "ws_demo"
+            },
+            reason: "attention_required_backfill",
+            successorToolId: "requestWorkflowAggregateMaintenance",
+            toolId: "prepareWorkflowAggregateMaintenance"
+          }
+        ],
+        summary: {
+          attentionRequiredBackfillJobs: [
+            {
+              dependencyAlias: "fld_revenue_sum",
+              dependencyKind: "aggregate",
+              lastError: "permission snapshot expired",
+              reason: "workflow_published",
+              status: "queued"
+            }
+          ],
+          backfillJobsByStatus: {
+            queued: 1
+          },
+          completedBackfillJobCount: 0,
+          dependencyCount: 1,
+          dependenciesByKind: {
+            aggregate: 1
+          },
+          dependenciesByStatus: {
+            published: 1
+          },
+          failedBackfillJobCount: 1,
+          maintenanceState: "attention_required",
+          pendingBackfillJobCount: 1,
+          resumableBackfillJobCount: 0,
+          runningBackfillJobCount: 0,
+          totalBackfillProcessedCount: 0,
+          totalBackfillJobCount: 1
+        },
+        workflowId: "wf_demo"
+      },
+      kind: "workflow-dependencies"
     });
   });
 
@@ -1412,6 +1898,419 @@ describe("cloudtable agent tool registry", () => {
       kind: "workflow-dead-letter-replay",
       replayRequestId: "dead-letter-replay:wdl:wfr_demo_1:step:0",
       status: "enqueued"
+    });
+  });
+
+  it("routes workflow maintenance requests through dedicated workflow operation services", async () => {
+    const registry = createRegistry();
+
+    const aggregateDraft = await registry.invoke({
+      toolId: "prepareWorkflowAggregateMaintenance",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        aggregateAliases: ["agg_total"],
+        kind: "backfill",
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        schemaEpoch: 3,
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+    const aggregateRequest = await registry.invoke({
+      toolId: "requestWorkflowAggregateMaintenance",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        aggregateAliases: ["agg_total"],
+        kind: "backfill",
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        schemaEpoch: 3,
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+    const lookupDraft = await registry.invoke({
+      toolId: "prepareWorkflowLookupMaintenance",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        changedFieldIds: ["fld_account_name"],
+        kind: "recompute",
+        lookupAliases: ["lookup_account_name"],
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        reason: "manual_lookup_recovery",
+        recordId: "rec_ticket_1",
+        schemaEpoch: 3,
+        targetRecordId: "rec_account_1",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+    const lookupRequest = await registry.invoke({
+      toolId: "requestWorkflowLookupMaintenance",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        changedFieldIds: ["fld_account_name"],
+        kind: "recompute",
+        lookupAliases: ["lookup_account_name"],
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        recordId: "rec_ticket_1",
+        schemaEpoch: 3,
+        targetRecordId: "rec_account_1",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+    const syncDraft = await registry.invoke({
+      toolId: "prepareWorkflowSyncMaintenance",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        changedFieldIds: ["fld_status"],
+        kind: "recompute",
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        reason: "manual_target_recovery",
+        recordId: "rec_ticket_1",
+        schemaEpoch: 3,
+        syncAliases: ["sync_status"],
+        targetRecordId: "rec_account_1",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+    const syncRequest = await registry.invoke({
+      toolId: "requestWorkflowSyncMaintenance",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        changedFieldIds: ["fld_status"],
+        kind: "recompute",
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        recordId: "rec_ticket_1",
+        schemaEpoch: 3,
+        syncAliases: ["sync_status"],
+        targetRecordId: "rec_account_1",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(aggregateDraft).toEqual({
+      diffs: [
+        {
+          action: "propose",
+          after: {
+            aliases: ["agg_total"],
+            dependencyKind: "aggregate",
+            kind: "backfill",
+            requestId: "workflow-aggregate-maintenance:wf_demo:backfill",
+            workflowId: "wf_demo",
+            workspaceId: "ws_demo"
+          },
+          note: "Request aggregate workflow maintenance backfill.",
+          path: "$.workflowMaintenance.aggregate"
+        }
+      ],
+      kind: "workflow-maintenance-draft",
+      request: {
+        aliases: ["agg_total"],
+        dependencyKind: "aggregate",
+        kind: "backfill",
+        requestId: "workflow-aggregate-maintenance:wf_demo:backfill",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      },
+      successorInvocation: {
+        input: {
+          aggregateAliases: ["agg_total"],
+          kind: "backfill",
+          requestId: "workflow-aggregate-maintenance:wf_demo:backfill",
+          workflowId: "wf_demo",
+          workspaceId: "ws_demo"
+        },
+        toolId: "requestWorkflowAggregateMaintenance"
+      }
+    });
+    expect(aggregateRequest).toEqual({
+      aliases: ["agg_total"],
+      dependencyKind: "aggregate",
+      kind: "workflow-maintenance-request",
+      requestId: "workflow-aggregate-maintenance:wf_demo:backfill",
+      status: "enqueued",
+      workflowId: "wf_demo",
+      workflowVersionId: "wf_demo:v2"
+    });
+    expect(lookupDraft).toEqual({
+      diffs: [
+        {
+          action: "propose",
+          after: {
+            aliases: ["lookup_account_name"],
+            changedFieldIds: ["fld_account_name"],
+            dependencyKind: "lookup",
+            kind: "recompute",
+            reason: "manual_lookup_recovery",
+            recordId: "rec_ticket_1",
+            requestId: "workflow-lookup-maintenance:wf_demo:recompute",
+            targetRecordId: "rec_account_1",
+            workflowId: "wf_demo",
+            workspaceId: "ws_demo"
+          },
+          note: "Request lookup workflow maintenance recompute.",
+          path: "$.workflowMaintenance.lookup"
+        }
+      ],
+      kind: "workflow-maintenance-draft",
+      request: {
+        aliases: ["lookup_account_name"],
+        changedFieldIds: ["fld_account_name"],
+        dependencyKind: "lookup",
+        kind: "recompute",
+        reason: "manual_lookup_recovery",
+        recordId: "rec_ticket_1",
+        requestId: "workflow-lookup-maintenance:wf_demo:recompute",
+        targetRecordId: "rec_account_1",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      },
+      successorInvocation: {
+        input: {
+          changedFieldIds: ["fld_account_name"],
+          kind: "recompute",
+          lookupAliases: ["lookup_account_name"],
+          reason: "manual_lookup_recovery",
+          recordId: "rec_ticket_1",
+          requestId: "workflow-lookup-maintenance:wf_demo:recompute",
+          targetRecordId: "rec_account_1",
+          workflowId: "wf_demo",
+          workspaceId: "ws_demo"
+        },
+        toolId: "requestWorkflowLookupMaintenance"
+      }
+    });
+    expect(lookupRequest).toEqual({
+      aliases: ["lookup_account_name"],
+      dependencyKind: "lookup",
+      kind: "workflow-maintenance-request",
+      requestId: "workflow-lookup-maintenance:wf_demo:recompute",
+      status: "enqueued",
+      workflowId: "wf_demo",
+      workflowVersionId: "wf_demo:v2"
+    });
+    expect(syncDraft).toEqual({
+      diffs: [
+        {
+          action: "propose",
+          after: {
+            aliases: ["sync_status"],
+            changedFieldIds: ["fld_status"],
+            dependencyKind: "sync",
+            kind: "recompute",
+            reason: "manual_target_recovery",
+            recordId: "rec_ticket_1",
+            requestId: "workflow-sync-maintenance:wf_demo:recompute",
+            targetRecordId: "rec_account_1",
+            workflowId: "wf_demo",
+            workspaceId: "ws_demo"
+          },
+          note: "Request sync workflow maintenance recompute.",
+          path: "$.workflowMaintenance.sync"
+        }
+      ],
+      kind: "workflow-maintenance-draft",
+      request: {
+        aliases: ["sync_status"],
+        changedFieldIds: ["fld_status"],
+        dependencyKind: "sync",
+        kind: "recompute",
+        reason: "manual_target_recovery",
+        recordId: "rec_ticket_1",
+        requestId: "workflow-sync-maintenance:wf_demo:recompute",
+        targetRecordId: "rec_account_1",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      },
+      successorInvocation: {
+        input: {
+          changedFieldIds: ["fld_status"],
+          kind: "recompute",
+          reason: "manual_target_recovery",
+          recordId: "rec_ticket_1",
+          requestId: "workflow-sync-maintenance:wf_demo:recompute",
+          syncAliases: ["sync_status"],
+          targetRecordId: "rec_account_1",
+          workflowId: "wf_demo",
+          workspaceId: "ws_demo"
+        },
+        toolId: "requestWorkflowSyncMaintenance"
+      }
+    });
+    expect(syncRequest).toEqual({
+      aliases: ["sync_status"],
+      dependencyKind: "sync",
+      kind: "workflow-maintenance-request",
+      requestId: "workflow-sync-maintenance:wf_demo:recompute",
+      status: "enqueued",
+      workflowId: "wf_demo",
+      workflowVersionId: "wf_demo:v2"
+    });
+  });
+
+  it("routes obsolete workflow backfill dispositions through dedicated workflow operations", async () => {
+    const registry = createRegistry();
+
+    const abandonDraft = await registry.invoke({
+      toolId: "prepareWorkflowBackfillDisposition",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        disposition: "abandoned",
+        jobId: "wbf_old_1",
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        reason: "replacement workflow covers historical rows",
+        schemaEpoch: 3,
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+    const supersedeDraft = await registry.invoke({
+      toolId: "prepareWorkflowBackfillDisposition",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        disposition: "superseded",
+        jobId: "wbf_old_2",
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        reason: "newer backfill includes the same dependency window",
+        schemaEpoch: 3,
+        supersededByJobId: "wbf_new_2",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+    const supersedeRequest = await registry.invoke({
+      toolId: "requestWorkflowBackfillDisposition",
+      input: {
+        actor: {
+          mode: "agent",
+          principalId: "usr_alice"
+        },
+        disposition: "superseded",
+        jobId: "wbf_old_2",
+        permissionScopeHash: "scope:table:tbl_accounts",
+        permissionsVersion: 7,
+        reason: "newer backfill includes the same dependency window",
+        schemaEpoch: 3,
+        supersededByJobId: "wbf_new_2",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      }
+    });
+
+    expect(abandonDraft).toEqual({
+      diffs: [
+        {
+          action: "propose",
+          after: {
+            disposition: "abandoned",
+            jobId: "wbf_old_1",
+            reason: "replacement workflow covers historical rows",
+            workflowId: "wf_demo",
+            workspaceId: "ws_demo"
+          },
+          note: "Mark one obsolete workflow backfill job as abandoned.",
+          path: "$.workflowBackfillDisposition.wbf_old_1"
+        }
+      ],
+      kind: "workflow-backfill-disposition-draft",
+      request: {
+        disposition: "abandoned",
+        jobId: "wbf_old_1",
+        reason: "replacement workflow covers historical rows",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      },
+      successorInvocation: {
+        input: {
+          disposition: "abandoned",
+          jobId: "wbf_old_1",
+          reason: "replacement workflow covers historical rows",
+          workflowId: "wf_demo",
+          workspaceId: "ws_demo"
+        },
+        toolId: "requestWorkflowBackfillDisposition"
+      }
+    });
+    expect(supersedeDraft).toEqual({
+      diffs: [
+        {
+          action: "propose",
+          after: {
+            disposition: "superseded",
+            jobId: "wbf_old_2",
+            reason: "newer backfill includes the same dependency window",
+            supersededByJobId: "wbf_new_2",
+            workflowId: "wf_demo",
+            workspaceId: "ws_demo"
+          },
+          note: "Mark one obsolete workflow backfill job as superseded.",
+          path: "$.workflowBackfillDisposition.wbf_old_2"
+        }
+      ],
+      kind: "workflow-backfill-disposition-draft",
+      request: {
+        disposition: "superseded",
+        jobId: "wbf_old_2",
+        reason: "newer backfill includes the same dependency window",
+        supersededByJobId: "wbf_new_2",
+        workflowId: "wf_demo",
+        workspaceId: "ws_demo"
+      },
+      successorInvocation: {
+        input: {
+          disposition: "superseded",
+          jobId: "wbf_old_2",
+          reason: "newer backfill includes the same dependency window",
+          supersededByJobId: "wbf_new_2",
+          workflowId: "wf_demo",
+          workspaceId: "ws_demo"
+        },
+        toolId: "requestWorkflowBackfillDisposition"
+      }
+    });
+    expect(supersedeRequest).toEqual({
+      jobId: "wbf_old_2",
+      kind: "workflow-backfill-disposition",
+      operatorReason: "newer backfill includes the same dependency window",
+      status: "superseded",
+      supersededByJobId: "wbf_new_2",
+      workflowId: "wf_demo"
     });
   });
 
@@ -1895,6 +2794,11 @@ describe("cloudtable agent tool registry", () => {
           throw new Error("not used in D1 inspector test");
         }
       },
+      workflowDependencyOperationsReader: {
+        read() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
       workflowRunReader: {
         read() {
           throw new Error("not used in D1 inspector test");
@@ -1902,6 +2806,26 @@ describe("cloudtable agent tool registry", () => {
       },
       workflowDeadLetterReplayRequester: {
         requestReplay() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
+      workflowAggregateMaintenanceRequester: {
+        requestMaintenance() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
+      workflowBackfillDispositionRequester: {
+        requestDisposition() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
+      workflowLookupMaintenanceRequester: {
+        requestMaintenance() {
+          throw new Error("not used in D1 inspector test");
+        }
+      },
+      workflowSyncMaintenanceRequester: {
+        requestMaintenance() {
           throw new Error("not used in D1 inspector test");
         }
       },
